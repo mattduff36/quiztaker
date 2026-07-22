@@ -11,9 +11,9 @@
    schema and transactional protocol with `npm run test:db`.
 4. Create a Vercel project for the repository. `vercel.json` builds
    `apps/web`. Connect the Neon integration and a private Vercel Blob store.
-5. Add the server variables in Vercel. Set `NEXT_PUBLIC_SITE_URL` to the
-   deployment origin. Keep cookie, master-key, database, and Blob credentials
-   server-only.
+5. Add the server variables in Vercel. Set `NEXT_PUBLIC_SITE_URL` to
+   `https://vitriol.co.uk`. Keep cookie, master-key, database, and Blob
+   credentials server-only.
 6. Protect previews. The legacy Express dashboard has no authentication and
    must remain local-only during parity validation.
 
