@@ -35,9 +35,9 @@ installAutomationDependencies();
 writeLauncher();
 writeInstallNotes();
 
-const wixSource = join(outputRoot, 'QuizTakerHelper.wxs');
+const wixSource = join(outputRoot, 'VitriolHelper.wxs');
 writeFileSync(wixSource, createWixSource(stageRoot));
-const msiName = `QuizTakerHelper-${version}-win-x64.msi`;
+const msiName = `VitriolHelper-${version}-win-x64.msi`;
 const msiPath = join(outputRoot, msiName);
 run('wix', ['build', wixSource, '-arch', 'x64', '-o', msiPath], repositoryRoot);
 if (process.env.SIGN_CERTIFICATE_PATH && process.env.SIGN_CERTIFICATE_PASSWORD) {
@@ -52,7 +52,7 @@ if (process.env.SIGN_CERTIFICATE_PATH && process.env.SIGN_CERTIFICATE_PASSWORD) 
   ], repositoryRoot);
 }
 
-const zipRoot = join(outputRoot, `quiztaker-helper-windows-x64-v${version}`);
+const zipRoot = join(outputRoot, `vitriol-helper-windows-x64-v${version}`);
 mkdirSync(zipRoot, { recursive: true });
 cpSync(msiPath, join(zipRoot, msiName));
 cpSync(join(stageRoot, 'INSTALL.txt'), join(zipRoot, 'INSTALL.txt'));
@@ -139,7 +139,7 @@ function installAutomationDependencies() {
 }
 
 function writeLauncher() {
-  writeFileSync(join(stageRoot, 'Start QuizTaker Helper.cmd'), [
+  writeFileSync(join(stageRoot, 'Start Vitriol Helper.cmd'), [
     '@echo off',
     'setlocal',
     'set "QUIZTAKER_AUTOMATION_ROOT=%~dp0automation"',
@@ -151,23 +151,23 @@ function writeLauncher() {
 
 function writeInstallNotes() {
   writeFileSync(join(stageRoot, 'INSTALL.txt'), [
-    'QuizTaker Helper for Windows 10/11 x64',
+    'Vitriol Helper for Windows 10/11 x64',
     '',
     'This private release is intentionally unsigned and may show Windows SmartScreen warnings.',
-    'Install the MSI, start "QuizTaker Helper" from the Start menu, then enter the pairing code shown by the website.',
+    'Install the MSI, start "Vitriol Helper" from the Start menu, then enter the pairing code shown by the website.',
     'Google Chrome is required. Browser credentials and cookies remain on this computer.',
-    'To import an older data folder, run: "Start QuizTaker Helper.cmd" --import-data=C:\\path\\to\\old-project\\data',
+    'To import an older data folder, run: "Start Vitriol Helper.cmd" --import-data=C:\\path\\to\\old-project\\data',
   ].join('\r\n'));
   writeFileSync(join(stageRoot, 'LICENSE.txt'), [
     'ISC License',
     '',
-    'Copyright (c) 2026 QuizTaker contributors',
+    'Copyright (c) 2026 Vitriol contributors',
     '',
     'Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted.',
     'THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE.',
   ].join('\r\n'));
   writeFileSync(join(stageRoot, 'THIRD_PARTY_NOTICES.txt'), [
-    'QuizTaker Helper includes Node.js, Playwright, and their production dependencies.',
+    'Vitriol Helper includes Node.js, Playwright, and their production dependencies.',
     'Their license files are included with the staged runtime and node_modules tree.',
     'A CycloneDX software bill of materials is attached to each GitHub Release.',
   ].join('\r\n'));
@@ -189,24 +189,24 @@ function createWixSource(sourceRoot) {
     const relativePath = relative(sourceRoot, file);
     const directory = dirname(relativePath) === '.' ? '' : dirname(relativePath);
     const fileId = id('file', relativePath);
-    const shortcut = basename(file) === 'Start QuizTaker Helper.cmd'
-      ? `<Shortcut Id=\"StartMenuShortcut\" Directory=\"ProgramMenuFolder\" Name=\"QuizTaker Helper\" WorkingDirectory=\"INSTALLFOLDER\" Advertise=\"no\" />`
+    const shortcut = basename(file) === 'Start Vitriol Helper.cmd'
+      ? `<Shortcut Id=\"StartMenuShortcut\" Directory=\"ProgramMenuFolder\" Name=\"Vitriol Helper\" WorkingDirectory=\"INSTALLFOLDER\" Advertise=\"no\" />`
       : '';
     return `<Component Id=\"${id('cmp', relativePath)}\" Directory=\"${directoryIds.get(directory)}\" Guid=\"*\"><File Id=\"${fileId}\" Source=\"${xml(file)}\" KeyPath=\"yes\">${shortcut}</File></Component>`;
   }).join('');
   return `<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <Wix xmlns=\"http://wixtoolset.org/schemas/v4/wxs\">
-  <Package Name=\"QuizTaker Helper\" Manufacturer=\"QuizTaker\" Version=\"${xml(version)}\" UpgradeCode=\"2B49AFEF-52D4-4CF4-830D-E0A0C1D348F7\" Scope=\"perUser\">
-    <MajorUpgrade DowngradeErrorMessage=\"A newer version of QuizTaker Helper is already installed.\" />
+  <Package Name=\"Vitriol Helper\" Manufacturer=\"Vitriol\" Version=\"${xml(version)}\" UpgradeCode=\"2B49AFEF-52D4-4CF4-830D-E0A0C1D348F7\" Scope=\"perUser\">
+    <MajorUpgrade DowngradeErrorMessage=\"A newer version of Vitriol Helper is already installed.\" />
     <MediaTemplate EmbedCab=\"yes\" />
-    <Feature Id=\"MainFeature\" Title=\"QuizTaker Helper\" Level=\"1\">
+    <Feature Id=\"MainFeature\" Title=\"Vitriol Helper\" Level=\"1\">
       <ComponentGroupRef Id=\"AppFiles\" />
     </Feature>
   </Package>
   <Fragment>
     <StandardDirectory Id=\"LocalAppDataFolder\">
       <Directory Id=\"LocalProgramsFolder\" Name=\"Programs\">
-        <Directory Id=\"INSTALLFOLDER\" Name=\"QuizTaker Helper\">${directoryXml}</Directory>
+        <Directory Id=\"INSTALLFOLDER\" Name=\"Vitriol Helper\">${directoryXml}</Directory>
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id=\"ProgramMenuFolder\" />

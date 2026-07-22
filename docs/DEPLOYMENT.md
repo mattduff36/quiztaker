@@ -21,6 +21,14 @@
 Database access is made only by authenticated server routes. Postgres RLS is
 enabled as a defense-in-depth, deny-by-default boundary.
 
+## Local development
+
+From the repository root, `npm run dev` starts `apps/web`, the same Next.js
+application deployed to Vercel. `npm run dev:web` is an explicit alias. The
+legacy unauthenticated Express dashboard is retained under
+`npm run dev:legacy` (watch mode, port 4000) and `npm run start:legacy`
+(port 3000); it is not the production site.
+
 ## Private artifacts
 
 Connect a private Vercel Blob store. Helpers upload through an authenticated
@@ -54,13 +62,14 @@ production. In the preview:
 
 ## Helper recovery and migration
 
-Mutable state lives under `%LOCALAPPDATA%\QuizTaker Helper\`. MSI upgrades and
-uninstall must not delete this directory.
+For compatibility, Vitriol Helper keeps mutable state under the legacy
+`%LOCALAPPDATA%\QuizTaker Helper\` path. MSI upgrades and uninstall must not
+delete this directory.
 
 Import an older project data folder:
 
 ```powershell
-& "Start QuizTaker Helper.cmd" --import-data="C:\path\to\old-project\data"
+& "Start Vitriol Helper.cmd" --import-data="C:\path\to\old-project\data"
 ```
 
 To recover pairing, revoke the old helper in Settings, delete or rename
@@ -72,8 +81,11 @@ and enter a new one-time code.
 Push a `vX.Y.Z` tag or run the **Windows helper release** GitHub workflow with
 a version. The Windows runner verifies tests and audit status, checks the
 pinned Node.js runtime against Node's published SHA-256 list, builds a per-user
-WiX MSI, packages the MSI and instructions in a versioned ZIP, emits checksums
-and a CycloneDX SBOM, and attaches the files to a GitHub Release.
+Vitriol Helper WiX MSI, packages the MSI and instructions in
+`vitriol-helper-windows-x64-vX.Y.Z.zip`, emits checksums and a CycloneDX SBOM,
+and attaches the files to a GitHub Release. Before announcing the release,
+confirm the authenticated Download page shows the version and checksum, then
+install, pair, heartbeat, and poll one job from a Windows 10/11 x64 session.
 
 The v1 package is unsigned and may trigger SmartScreen or Defender warnings.
 The packaging script includes dormant Authenticode hooks for a future publisher

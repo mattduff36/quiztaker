@@ -1,7 +1,7 @@
 {
   "name": "quiztaker",
   "version": "1.0.0",
-  "description": "Hosted control plane and local Windows helper for Saba learning automation.",
+  "description": "Vitriol hosted control plane and local Windows helper for Saba learning automation.",
   "private": true,
   "workspaces": [
     "apps/*",
@@ -9,10 +9,12 @@
   ],
   "main": "index.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js --port 4000",
+    "start": "npm run start --workspace=@quiztaker/web",
+    "dev": "npm run dev --workspace=@quiztaker/web",
     "dev:web": "npm run dev --workspace=@quiztaker/web",
     "dev:helper": "npm run dev --workspace=@quiztaker/helper",
+    "start:legacy": "node server.js",
+    "dev:legacy": "node --watch server.js --port 4000",
     "build": "node --env-file-if-exists=.env.local scripts/build-workspaces.mjs",
     "typecheck": "npm run build --workspace=@quiztaker/core && npm run typecheck --workspaces --if-present",
     "test": "node --test *.test.js && npm run test --workspaces --if-present",

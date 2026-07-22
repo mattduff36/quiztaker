@@ -6,9 +6,9 @@
 // UI can invoke the whitelisted pw-* scripts and watch their stdout live.
 //
 // Usage:
-//   npm start           # then open http://127.0.0.1:3000
-//   PORT=4000 npm start # listen on 127.0.0.1:4000
-//   HOST=0.0.0.0 npm start  # explicitly allow network access
+//   npm run start:legacy             # then open http://127.0.0.1:3000
+//   npm run dev:legacy               # watch mode on http://127.0.0.1:4000
+//   HOST=0.0.0.0 npm run start:legacy # explicitly allow network access
 //
 // No auth: intended for localhost use only.
 

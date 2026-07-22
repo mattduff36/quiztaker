@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   if (!config) throw new Error('Helper configuration is missing. Run with --pair.');
 
   const client = new ControlPlaneClient(config);
-  console.log(`QuizTaker Helper ${HELPER_VERSION}`);
+  console.log(`Vitriol Helper ${HELPER_VERSION}`);
   console.log(`Device: ${config.deviceName} (${config.helperId})`);
   console.log(`Control plane: ${config.controlPlaneUrl}`);
 

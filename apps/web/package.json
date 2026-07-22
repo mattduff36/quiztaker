@@ -4,11 +4,12 @@
   "private": true,
   "scripts": {
     "predev": "npm run build --workspace=@quiztaker/core && node scripts/sync-docs.mjs",
-    "dev": "next dev",
+    "dev": "node --import ./scripts/load-root-env.mjs ../../node_modules/next/dist/bin/next dev -p 4000",
     "prebuild": "npm run build --workspace=@quiztaker/core && node scripts/sync-docs.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -36,6 +37,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.11",
     "tailwindcss": "^4",
+    "tsx": "^4.19.4",
     "typescript": "^5"
   }
 }

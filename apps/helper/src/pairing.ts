@@ -9,7 +9,7 @@ interface PairingResponse {
   deviceSecret: string;
 }
 
-const DEFAULT_CONTROL_PLANE_URL = process.env.QUIZTAKER_CONTROL_PLANE_URL || 'https://vitriol.co.uk';
+const DEFAULT_CONTROL_PLANE_URL = process.env.QUIZTAKER_CONTROL_PLANE_URL || 'https://www.vitriol.co.uk';
 
 export async function pairInteractively(): Promise<HelperConfig> {
   const prompt = createInterface({ input: stdin, output: stdout });

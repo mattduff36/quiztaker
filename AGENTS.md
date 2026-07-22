@@ -50,7 +50,9 @@ dashboard remains operational:
 - `apps/web` is the authenticated Next.js/Vercel control plane.
 - `apps/helper` is the interactive Windows helper. It polls outbound over
   HTTPS, validates signed jobs against the local capability whitelist, and
-  keeps mutable state under `%LOCALAPPDATA%\QuizTaker Helper\`.
+  keeps mutable state under the compatibility path
+  `%LOCALAPPDATA%\QuizTaker Helper\` even though the installed product is
+  branded Vitriol Helper.
 - `packages/core` contains shared TypeScript contracts, policy, signing,
   outcome, and diagnosis logic.
 - `packages/automation` is the package boundary for the local Playwright
@@ -59,21 +61,22 @@ dashboard remains operational:
 - `database/migrations` is the Neon hosted ledger and RLS schema; private
   artifacts use Vercel Blob.
 
-Use `npm run dev:web` for the control plane, `npm run dev:helper` for the local
-helper, and `npm start` for the legacy dashboard. Deployment and recovery are
+Use `npm run dev` (or the explicit `npm run dev:web` alias) for the Next.js
+control plane, `npm run dev:helper` for the local helper, and
+`npm run dev:legacy` for the legacy dashboard. Deployment and recovery are
 documented in `docs/DEPLOYMENT.md`.
 
 ---
 
 ## Local dashboard
 
-`npm start` (port 3000) or `npm run dev` (port 4000, auto-reloads via
-`node --watch` + a live-reload SSE). Open the printed URL. It is served by
-`server.js` (Express) and is local-only with no auth. The dashboard shows CDP
-status, open tabs, the current certification's roster, capability cards that run
-the whitelisted `pw-*` scripts with live streaming output, a History tab, and a
-Docs tab (renders this file plus `docs/QUIZ-TYPES.md` and `docs/RUNBOOK.md`).
-Use it when you'd rather click than type.
+`npm run start:legacy` (port 3000) or `npm run dev:legacy` (port 4000,
+auto-reloads via `node --watch` + a live-reload SSE). Open the printed URL. It
+is served by `server.js` (Express) and is local-only with no auth. The dashboard
+shows CDP status, open tabs, the current certification's roster, capability
+cards that run the whitelisted `pw-*` scripts with live streaming output, a
+History tab, and a Docs tab (renders this file plus `docs/QUIZ-TYPES.md` and
+`docs/RUNBOOK.md`). Use it when you'd rather click than type.
 
 Key behaviours to know about:
 

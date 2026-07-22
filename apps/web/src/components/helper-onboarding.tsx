@@ -36,7 +36,7 @@ export function HelperOnboarding(props: {
       </Step>
       <Step number="02" title="Start helper">
         <p className="text-sm leading-6 text-slate-600">Open {productName} Helper from the Start menu. Chrome remains local and interactive.</p>
-        <div className="mt-5 rounded-md bg-slate-100 p-3 font-mono text-xs text-slate-700">Start QuizTaker Helper.cmd</div>
+        <div className="mt-5 rounded-md bg-slate-100 p-3 font-mono text-xs text-slate-700">Start Vitriol Helper.cmd</div>
       </Step>
       <Step number="03" title="Pair this device">
         {props.isPaired ? (
