@@ -14,6 +14,7 @@ export interface HelperConfig {
 }
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
+const loadDpapiAssembly = 'Add-Type -AssemblyName System.Security';
 
 export function getHelperHome(): string {
   return process.env.QUIZTAKER_HOME || join(
@@ -56,6 +57,7 @@ export function writeConfig(config: HelperConfig): void {
 export function protectSecret(secret: string): string {
   if (process.platform !== 'win32') return `plain:${Buffer.from(secret).toString('base64')}`;
   const script = [
+    loadDpapiAssembly,
     '$value = [Console]::In.ReadToEnd()',
     '$bytes = [Text.Encoding]::UTF8.GetBytes($value)',
     '$protected = [Security.Cryptography.ProtectedData]::Protect($bytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)',
@@ -74,6 +76,7 @@ export function unprotectSecret(value: string): string {
     throw new Error('The helper credential cannot be decrypted on this platform.');
   }
   const script = [
+    loadDpapiAssembly,
     '$value = [Console]::In.ReadToEnd()',
     '$bytes = [Convert]::FromBase64String($value)',
     '$clear = [Security.Cryptography.ProtectedData]::Unprotect($bytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)',

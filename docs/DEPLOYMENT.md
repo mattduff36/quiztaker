@@ -29,6 +29,15 @@ legacy unauthenticated Express dashboard is retained under
 `npm run dev:legacy` (watch mode, port 4000) and `npm run start:legacy`
 (port 3000); it is not the production site.
 
+Pairing codes are bound to the control-plane origin that generated them. The
+Local helper page shows an exact PowerShell command with
+`--control-plane-url=http://localhost:4000` during local development and the
+live HTTPS origin in production. Use that command when switching an installed
+helper between environments; the Start menu shortcut defaults to production.
+After its first accepted heartbeat, the helper confirms that it is online and
+minimizes its terminal window. Pass `--no-minimize` (or set
+`QUIZTAKER_NO_AUTO_MINIMIZE=1`) when diagnosing it interactively.
+
 ## Private artifacts
 
 Connect a private Vercel Blob store. Helpers upload through an authenticated

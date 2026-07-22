@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { deriveHelperSecret } from '@quiztaker/core';
 import { queryOne } from '@/lib/db';
 import { getServerEnv } from '@/lib/env';
-import { hashPairingCode, normalizePairingCode } from '@/lib/security';
+import { hashPairingCodeForOrigin } from '@/lib/pairing-code';
 
 const schema = z.object({
   code: z.string().min(6).max(20),
@@ -20,7 +20,7 @@ export async function POST(request: Request) {
     const helper = await queryOne<{ id: string }>(
       `select id from claim_pairing_code($1, $2, $3, $4, $5)`,
       [
-        hashPairingCode(normalizePairingCode(parsed.data.code)),
+        hashPairingCodeForOrigin(parsed.data.code, new URL(request.url).origin),
         parsed.data.deviceName,
         parsed.data.platform,
         parsed.data.architecture,

@@ -107,6 +107,10 @@ async function installNodeRuntime() {
 function stageHelper() {
   mkdirSync(join(stageRoot, 'helper'), { recursive: true });
   cpSync(join(helperRoot, 'dist'), join(stageRoot, 'helper'), { recursive: true });
+  writeFileSync(join(stageRoot, 'helper', 'package.json'), JSON.stringify({
+    private: true,
+    type: 'module',
+  }, null, 2));
 }
 
 function stageAutomation() {
@@ -154,7 +158,8 @@ function writeInstallNotes() {
     'Vitriol Helper for Windows 10/11 x64',
     '',
     'This private release is intentionally unsigned and may show Windows SmartScreen warnings.',
-    'Install the MSI, start "Vitriol Helper" from the Start menu, then enter the pairing code shown by the website.',
+    'Install the MSI, generate a pairing code on the website, start "Vitriol Helper" from the Start menu, then enter the code.',
+    'After connecting, the helper confirms it is online and minimizes automatically while it polls for work.',
     'Google Chrome is required. Browser credentials and cookies remain on this computer.',
     'To import an older data folder, run: "Start Vitriol Helper.cmd" --import-data=C:\\path\\to\\old-project\\data',
   ].join('\r\n'));

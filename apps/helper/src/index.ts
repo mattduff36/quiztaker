@@ -9,8 +9,10 @@ import { pairInteractively } from './pairing.js';
 import { readLocalHistory } from './sync.js';
 import { migrateLegacyLocalData } from './migrate.js';
 import { HELPER_VERSION } from './version.js';
+import { minimizeHelperWindow, shouldAutoMinimize } from './windows.js';
 
 let isStopping = false;
+let hasAnnouncedOnline = false;
 let runningJob: { jobId: string; run: RunningJob } | null = null;
 let nextSyncAt = 0;
 let nextReleaseCheckAt = 0;
@@ -33,6 +35,10 @@ async function main(): Promise<void> {
       await client.heartbeat(runningJob
         ? { status: 'busy', activeJobId: runningJob.jobId }
         : { status: 'online' });
+      if (!hasAnnouncedOnline) {
+        hasAnnouncedOnline = true;
+        await announceOnline(config.controlPlaneUrl);
+      }
       if (Date.now() >= nextSyncAt) {
         await client.syncHistory(readLocalHistory());
         nextSyncAt = Date.now() + 5 * 60_000;
@@ -75,10 +81,30 @@ async function main(): Promise<void> {
       }
       await delay(runningJob ? 2_000 : 5_000);
     } catch (error) {
-      console.error(new Date().toISOString(), error instanceof Error ? error.message : error);
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(new Date().toISOString(), message);
+      if (/Control plane returned 401/.test(message)) {
+        console.error('This pairing is no longer authorized. Run the origin-specific pairing command from the Vitriol Helper page.');
+        process.exitCode = 1;
+        break;
+      }
       await delay(10_000);
     }
   }
+}
+
+async function announceOnline(controlPlaneUrl: string): Promise<void> {
+  console.log('');
+  console.log('Connected and online.');
+  console.log(`Open ${controlPlaneUrl} in your browser and continue to Operations.`);
+  console.log('Keep this helper running; close its window when you want it to go offline.');
+  if (!shouldAutoMinimize()) {
+    console.log('Automatic minimize is disabled for this run.');
+    return;
+  }
+  console.log('This window will minimize in 3 seconds.');
+  await delay(3_000);
+  if (!minimizeHelperWindow()) console.log('Automatic minimize was unavailable; you can minimize this window manually.');
 }
 
 async function monitorCancellation(

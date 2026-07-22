@@ -1,21 +1,7 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual } from 'node:crypto';
 import { deriveHelperSecret } from '@quiztaker/core';
 import { queryOne } from '@/lib/db';
 import { getServerEnv } from '@/lib/env';
-
-export function createPairingCode(): string {
-  const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
-  const bytes = randomBytes(8);
-  return [...bytes].map((value) => alphabet[value % alphabet.length]).join('');
-}
-
-export function hashPairingCode(code: string): string {
-  return createHash('sha256').update(normalizePairingCode(code)).digest('hex');
-}
-
-export function normalizePairingCode(code: string): string {
-  return code.replace(/[^A-Z0-9]/gi, '').toUpperCase();
-}
 
 export function hasValidRequestOrigin(request: Request): boolean {
   const origin = request.headers.get('origin');

@@ -12,11 +12,12 @@ interface PairingResponse {
 const DEFAULT_CONTROL_PLANE_URL = process.env.QUIZTAKER_CONTROL_PLANE_URL || 'https://www.vitriol.co.uk';
 
 export async function pairInteractively(): Promise<HelperConfig> {
+  const controlPlaneUrl = resolveControlPlaneUrl(process.argv.slice(2));
   const prompt = createInterface({ input: stdin, output: stdout });
   try {
-    const input = await prompt.question(`Control-plane URL [${DEFAULT_CONTROL_PLANE_URL}]: `);
-    const controlPlaneUrl = normalizeUrl(input || DEFAULT_CONTROL_PLANE_URL);
+    console.log(`First-time setup: generate a pairing code at ${controlPlaneUrl}/helper.`);
     const code = (await prompt.question('Pairing code: ')).trim().toUpperCase();
+    if (!code) throw new Error('A pairing code is required.');
     const deviceName = hostname();
     const response = await fetch(`${controlPlaneUrl}/api/helper/pair/claim`, {
       method: 'POST',
@@ -44,6 +45,11 @@ export async function pairInteractively(): Promise<HelperConfig> {
   } finally {
     prompt.close();
   }
+}
+
+export function resolveControlPlaneUrl(args: string[]): string {
+  const argument = args.find((value) => value.startsWith('--control-plane-url='));
+  return normalizeUrl(argument?.slice('--control-plane-url='.length) || DEFAULT_CONTROL_PLANE_URL);
 }
 
 function normalizeUrl(value: string): string {
