@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "predev": "node scripts/sync-docs.mjs",
+    "predev": "npm run build --workspace=@quiztaker/core && node scripts/sync-docs.mjs",
     "dev": "next dev",
-    "prebuild": "node scripts/sync-docs.mjs",
+    "prebuild": "npm run build --workspace=@quiztaker/core && node scripts/sync-docs.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
