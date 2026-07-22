@@ -30,7 +30,7 @@ export default function SignInPage() {
           </div>
           <h2 className="mt-8 text-4xl font-semibold tracking-[-0.04em] text-slate-950">Operator sign-in</h2>
           <p className="mt-3 leading-7 text-slate-600">
-            Access is restricted to the configured account. No password is stored by QuizTaker.
+            Access is restricted to the configured account and managed by Neon Auth.
           </p>
           <SignInForm />
         </div>

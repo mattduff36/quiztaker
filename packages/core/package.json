@@ -16,6 +16,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.mjs"
   },
+  "dependencies": {
+    "@types/node": "^20"
+  },
   "devDependencies": {
     "typescript": "^5.8.3"
   }

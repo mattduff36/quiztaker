@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { queryOne } from '@/lib/db';
 import { hasValidRequestOrigin } from '@/lib/security';
 
 export async function POST(
@@ -11,11 +11,12 @@ export async function POST(
   const user = await getAuthenticatedUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { helperId } = await context.params;
-  const supabase = createSupabaseAdminClient();
-  const { data } = await supabase.from('helpers').update({
-    status: 'revoked',
-    revoked_at: new Date().toISOString(),
-  }).eq('id', helperId).eq('user_id', user.id).select('id').maybeSingle();
+  const data = await queryOne<{ id: string }>(
+    `update helpers set status = 'revoked', revoked_at = now()
+     where id = $1 and user_id = $2
+     returning id`,
+    [helperId, user.id],
+  );
   if (!data) return NextResponse.json({ error: 'Helper not found' }, { status: 404 });
   return NextResponse.json({ ok: true });
 }

@@ -56,7 +56,8 @@ dashboard remains operational:
 - `packages/automation` is the package boundary for the local Playwright
   executors. Root `pw-*.js` compatibility entrypoints remain until hosted
   parity is verified.
-- `supabase/migrations` is the hosted ledger, RLS, and private-artifact schema.
+- `database/migrations` is the Neon hosted ledger and RLS schema; private
+  artifacts use Vercel Blob.
 
 Use `npm run dev:web` for the control plane, `npm run dev:helper` for the local
 helper, and `npm start` for the legacy dashboard. Deployment and recovery are

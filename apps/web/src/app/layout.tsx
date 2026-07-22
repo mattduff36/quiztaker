@@ -15,6 +15,7 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://vitriol.co.uk"),
   title: {
     default: "QuizTaker Control",
     template: "%s · QuizTaker Control",

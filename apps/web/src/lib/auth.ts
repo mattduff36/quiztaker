@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getServerEnv } from '@/lib/env';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { queryRows } from '@/lib/db';
+import { getAuth } from '@/lib/neon-auth/server';
 
 export interface AuthenticatedUser {
   id: string;
@@ -8,12 +9,18 @@ export interface AuthenticatedUser {
 }
 
 export async function getAuthenticatedUser(): Promise<AuthenticatedUser | null> {
-  const supabase = await createSupabaseServerClient();
-  const { data, error } = await supabase.auth.getUser();
-  const email = data.user?.email?.toLowerCase();
-  if (error || !data.user || !email) return null;
+  const { data: session, error } = await getAuth().getSession();
+  const email = session?.user?.email?.toLowerCase();
+  if (error || !session?.user?.id || !email) return null;
   if (email !== getServerEnv().ALLOWED_EMAIL.toLowerCase()) return null;
-  return { id: data.user.id, email };
+  const id = String(session.user.id);
+  await queryRows(
+    `insert into profiles (id, email)
+     values ($1, $2)
+     on conflict (id) do update set email = excluded.email`,
+    [id, email],
+  );
+  return { id, email };
 }
 
 export async function requireAuthenticatedUser(): Promise<AuthenticatedUser> {

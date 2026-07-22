@@ -2,19 +2,25 @@ import { AppShell } from '@/components/app-shell';
 import { PageFrame, Panel } from '@/components/page-frame';
 import { RevokeHelperButton } from '@/components/revoke-helper-button';
 import { requireAuthenticatedUser } from '@/lib/auth';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { queryRows } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
 export default async function SettingsPage() {
   const user = await requireAuthenticatedUser();
-  const supabase = createSupabaseAdminClient();
-  const { data: helpers } = await supabase
-    .from('helpers')
-    .select('*')
-    .eq('user_id', user.id)
-    .is('revoked_at', null)
-    .order('paired_at', { ascending: false });
+  const helpers = await queryRows<{
+    id: string;
+    device_name: string;
+    platform: string;
+    architecture: string;
+    version: string;
+  }>(
+    `select id, device_name, platform, architecture, version
+     from helpers
+     where user_id = $1 and revoked_at is null
+     order by paired_at desc`,
+    [user.id],
+  );
   return (
     <AppShell email={user.email}>
       <PageFrame eyebrow="Control plane" title="Settings" description="Manage the private operator account and paired execution devices.">
@@ -26,7 +32,7 @@ export default async function SettingsPage() {
             </div>
           </Panel>
           <Panel title="Paired helpers">
-            {helpers?.length ? helpers.map((helper) => (
+            {helpers.length ? helpers.map((helper) => (
               <div key={helper.id} className="flex items-center justify-between gap-4 border-b border-slate-200 p-5 last:border-0">
                 <div>
                   <h2 className="font-semibold text-slate-950">{helper.device_name}</h2>

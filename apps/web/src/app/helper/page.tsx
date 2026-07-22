@@ -2,21 +2,25 @@ import { AppShell } from '@/components/app-shell';
 import { HelperOnboarding } from '@/components/helper-onboarding';
 import { PageFrame, Panel } from '@/components/page-frame';
 import { requireAuthenticatedUser } from '@/lib/auth';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { queryOne } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
 export default async function HelperPage() {
   const user = await requireAuthenticatedUser();
-  const supabase = createSupabaseAdminClient();
-  const { data: helper } = await supabase
-    .from('helpers')
-    .select('device_name,last_seen_at,version,status')
-    .eq('user_id', user.id)
-    .is('revoked_at', null)
-    .order('paired_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const helper = await queryOne<{
+    device_name: string;
+    last_seen_at: string | null;
+    version: string;
+    status: string;
+  }>(
+    `select device_name, last_seen_at, version, status
+     from helpers
+     where user_id = $1 and revoked_at is null
+     order by paired_at desc
+     limit 1`,
+    [user.id],
+  );
   return (
     <AppShell email={user.email}>
       <PageFrame
@@ -27,7 +31,7 @@ export default async function HelperPage() {
         <HelperOnboarding
           isPaired={Boolean(helper)}
           helperName={helper?.device_name}
-          lastSeenAt={helper?.last_seen_at}
+          lastSeenAt={helper?.last_seen_at ?? undefined}
         />
         <Panel title="Trust boundary" className="mt-6">
           <div className="grid gap-6 p-6 text-sm leading-6 text-slate-600 md:grid-cols-3">

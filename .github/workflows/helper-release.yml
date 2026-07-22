@@ -34,7 +34,7 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - name: Install WiX
-        run: dotnet tool install --global wix
+        run: dotnet tool install --global wix --version 4.0.6 --add-source https://api.nuget.org/v3/index.json
       - name: Build MSI and ZIP
         run: npm run release:helper
         env:

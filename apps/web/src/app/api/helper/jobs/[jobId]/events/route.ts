@@ -9,6 +9,7 @@ const schema = z.object({
   data: z.record(z.string(), z.unknown()),
   occurredAt: z.string().datetime(),
 });
+const MAX_EVENT_BYTES = 12 * 1024 * 1024;
 
 export async function POST(
   request: Request,
@@ -16,6 +17,10 @@ export async function POST(
 ) {
   const helper = await authenticateHelper(request);
   if (!helper) return NextResponse.json({ error: 'Unauthorized helper' }, { status: 401 });
+  const contentLength = Number(request.headers.get('content-length') || 0);
+  if (contentLength > MAX_EVENT_BYTES) {
+    return NextResponse.json({ error: 'Job event is too large' }, { status: 413 });
+  }
   const parsed = schema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: 'Invalid job event' }, { status: 400 });
   const { jobId } = await context.params;

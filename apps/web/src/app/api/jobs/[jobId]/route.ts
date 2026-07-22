@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { queryOne, queryRows } from '@/lib/db';
 import { hasValidRequestOrigin } from '@/lib/security';
 
 export async function GET(
@@ -10,13 +10,21 @@ export async function GET(
   const user = await getAuthenticatedUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { jobId } = await context.params;
-  const supabase = createSupabaseAdminClient();
-  const [{ data: job, error }, { data: events }] = await Promise.all([
-    supabase.from('jobs').select('*').eq('id', jobId).eq('user_id', user.id).maybeSingle(),
-    supabase.from('job_events').select('sequence,event,data,occurred_at').eq('job_id', jobId).eq('user_id', user.id).order('sequence'),
+  const [job, events] = await Promise.all([
+    queryOne<Record<string, unknown>>(
+      'select * from jobs where id = $1 and user_id = $2',
+      [jobId, user.id],
+    ),
+    queryRows<Record<string, unknown>>(
+      `select sequence, event, data, occurred_at
+       from job_events
+       where job_id = $1 and user_id = $2
+       order by sequence`,
+      [jobId, user.id],
+    ),
   ]);
-  if (error || !job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
-  return NextResponse.json({ job, events: events ?? [] });
+  if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
+  return NextResponse.json({ job, events });
 }
 
 export async function DELETE(
@@ -27,32 +35,32 @@ export async function DELETE(
   const user = await getAuthenticatedUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { jobId } = await context.params;
-  const supabase = createSupabaseAdminClient();
-  const { data: current } = await supabase
-    .from('jobs')
-    .select('id,status,attempt_id')
-    .eq('id', jobId)
-    .eq('user_id', user.id)
-    .in('status', ['queued', 'dispatched', 'running'])
-    .maybeSingle();
+  const current = await queryOne<{ status: string; attempt_id: string }>(
+    `select status, attempt_id
+     from jobs
+     where id = $1 and user_id = $2 and status in ('queued', 'dispatched', 'running')`,
+    [jobId, user.id],
+  );
   if (!current) return NextResponse.json({ error: 'Active job not found' }, { status: 404 });
-  const update = current.status === 'queued'
-    ? {
-        cancel_requested: true,
-        status: 'cancelled',
-        finished_at: new Date().toISOString(),
-        outcome: { outcome: 'cancelled', verified: false, status: 'cancelled-before-dispatch' },
-      }
-    : { cancel_requested: true };
-  const { error } = await supabase.from('jobs').update(update).eq('id', jobId).eq('status', current.status);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (current.status === 'queued') {
-    await supabase.from('attempt_events').insert({
-      user_id: user.id,
-      attempt_id: current.attempt_id,
-      event: 'attempt-finished',
-      data: { outcome: 'cancelled', verified: false, status: 'cancelled-before-dispatch', jobId },
-    });
+    const outcome = { outcome: 'cancelled', verified: false, status: 'cancelled-before-dispatch' };
+    await queryRows(
+      `update jobs
+       set cancel_requested = true, status = 'cancelled', finished_at = now(), outcome = $3::jsonb
+       where id = $1 and user_id = $2 and status = 'queued'`,
+      [jobId, user.id, JSON.stringify(outcome)],
+    );
+    await queryRows(
+      `insert into attempt_events (user_id, attempt_id, event, data)
+       values ($1, $2, 'attempt-finished', $3::jsonb)`,
+      [user.id, current.attempt_id, JSON.stringify({ ...outcome, jobId })],
+    );
+  } else {
+    await queryRows(
+      `update jobs set cancel_requested = true
+       where id = $1 and user_id = $2 and status = $3`,
+      [jobId, user.id, current.status],
+    );
   }
   return NextResponse.json({ ok: true });
 }

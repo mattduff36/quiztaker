@@ -13,10 +13,11 @@
     "dev": "node --watch server.js --port 4000",
     "dev:web": "npm run dev --workspace=@quiztaker/web",
     "dev:helper": "npm run dev --workspace=@quiztaker/helper",
-    "build": "npm run build --workspaces --if-present",
+    "build": "node --env-file-if-exists=.env.local scripts/build-workspaces.mjs",
     "typecheck": "npm run build --workspace=@quiztaker/core && npm run typecheck --workspaces --if-present",
     "test": "node --test *.test.js && npm run test --workspaces --if-present",
-    "test:supabase": "npx supabase test db",
+    "test:db": "node --env-file=.env.local scripts/verify-neon.mjs",
+    "db:migrate": "node --env-file=.env.local scripts/migrate-neon.mjs",
     "migrate:learning": "node migrate-learning-data.js",
     "release:helper": "npm run package:win --workspace=@quiztaker/helper"
   },
@@ -26,5 +27,14 @@
   "dependencies": {
     "express": "^4.19.0",
     "playwright": "^1.58.2"
+  },
+  "devDependencies": {
+    "postgres": "^3.4.7"
+  },
+  "overrides": {
+    "@better-auth/passkey": "1.6.24",
+    "better-auth": "1.6.24",
+    "postcss": "8.5.22",
+    "sharp": "0.35.3"
   }
 }

@@ -9,10 +9,13 @@ interface PairingResponse {
   deviceSecret: string;
 }
 
+const DEFAULT_CONTROL_PLANE_URL = process.env.QUIZTAKER_CONTROL_PLANE_URL || 'https://vitriol.co.uk';
+
 export async function pairInteractively(): Promise<HelperConfig> {
   const prompt = createInterface({ input: stdin, output: stdout });
   try {
-    const controlPlaneUrl = normalizeUrl(await prompt.question('Control-plane URL: '));
+    const input = await prompt.question(`Control-plane URL [${DEFAULT_CONTROL_PLANE_URL}]: `);
+    const controlPlaneUrl = normalizeUrl(input || DEFAULT_CONTROL_PLANE_URL);
     const code = (await prompt.question('Pairing code: ')).trim().toUpperCase();
     const deviceName = hostname();
     const response = await fetch(`${controlPlaneUrl}/api/helper/pair/claim`, {

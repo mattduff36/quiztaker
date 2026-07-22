@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateHelper } from '@/lib/security';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { queryRows } from '@/lib/db';
 
 const historyEvent = z.object({
   sourceId: z.string().min(1).max(500),
@@ -22,24 +22,45 @@ export async function POST(request: Request) {
   if (!helper) return NextResponse.json({ error: 'Unauthorized helper' }, { status: 401 });
   const parsed = schema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: 'Invalid sync payload' }, { status: 400 });
-  const supabase = createSupabaseAdminClient();
-  const rows = parsed.data.history.map((item) => ({
-    user_id: helper.userId,
-    helper_id: helper.helperId,
-    source_id: item.sourceId,
-    kind: item.kind,
-    title: item.title,
-    result: item.result,
-    detail: item.detail,
-    occurred_at: item.occurredAt,
-    payload: item.payload,
-  }));
-  if (rows.length) {
-    const { error } = await supabase.from('history_events').upsert(rows, {
-      onConflict: 'user_id,helper_id,source_id',
-      ignoreDuplicates: true,
-    });
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (parsed.data.history.length) {
+    await queryRows(
+      `insert into history_events (
+         user_id, helper_id, source_id, kind, title, result, detail, occurred_at, payload
+       )
+       select
+         $1,
+         $2,
+         item.source_id,
+         item.kind,
+         item.title,
+         item.result,
+         item.detail,
+         item.occurred_at,
+         item.payload
+       from jsonb_to_recordset($3::jsonb) as item(
+         source_id text,
+         kind text,
+         title text,
+         result text,
+         detail text,
+         occurred_at timestamptz,
+         payload jsonb
+       )
+       on conflict (user_id, helper_id, source_id) do nothing`,
+      [
+        helper.userId,
+        helper.helperId,
+        JSON.stringify(parsed.data.history.map((item) => ({
+          source_id: item.sourceId,
+          kind: item.kind,
+          title: item.title,
+          result: item.result,
+          detail: item.detail,
+          occurred_at: item.occurredAt,
+          payload: item.payload,
+        }))),
+      ],
+    );
   }
-  return NextResponse.json({ ok: true, imported: rows.length });
+  return NextResponse.json({ ok: true, imported: parsed.data.history.length });
 }
