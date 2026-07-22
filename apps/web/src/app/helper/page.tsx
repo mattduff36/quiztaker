@@ -45,7 +45,7 @@ export default async function HelperPage() {
         <HelperOnboarding
           download={{
             status: release ? 'available' : 'unavailable',
-            url: release?.downloadUrl ?? null,
+            url: release ? '/helper/download' : null,
           }}
           connection={{
             state: helper ? (helper.is_online ? 'online' : 'offline') : 'not-paired',

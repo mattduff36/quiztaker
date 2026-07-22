@@ -9,18 +9,12 @@ interface ReleaseResponse {
   text(): Promise<string>;
 }
 
-interface ReleaseFetchInit extends RequestInit {
-  next?: {
-    revalidate: number;
-  };
-}
-
 export interface ReleaseFetch {
-  (input: string, init?: ReleaseFetchInit): Promise<ReleaseResponse>;
+  (input: string, init?: RequestInit): Promise<ReleaseResponse>;
 }
 
 const GITHUB_ORIGIN = 'https://github.com';
-const RELEASE_REVALIDATE_SECONDS = 300;
+const FRESH_RELEASE_REQUEST: RequestInit = { cache: 'no-store' };
 
 export async function getLatestHelperRelease(): Promise<HelperRelease | null> {
   const repository = getServerEnv().GITHUB_REPOSITORY;
@@ -38,9 +32,7 @@ export async function loadLatestHelperRelease(
   let manifest: unknown;
   if (manifestUrl) {
     try {
-      const manifestResponse = await fetchRelease(manifestUrl, {
-        next: { revalidate: RELEASE_REVALIDATE_SECONDS },
-      });
+      const manifestResponse = await fetchRelease(manifestUrl, FRESH_RELEASE_REQUEST);
       if (manifestResponse.ok) manifest = await manifestResponse.json();
     } catch {
       // The ZIP remains usable when optional integrity metadata is unavailable.
@@ -53,17 +45,27 @@ async function loadLatestRelease(
   repository: string,
   fetchRelease: ReleaseFetch,
 ): Promise<unknown | null> {
+  const [apiRelease, publicPageRelease] = await Promise.all([
+    loadLatestReleaseFromApi(repository, fetchRelease),
+    loadLatestReleaseFromPublicPage(repository, fetchRelease),
+  ]);
+  return getNewestRelease([apiRelease, publicPageRelease]);
+}
+
+async function loadLatestReleaseFromApi(
+  repository: string,
+  fetchRelease: ReleaseFetch,
+): Promise<unknown | null> {
   try {
     const response = await fetchRelease(`https://api.github.com/repos/${repository}/releases/latest`, {
       headers: { Accept: 'application/vnd.github+json' },
-      next: { revalidate: RELEASE_REVALIDATE_SECONDS },
+      cache: 'no-store',
     });
     if (response.ok) return await response.json();
   } catch {
-    // Public GitHub pages provide a rate-limit-independent local fallback.
+    // The public release page is loaded independently as a fallback.
   }
-
-  return loadLatestReleaseFromPublicPage(repository, fetchRelease);
+  return null;
 }
 
 async function loadLatestReleaseFromPublicPage(
@@ -71,9 +73,10 @@ async function loadLatestReleaseFromPublicPage(
   fetchRelease: ReleaseFetch,
 ): Promise<unknown | null> {
   try {
-    const releasePageResponse = await fetchRelease(`${GITHUB_ORIGIN}/${repository}/releases/latest`, {
-      next: { revalidate: RELEASE_REVALIDATE_SECONDS },
-    });
+    const releasePageResponse = await fetchRelease(
+      `${GITHUB_ORIGIN}/${repository}/releases/latest`,
+      FRESH_RELEASE_REQUEST,
+    );
     if (!releasePageResponse.ok) return null;
 
     const tagName = getReleaseTagName(releasePageResponse.url, repository);
@@ -85,7 +88,7 @@ async function loadLatestReleaseFromPublicPage(
 
     const assetsResponse = await fetchRelease(
       `${GITHUB_ORIGIN}/${repository}/releases/expanded_assets/${encodeURIComponent(tagName)}`,
-      { next: { revalidate: RELEASE_REVALIDATE_SECONDS } },
+      FRESH_RELEASE_REQUEST,
     );
     if (!assetsResponse.ok) return null;
 
@@ -97,6 +100,33 @@ async function loadLatestReleaseFromPublicPage(
   } catch {
     return null;
   }
+}
+
+function getNewestRelease(releases: unknown[]): unknown | null {
+  return releases.reduce<unknown | null>((newestRelease, release) => {
+    const candidate = release ? parseGitHubRelease(release) : null;
+    if (!candidate) return newestRelease;
+
+    const newest = newestRelease ? parseGitHubRelease(newestRelease) : null;
+    if (!newest) return release;
+
+    const publishedDifference = Date.parse(candidate.publishedAt) - Date.parse(newest.publishedAt);
+    if (publishedDifference > 0) return release;
+    if (publishedDifference < 0) return newestRelease;
+    return compareVersions(candidate.version, newest.version) > 0 ? release : newestRelease;
+  }, null);
+}
+
+function compareVersions(left: string, right: string): number {
+  const leftParts = left.split('.').map(Number);
+  const rightParts = right.split('.').map(Number);
+  const length = Math.max(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return left.localeCompare(right);
 }
 
 function getReleaseTagName(responseUrl: string, repository: string): string | null {

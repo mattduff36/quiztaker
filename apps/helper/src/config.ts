@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -15,6 +16,13 @@ export interface HelperConfig {
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 const loadDpapiAssembly = 'Add-Type -AssemblyName System.Security';
+export const PRODUCTION_CONTROL_PLANE_URL = 'https://www.vitriol.co.uk';
+
+export interface LegacyConfigMigration {
+  status: 'missing' | 'invalid' | 'already-migrated' | 'migrated';
+  controlPlaneUrl?: string;
+  configPath?: string;
+}
 
 export function getHelperHome(): string {
   return process.env.QUIZTAKER_HOME || join(
@@ -27,31 +35,105 @@ export function getAutomationRoot(): string {
   return process.env.QUIZTAKER_AUTOMATION_ROOT || resolve(sourceDirectory, '..', '..', '..');
 }
 
-export function getConfigPath(): string {
-  return join(getHelperHome(), 'config.json');
+export function getConfigPath(
+  controlPlaneUrl = PRODUCTION_CONTROL_PLANE_URL,
+  helperHome = getHelperHome(),
+): string {
+  return join(helperHome, getOriginConfigFileName(controlPlaneUrl));
 }
 
-export function ensureHelperDirectories(): void {
+export function getLegacyConfigPath(helperHome = getHelperHome()): string {
+  return join(helperHome, 'config.json');
+}
+
+export function ensureHelperDirectories(helperHome = getHelperHome()): void {
   for (const directory of [
-    getHelperHome(),
-    join(getHelperHome(), 'data'),
-    join(getHelperHome(), 'logs'),
-    join(getHelperHome(), 'chrome-profile'),
+    helperHome,
+    join(helperHome, 'data'),
+    join(helperHome, 'logs'),
+    join(helperHome, 'chrome-profile'),
   ]) mkdirSync(directory, { recursive: true });
 }
 
-export function readConfig(): HelperConfig | null {
-  if (!existsSync(getConfigPath())) return null;
+export function migrateLegacyConfig(helperHome = getHelperHome()): LegacyConfigMigration {
+  const legacyPath = getLegacyConfigPath(helperHome);
+  if (!existsSync(legacyPath)) return { status: 'missing' };
+
+  const config = readConfigFile(legacyPath);
+  if (!config) return { status: 'invalid' };
+
+  const configPath = getConfigPath(config.controlPlaneUrl, helperHome);
+  if (existsSync(configPath)) {
+    return { status: 'already-migrated', controlPlaneUrl: config.controlPlaneUrl, configPath };
+  }
+
+  writeConfig(config, helperHome);
+  return { status: 'migrated', controlPlaneUrl: config.controlPlaneUrl, configPath };
+}
+
+export function readConfig(
+  controlPlaneUrl = PRODUCTION_CONTROL_PLANE_URL,
+  helperHome = getHelperHome(),
+): HelperConfig | null {
+  const expectedOrigin = normalizeOrigin(controlPlaneUrl);
+  const config = readConfigFile(getConfigPath(expectedOrigin, helperHome));
+  if (!config || normalizeOrigin(config.controlPlaneUrl) !== expectedOrigin) return null;
+  return config;
+}
+
+export function writeConfig(config: HelperConfig, helperHome = getHelperHome()): void {
+  const controlPlaneUrl = normalizeOrigin(config.controlPlaneUrl);
+  ensureHelperDirectories(helperHome);
+  writeFileSync(
+    getConfigPath(controlPlaneUrl, helperHome),
+    JSON.stringify({ ...config, controlPlaneUrl }, null, 2),
+    { mode: 0o600 },
+  );
+}
+
+function readConfigFile(configPath: string): HelperConfig | null {
   try {
-    return JSON.parse(readFileSync(getConfigPath(), 'utf8')) as HelperConfig;
+    const value = JSON.parse(readFileSync(configPath, 'utf8')) as Partial<HelperConfig>;
+    if (
+      value.schemaVersion !== 1
+      || !isNonEmptyString(value.controlPlaneUrl)
+      || !isNonEmptyString(value.helperId)
+      || !isNonEmptyString(value.encryptedDeviceSecret)
+      || !isNonEmptyString(value.deviceName)
+      || !isNonEmptyString(value.pairedAt)
+    ) return null;
+    return {
+      schemaVersion: 1,
+      controlPlaneUrl: normalizeOrigin(value.controlPlaneUrl),
+      helperId: value.helperId,
+      encryptedDeviceSecret: value.encryptedDeviceSecret,
+      deviceName: value.deviceName,
+      pairedAt: value.pairedAt,
+    };
   } catch {
     return null;
   }
 }
 
-export function writeConfig(config: HelperConfig): void {
-  ensureHelperDirectories();
-  writeFileSync(getConfigPath(), JSON.stringify(config, null, 2), { mode: 0o600 });
+function getOriginConfigFileName(controlPlaneUrl: string): string {
+  const origin = normalizeOrigin(controlPlaneUrl);
+  if (origin === PRODUCTION_CONTROL_PLANE_URL) return 'config.production.json';
+
+  const url = new URL(origin);
+  const originLabel = [
+    url.hostname.toLowerCase().replace(/[^a-z0-9.-]+/g, '-'),
+    url.port || (url.protocol === 'https:' ? '443' : '80'),
+  ].join('-');
+  const originHash = createHash('sha256').update(origin).digest('hex').slice(0, 10);
+  return `config.${originLabel}.${originHash}.json`;
+}
+
+function normalizeOrigin(value: string): string {
+  return new URL(value).origin;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
 }
 
 export function protectSecret(secret: string): string {

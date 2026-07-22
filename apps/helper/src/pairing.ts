@@ -1,7 +1,12 @@
 import { hostname } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
-import { protectSecret, writeConfig, type HelperConfig } from './config.js';
+import {
+  PRODUCTION_CONTROL_PLANE_URL,
+  protectSecret,
+  writeConfig,
+  type HelperConfig,
+} from './config.js';
 import { HELPER_VERSION } from './version.js';
 
 interface PairingResponse {
@@ -14,20 +19,24 @@ export interface PairingLaunch {
   controlPlaneUrl: string;
 }
 
-const DEFAULT_CONTROL_PLANE_URL = process.env.QUIZTAKER_CONTROL_PLANE_URL || 'https://www.vitriol.co.uk';
+export interface HelperLaunch {
+  controlPlaneUrl: string;
+  mode: 'production' | 'local-development' | 'custom';
+  pairing: PairingLaunch | null;
+}
 
-export async function pairInteractively(): Promise<HelperConfig> {
-  const args = process.argv.slice(2);
+export async function pairInteractively(args = process.argv.slice(2)): Promise<HelperConfig> {
   const launch = parsePairingLaunch(args);
   if (launch) {
-    console.log(`Pairing Vitriol Helper with ${launch.controlPlaneUrl}...`);
+    console.log(`Pairing Vitriol Helper with ${describeControlPlane(launch.controlPlaneUrl)}...`);
     return claimPairing(launch);
   }
 
   const controlPlaneUrl = resolveControlPlaneUrl(args);
   const prompt = createInterface({ input: stdin, output: stdout });
   try {
-    console.log(`First-time setup: generate a pairing code at ${controlPlaneUrl}/helper.`);
+    console.log(`No pairing is configured for ${describeControlPlane(controlPlaneUrl)}.`);
+    console.log(`Generate a pairing code at ${controlPlaneUrl}/helper, then enter it below.`);
     const code = (await prompt.question('Pairing code: ')).trim().toUpperCase();
     if (!code) throw new Error('A pairing code is required.');
     return claimPairing({ code, controlPlaneUrl });
@@ -55,8 +64,36 @@ export function parsePairingLaunch(args: string[]): PairingLaunch | null {
 }
 
 export function resolveControlPlaneUrl(args: string[]): string {
+  const isProduction = args.includes('--production');
   const argument = args.find((value) => value.startsWith('--control-plane-url='));
-  return normalizeUrl(argument?.slice('--control-plane-url='.length) || DEFAULT_CONTROL_PLANE_URL);
+  if (isProduction && argument) {
+    throw new Error('Choose either --production or --control-plane-url, not both.');
+  }
+  return normalizeUrl(
+    isProduction
+      ? PRODUCTION_CONTROL_PLANE_URL
+      : argument?.slice('--control-plane-url='.length) || PRODUCTION_CONTROL_PLANE_URL,
+  );
+}
+
+export function resolveHelperLaunch(args: string[]): HelperLaunch {
+  const pairing = parsePairingLaunch(args);
+  const controlPlaneUrl = pairing?.controlPlaneUrl || resolveControlPlaneUrl(args);
+  return {
+    controlPlaneUrl,
+    mode: getControlPlaneMode(controlPlaneUrl),
+    pairing,
+  };
+}
+
+export function describeControlPlane(controlPlaneUrl: string): string {
+  const mode = getControlPlaneMode(controlPlaneUrl);
+  const label = mode === 'production'
+    ? 'production'
+    : mode === 'local-development'
+      ? 'local development'
+      : 'an explicit custom environment';
+  return `${label} (${controlPlaneUrl})`;
 }
 
 async function claimPairing({ code, controlPlaneUrl }: PairingLaunch): Promise<HelperConfig> {
@@ -88,10 +125,19 @@ async function claimPairing({ code, controlPlaneUrl }: PairingLaunch): Promise<H
 
 function normalizeUrl(value: string): string {
   const url = new URL(value.trim());
-  if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) {
+  const isLocalHttp = url.protocol === 'http:'
+    && ['localhost', '127.0.0.1'].includes(url.hostname);
+  if (url.protocol !== 'https:' && !isLocalHttp) {
     throw new Error('The control plane must use HTTPS.');
   }
   return url.origin;
+}
+
+function getControlPlaneMode(controlPlaneUrl: string): HelperLaunch['mode'] {
+  const target = new URL(controlPlaneUrl);
+  if (target.origin === PRODUCTION_CONTROL_PLANE_URL) return 'production';
+  if (['localhost', '127.0.0.1'].includes(target.hostname)) return 'local-development';
+  return 'custom';
 }
 
 async function readError(response: Response): Promise<string> {

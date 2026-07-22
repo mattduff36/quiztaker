@@ -3,9 +3,18 @@ import { existsSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { classifyOutcome } from '@quiztaker/core';
 import { ControlPlaneClient } from './client.js';
-import { ensureHelperDirectories, getAutomationRoot, readConfig } from './config.js';
+import {
+  ensureHelperDirectories,
+  getAutomationRoot,
+  migrateLegacyConfig,
+  readConfig,
+} from './config.js';
 import { startJob, type RunningJob } from './executor.js';
-import { pairInteractively, parsePairingLaunch } from './pairing.js';
+import {
+  describeControlPlane,
+  pairInteractively,
+  resolveHelperLaunch,
+} from './pairing.js';
 import { readLocalHistory } from './sync.js';
 import { migrateLegacyLocalData } from './migrate.js';
 import { HELPER_VERSION } from './version.js';
@@ -16,14 +25,29 @@ let hasAnnouncedOnline = false;
 let runningJob: { jobId: string; run: RunningJob } | null = null;
 let nextSyncAt = 0;
 let nextReleaseCheckAt = 0;
+let hasReportedConnectionRemediation = false;
 
 async function main(): Promise<void> {
   ensureHelperDirectories();
+  const args = process.argv.slice(2);
+  const launch = resolveHelperLaunch(args);
+  const legacyMigration = migrateLegacyConfig();
   const importArg = process.argv.find((value) => value.startsWith('--import-data='));
   migrateLegacyLocalData(importArg?.slice('--import-data='.length));
-  const shouldPair = process.argv.includes('--pair') || Boolean(parsePairingLaunch(process.argv.slice(2)));
-  const config = shouldPair || !readConfig() ? await pairInteractively() : readConfig();
-  if (!config) throw new Error('Helper configuration is missing. Run with --pair.');
+  console.log(`Launch target: ${describeControlPlane(launch.controlPlaneUrl)}`);
+  if (
+    legacyMigration.controlPlaneUrl
+    && legacyMigration.controlPlaneUrl !== launch.controlPlaneUrl
+  ) {
+    console.log(
+      `Preserved the previous pairing for ${describeControlPlane(legacyMigration.controlPlaneUrl)}. `
+      + 'It will not be used for this launch.',
+    );
+  }
+
+  const savedConfig = readConfig(launch.controlPlaneUrl);
+  const shouldPair = args.includes('--pair') || Boolean(launch.pairing);
+  const config = shouldPair || !savedConfig ? await pairInteractively(args) : savedConfig;
 
   const client = new ControlPlaneClient(config);
   console.log(`Vitriol Helper ${HELPER_VERSION}`);
@@ -82,11 +106,27 @@ async function main(): Promise<void> {
       await delay(runningJob ? 2_000 : 5_000);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(new Date().toISOString(), message);
+      console.error(
+        new Date().toISOString(),
+        `${describeControlPlane(config.controlPlaneUrl)}: ${message}`,
+      );
       if (/Control plane returned 401/.test(message)) {
-        console.error('This pairing is no longer authorized. Run the origin-specific pairing command from the Vitriol Helper page.');
+        console.error(
+          `This pairing is not authorized for ${config.controlPlaneUrl}. `
+          + `Open ${config.controlPlaneUrl}/helper, generate a new code, and click "Launch Vitriol Helper".`,
+        );
         process.exitCode = 1;
         break;
+      }
+      if (!hasReportedConnectionRemediation && /fetch failed|timeout/i.test(message)) {
+        hasReportedConnectionRemediation = true;
+        console.error(
+          launch.mode === 'local-development'
+            ? `The local control plane is unavailable. Start it at ${config.controlPlaneUrl}, `
+              + 'or close this helper and use the Start-menu shortcut for production.'
+            : `Could not reach ${config.controlPlaneUrl}. Check the network connection; `
+              + `if pairing is required, open ${config.controlPlaneUrl}/helper.`,
+        );
       }
       await delay(10_000);
     }
