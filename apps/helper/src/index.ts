@@ -5,7 +5,7 @@ import { classifyOutcome } from '@quiztaker/core';
 import { ControlPlaneClient } from './client.js';
 import { ensureHelperDirectories, getAutomationRoot, readConfig } from './config.js';
 import { startJob, type RunningJob } from './executor.js';
-import { pairInteractively } from './pairing.js';
+import { pairInteractively, parsePairingLaunch } from './pairing.js';
 import { readLocalHistory } from './sync.js';
 import { migrateLegacyLocalData } from './migrate.js';
 import { HELPER_VERSION } from './version.js';
@@ -21,7 +21,7 @@ async function main(): Promise<void> {
   ensureHelperDirectories();
   const importArg = process.argv.find((value) => value.startsWith('--import-data='));
   migrateLegacyLocalData(importArg?.slice('--import-data='.length));
-  const shouldPair = process.argv.includes('--pair');
+  const shouldPair = process.argv.includes('--pair') || Boolean(parsePairingLaunch(process.argv.slice(2)));
   const config = shouldPair || !readConfig() ? await pairInteractively() : readConfig();
   if (!config) throw new Error('Helper configuration is missing. Run with --pair.');
 

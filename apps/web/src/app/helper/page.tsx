@@ -4,6 +4,7 @@ import { HelperOnboarding } from '@/components/helper-onboarding';
 import { PageFrame, Panel } from '@/components/page-frame';
 import { requireAuthenticatedUser } from '@/lib/auth';
 import { queryOne } from '@/lib/db';
+import { getLatestHelperRelease } from '@/lib/releases';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,21 +15,24 @@ export const metadata: Metadata = {
 
 export default async function HelperPage() {
   const user = await requireAuthenticatedUser();
-  const helper = await queryOne<{
-    device_name: string;
-    last_seen_at: string | null;
-    version: string;
-    status: string;
-    is_online: boolean;
-  }>(
-    `select device_name, last_seen_at, version, status,
-            last_seen_at > now() - interval '30 seconds' as is_online
-     from helpers
-     where user_id = $1 and revoked_at is null
-     order by paired_at desc
-     limit 1`,
-    [user.id],
-  );
+  const [helper, release] = await Promise.all([
+    queryOne<{
+      device_name: string;
+      last_seen_at: string | null;
+      version: string;
+      status: string;
+      is_online: boolean;
+    }>(
+      `select device_name, last_seen_at, version, status,
+              last_seen_at > now() - interval '30 seconds' as is_online
+       from helpers
+       where user_id = $1 and revoked_at is null
+       order by paired_at desc
+       limit 1`,
+      [user.id],
+    ),
+    getLatestHelperRelease(),
+  ]);
   const lastSeenAt = helper?.last_seen_at ?? undefined;
 
   return (
@@ -39,6 +43,10 @@ export default async function HelperPage() {
         description="The helper makes outbound HTTPS requests only. CDP, cookies, screenshots, and the interactive Chrome profile remain on your PC."
       >
         <HelperOnboarding
+          download={{
+            status: release ? 'available' : 'unavailable',
+            url: release?.downloadUrl ?? null,
+          }}
           connection={{
             state: helper ? (helper.is_online ? 'online' : 'offline') : 'not-paired',
             helperName: helper?.device_name,

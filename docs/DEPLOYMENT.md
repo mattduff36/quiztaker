@@ -30,10 +30,11 @@ legacy unauthenticated Express dashboard is retained under
 (port 3000); it is not the production site.
 
 Pairing codes are bound to the control-plane origin that generated them. The
-Local helper page shows an exact PowerShell command with
-`--control-plane-url=http://localhost:4000` during local development and the
-live HTTPS origin in production. Use that command when switching an installed
-helper between environments; the Start menu shortcut defaults to production.
+MSI registers the per-user `vitriol-helper://` protocol, and the Local helper
+page uses it for a **Launch Vitriol Helper** button that carries the one-time
+code and the correct local or production origin. The helper accepts protocol
+launches only for localhost or the Vitriol production domains. The Start menu
+shortcut remains available for normal launches and defaults to production.
 After its first accepted heartbeat, the helper confirms that it is online and
 minimizes its terminal window. Pass `--no-minimize` (or set
 `QUIZTAKER_NO_AUTO_MINIMIZE=1`) when diagnosing it interactively.

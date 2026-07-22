@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Check, Clipboard, Download, LoaderCircle, RefreshCw } from 'lucide-react';
+import { ArrowRight, Check, Clipboard, Download, LoaderCircle, Play, RefreshCw } from 'lucide-react';
 import { productName } from '@/lib/brand';
 
 interface PairingDetails {
@@ -19,8 +19,14 @@ interface HelperConnection {
   activity?: string;
 }
 
+interface HelperDownload {
+  status: 'available' | 'unavailable';
+  url: string | null;
+}
+
 interface HelperOnboardingProps {
   connection: HelperConnection;
+  download: HelperDownload;
 }
 
 const connectionStyles = {
@@ -41,17 +47,18 @@ const connectionStyles = {
   },
 } as const;
 
-export function HelperOnboarding({ connection }: HelperOnboardingProps) {
+export function HelperOnboarding({ connection, download }: HelperOnboardingProps) {
   const router = useRouter();
   const [pairing, setPairing] = useState<PairingDetails | null>(null);
-  const [copiedItem, setCopiedItem] = useState<'code' | 'command' | null>(null);
+  const [hasRequestedDownload, setHasRequestedDownload] = useState(false);
+  const [isCodeCopied, setIsCodeCopied] = useState(false);
   const [isCreatingCode, startCreatingCode] = useTransition();
   const [, startStatusRefresh] = useTransition();
   const copyTimer = useRef<number | null>(null);
   const isPaired = connection.state !== 'not-paired';
   const shouldRefresh = pairing !== null || isPaired;
-  const startCommand = pairing
-    ? `& "$env:LOCALAPPDATA\\Programs\\Vitriol Helper\\Start Vitriol Helper.cmd" --pair --control-plane-url="${pairing.controlPlaneUrl}"`
+  const helperLaunchUrl = pairing
+    ? `vitriol-helper://pair?code=${encodeURIComponent(pairing.code)}&controlPlaneUrl=${encodeURIComponent(pairing.controlPlaneUrl)}`
     : '';
 
   useEffect(() => {
@@ -77,11 +84,11 @@ export function HelperOnboarding({ connection }: HelperOnboardingProps) {
     });
   }
 
-  async function copyText(value: string, item: 'code' | 'command') {
+  async function copyCode(value: string) {
     await navigator.clipboard.writeText(value);
-    setCopiedItem(item);
+    setIsCodeCopied(true);
     if (copyTimer.current) window.clearTimeout(copyTimer.current);
-    copyTimer.current = window.setTimeout(() => setCopiedItem(null), 1_600);
+    copyTimer.current = window.setTimeout(() => setIsCodeCopied(false), 1_600);
   }
 
   return (
@@ -91,10 +98,26 @@ export function HelperOnboarding({ connection }: HelperOnboardingProps) {
         <Step number="01" title="Download">
           <p className="text-sm leading-6 text-slate-600">Download the browser-friendly ZIP, extract it, and run the MSI inside.</p>
           <div className="mt-auto pt-5">
-            <Link href="/download" className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-700">
-              <Download className="size-4" />
-              Get Windows helper
-            </Link>
+            {download.status === 'available' && download.url ? (
+              <a
+                href={download.url}
+                download
+                onClick={() => setHasRequestedDownload(true)}
+                className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-700"
+              >
+                <Download className="size-4" />
+                Get Windows helper
+              </a>
+            ) : (
+              <button
+                type="button"
+                disabled
+                className="inline-flex cursor-not-allowed items-center gap-2 rounded-md bg-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-500"
+              >
+                <Download className="size-4" />
+                Release pending
+              </button>
+            )}
           </div>
         </Step>
         <Step number="02" title="Create pairing code">
@@ -111,27 +134,32 @@ export function HelperOnboarding({ connection }: HelperOnboardingProps) {
               <p className="text-xs text-slate-500">Enter this one-time code in the helper:</p>
               <button
                 type="button"
-                onClick={() => void copyText(pairing.code, 'code')}
+                onClick={() => void copyCode(pairing.code)}
                 className={`mt-3 flex w-full items-center justify-between rounded-md border px-4 py-4 text-cyan-950 transition duration-200 ${
-                  copiedItem === 'code'
+                  isCodeCopied
                     ? 'scale-[1.01] border-emerald-400 bg-emerald-50 shadow-[0_0_0_3px_rgba(52,211,153,.12)]'
                     : 'border-cyan-300 bg-cyan-50'
                 }`}
               >
                 <span className="font-mono text-xl font-bold tracking-[0.2em]">{pairing.code}</span>
-                <CopyIndicator isCopied={copiedItem === 'code'} />
+                <CopyIndicator isCopied={isCodeCopied} />
               </button>
               <p className="mt-2 text-xs text-slate-500">Expires {formatDate(pairing.expiresAt)}</p>
             </div>
           ) : (
             <>
-              <p className="text-sm leading-6 text-slate-600">Generate a short-lived code before starting the helper.</p>
+              <p id="step-two-instructions" className="text-sm leading-6 text-slate-600">
+                {hasRequestedDownload
+                  ? 'Generate a short-lived code before starting the helper.'
+                  : 'Download the helper in Step 1 to unlock code generation.'}
+              </p>
               <div className="mt-auto pt-5">
                 <button
                   type="button"
                   onClick={createCode}
-                  disabled={isCreatingCode}
-                  className="inline-flex items-center gap-2 rounded-md bg-cyan-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-60"
+                  disabled={!hasRequestedDownload || isCreatingCode}
+                  aria-describedby="step-two-instructions"
+                  className="inline-flex items-center gap-2 rounded-md bg-cyan-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:hover:bg-slate-200"
                 >
                   {isCreatingCode ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
                   Generate code
@@ -140,7 +168,7 @@ export function HelperOnboarding({ connection }: HelperOnboardingProps) {
             </>
           )}
         </Step>
-        <Step number="03" title={isPaired ? 'Ready' : 'Start and pair'}>
+        <Step number="03" title={isPaired ? 'Ready' : pairing ? 'Launch helper' : 'Start and pair'}>
           {connection.state === 'online' ? (
             <>
               <p className="text-sm leading-6 text-slate-600">
@@ -158,25 +186,36 @@ export function HelperOnboarding({ connection }: HelperOnboardingProps) {
           ) : pairing ? (
             <>
               <p className="text-sm leading-6 text-slate-600">
-                Run this exact PowerShell command, then enter the pairing code. It targets <span className="font-semibold text-slate-950">{pairing.controlPlaneUrl}</span>.
+                Launch the installed helper. It will pair automatically with <span className="font-semibold text-slate-950">{pairing.controlPlaneUrl}</span>.
               </p>
-              <button
-                type="button"
-                onClick={() => void copyText(startCommand, 'command')}
-                className={`mt-5 flex w-full items-start justify-between gap-3 rounded-md border p-3 text-left font-mono text-[11px] leading-5 transition duration-200 ${
-                  copiedItem === 'command'
-                    ? 'scale-[1.01] border-emerald-300 bg-emerald-50 text-emerald-950'
-                    : 'border-transparent bg-slate-100 text-slate-700 hover:bg-cyan-50'
-                }`}
-              >
-                <span className="break-all">{startCommand}</span>
-                <CopyIndicator isCopied={copiedItem === 'command'} />
-              </button>
+              <p className="mt-2 text-xs leading-5 text-slate-500">Your browser may ask permission to open Vitriol Helper.</p>
+              <div className="mt-auto pt-5">
+                <a
+                  href={helperLaunchUrl}
+                  className="inline-flex items-center gap-2 rounded-md bg-cyan-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-800"
+                >
+                  <Play className="size-4 fill-current" />
+                  Launch Vitriol Helper
+                </a>
+              </div>
             </>
           ) : (
-            <p className="text-sm leading-6 text-slate-600">
-              Generate a code first. The launch command will automatically target this {productName} control plane.
-            </p>
+            <>
+              <p id="step-three-instructions" className="text-sm leading-6 text-slate-600">
+                Generate a code first, then launch the installed {productName} Helper here.
+              </p>
+              <div className="mt-auto pt-5">
+                <button
+                  type="button"
+                  disabled
+                  aria-describedby="step-three-instructions"
+                  className="inline-flex cursor-not-allowed items-center gap-2 rounded-md bg-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-500"
+                >
+                  <Play className="size-4" />
+                  Launch Vitriol Helper
+                </button>
+              </div>
+            </>
           )}
         </Step>
       </div>

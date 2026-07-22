@@ -158,7 +158,7 @@ function writeInstallNotes() {
     'Vitriol Helper for Windows 10/11 x64',
     '',
     'This private release is intentionally unsigned and may show Windows SmartScreen warnings.',
-    'Install the MSI, generate a pairing code on the website, start "Vitriol Helper" from the Start menu, then enter the code.',
+    'Install the MSI, generate a pairing code on the website, then click "Launch Vitriol Helper".',
     'After connecting, the helper confirms it is online and minimizes automatically while it polls for work.',
     'Google Chrome is required. Browser credentials and cookies remain on this computer.',
     'To import an older data folder, run: "Start Vitriol Helper.cmd" --import-data=C:\\path\\to\\old-project\\data',
@@ -206,6 +206,7 @@ function createWixSource(sourceRoot) {
     <MediaTemplate EmbedCab=\"yes\" />
     <Feature Id=\"MainFeature\" Title=\"Vitriol Helper\" Level=\"1\">
       <ComponentGroupRef Id=\"AppFiles\" />
+      <ComponentRef Id=\"ProtocolRegistration\" />
     </Feature>
   </Package>
   <Fragment>
@@ -218,6 +219,17 @@ function createWixSource(sourceRoot) {
   </Fragment>
   <Fragment>
     <ComponentGroup Id=\"AppFiles\">${componentXml}</ComponentGroup>
+  </Fragment>
+  <Fragment>
+    <Component Id=\"ProtocolRegistration\" Directory=\"INSTALLFOLDER\" Guid=\"*\">
+      <RegistryKey Root=\"HKCU\" Key=\"Software\\Classes\\vitriol-helper\">
+        <RegistryValue Type=\"string\" Value=\"URL:Vitriol Helper Protocol\" />
+        <RegistryValue Name=\"URL Protocol\" Type=\"string\" Value=\"\" KeyPath=\"yes\" />
+      </RegistryKey>
+      <RegistryKey Root=\"HKCU\" Key=\"Software\\Classes\\vitriol-helper\\shell\\open\\command\">
+        <RegistryValue Type=\"string\" Value=\"&quot;[SystemFolder]cmd.exe&quot; /d /s /c &quot;&quot;[INSTALLFOLDER]Start Vitriol Helper.cmd&quot; &quot;%1&quot;&quot;\" />
+      </RegistryKey>
+    </Component>
   </Fragment>
 </Wix>`;
 }
