@@ -2,25 +2,47 @@ import { AppShell } from '@/components/app-shell';
 import { PageFrame, Panel } from '@/components/page-frame';
 import { ReviewList } from '@/components/review-list';
 import { requireAuthenticatedUser } from '@/lib/auth';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { queryRows } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
 export default async function LearningPage() {
   const user = await requireAuthenticatedUser();
-  const supabase = createSupabaseAdminClient();
-  const [{ data: strategies }, { data: reviews }] = await Promise.all([
-    supabase.from('strategies').select('*').eq('user_id', user.id).order('updated_at', { ascending: false }),
-    supabase.from('review_items').select('*').eq('user_id', user.id).eq('status', 'open').order('created_at', { ascending: false }),
+  const [strategies, reviews] = await Promise.all([
+    queryRows<{
+      id: string;
+      capability_id: string;
+      fingerprint: string | null;
+      successes: number;
+      failures: number;
+      status: string;
+    }>(
+      'select * from strategies where user_id = $1 order by updated_at desc',
+      [user.id],
+    ),
+    queryRows<{
+      id: string;
+      type: string;
+      title: string;
+      detail: string;
+      next_action: string;
+      created_at: string;
+    }>(
+      `select id, type, title, detail, next_action, created_at
+       from review_items
+       where user_id = $1 and status = 'open'
+       order by created_at desc`,
+      [user.id],
+    ),
   ]);
-  const values = strategies ?? [];
+  const values = strategies;
   return (
     <AppShell email={user.email}>
       <PageFrame eyebrow="Measured evidence" title="Learning" description="Strategies promote only after three verified successes across two distinct targets. Regressions return to review.">
         <div className="grid gap-4 sm:grid-cols-3">
           <Metric label="Promoted" value={values.filter((item) => item.status === 'promoted').length} />
           <Metric label="Candidates" value={values.filter((item) => item.status === 'candidate').length} />
-          <Metric label="Needs review" value={reviews?.length ?? 0} />
+          <Metric label="Needs review" value={reviews.length} />
         </div>
         <div className="mt-6 grid gap-6 xl:grid-cols-2">
           <Panel title="Strategies">
@@ -35,8 +57,8 @@ export default async function LearningPage() {
               </article>
             )) : <p className="p-6 text-sm text-slate-500">No strategy evidence has been synced yet.</p>}
           </Panel>
-          <Panel title="Review queue" meta={<span className="font-mono text-xs text-slate-500">{reviews?.length ?? 0} open</span>}>
-            <ReviewList reviews={reviews ?? []} />
+          <Panel title="Review queue" meta={<span className="font-mono text-xs text-slate-500">{reviews.length} open</span>}>
+            <ReviewList reviews={reviews} />
           </Panel>
         </div>
       </PageFrame>

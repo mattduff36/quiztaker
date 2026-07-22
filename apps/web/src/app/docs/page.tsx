@@ -6,6 +6,8 @@ import { AppShell } from '@/components/app-shell';
 import { PageFrame, Panel } from '@/components/page-frame';
 import { requireAuthenticatedUser } from '@/lib/auth';
 
+export const dynamic = 'force-dynamic';
+
 const documents = {
   agents: { label: 'Agent guide', file: 'AGENTS.md' },
   types: { label: 'Quiz types', file: 'QUIZ-TYPES.md' },

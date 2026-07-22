@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { deriveHelperSecret } from '@quiztaker/core';
+import { queryOne } from '@/lib/db';
 import { getServerEnv } from '@/lib/env';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
 export function createPairingCode(): string {
   const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -39,13 +39,12 @@ export async function authenticateHelper(request: Request) {
   const right = Buffer.from(expected);
   if (left.length !== right.length || !timingSafeEqual(left, right)) return null;
 
-  const supabase = createSupabaseAdminClient();
-  const { data } = await supabase
-    .from('helpers')
-    .select('id,user_id,status')
-    .eq('id', helperId)
-    .is('revoked_at', null)
-    .maybeSingle();
+  const data = await queryOne<{ id: string; user_id: string; status: string }>(
+    `select id, user_id, status
+     from helpers
+     where id = $1 and revoked_at is null`,
+    [helperId],
+  );
   if (!data || data.status === 'revoked') return null;
   return { helperId: data.id as string, userId: data.user_id as string };
 }

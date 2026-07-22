@@ -9,6 +9,8 @@ import {
 } from '@quiztaker/core';
 import { ensureHelperDirectories, getAutomationRoot, getHelperHome } from './config.js';
 
+const MAX_CAPTURED_OUTPUT_CHARS = 10 * 1024 * 1024;
+
 export interface RunningJob {
   child: ChildProcessWithoutNullStreams;
   completion: Promise<{ code: number | null; output: string }>;
@@ -39,6 +41,8 @@ export function startJob(
 
   let sequence = 0;
   let output = '';
+  let isOutputTruncated = false;
+  let isCancelled = false;
   let eventQueue = Promise.resolve();
   const emit = (event: JobEventInput['event'], data: Record<string, unknown>) => {
     sequence += 1;
@@ -71,12 +75,12 @@ export function startJob(
   const completion = new Promise<{ code: number | null; output: string }>((resolvePromise, reject) => {
     child.stdout.on('data', (value: Buffer) => {
       const text = value.toString();
-      output += text;
+      ({ output, isOutputTruncated } = appendOutput(output, text, isOutputTruncated));
       void emit('stdout', { text });
     });
     child.stderr.on('data', (value: Buffer) => {
       const text = value.toString();
-      output += text;
+      ({ output, isOutputTruncated } = appendOutput(output, text, isOutputTruncated));
       void emit('stderr', { text });
     });
     child.on('error', (error) => {
@@ -84,8 +88,9 @@ export function startJob(
       reject(error);
     });
     child.on('close', (code) => {
-      const event = code === 0 ? 'completed' : 'failed';
-      void emit(event, { code, output }).finally(() => resolvePromise({ code, output }));
+      const event = isCancelled ? 'cancelled' : code === 0 ? 'completed' : 'failed';
+      const data = isCancelled ? { requestedAt: new Date().toISOString(), code, output } : { code, output };
+      void emit(event, data).finally(() => resolvePromise({ code, output }));
     });
   });
 
@@ -93,9 +98,20 @@ export function startJob(
     child,
     completion,
     cancel: () => {
+      if (isCancelled || child.exitCode !== null) return;
+      isCancelled = true;
       child.kill();
-      void emit('cancelled', { requestedAt: new Date().toISOString() });
     },
+  };
+}
+
+function appendOutput(output: string, text: string, isTruncated: boolean) {
+  if (isTruncated) return { output, isOutputTruncated: true };
+  const remaining = MAX_CAPTURED_OUTPUT_CHARS - output.length;
+  if (text.length <= remaining) return { output: output + text, isOutputTruncated: false };
+  return {
+    output: `${output}${text.slice(0, Math.max(0, remaining))}\n[output truncated]\n`,
+    isOutputTruncated: true,
   };
 }
 

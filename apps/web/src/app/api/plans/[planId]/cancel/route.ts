@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { queryOne, queryRows } from '@/lib/db';
 import { hasValidRequestOrigin } from '@/lib/security';
 
 export async function POST(
@@ -11,29 +11,24 @@ export async function POST(
   const user = await getAuthenticatedUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { planId } = await context.params;
-  const supabase = createSupabaseAdminClient();
-  const { data, error } = await supabase
-    .from('plans')
-    .update({ consumed: true })
-    .eq('id', planId)
-    .eq('user_id', user.id)
-    .eq('consumed', false)
-    .select('attempt_id')
-    .maybeSingle();
-  if (error || !data) return NextResponse.json({ error: 'Plan not found' }, { status: 404 });
-  await supabase.from('attempt_events').insert([
-    {
-      user_id: user.id,
-      attempt_id: data.attempt_id,
-      event: 'plan-cancelled',
-      data: { planId },
-    },
-    {
-      user_id: user.id,
-      attempt_id: data.attempt_id,
-      event: 'attempt-finished',
-      data: { outcome: 'cancelled', verified: false, status: 'cancelled-by-user' },
-    },
-  ]);
+  const data = await queryOne<{ attempt_id: string }>(
+    `update plans set consumed = true
+     where id = $1 and user_id = $2 and consumed = false
+     returning attempt_id`,
+    [planId, user.id],
+  );
+  if (!data) return NextResponse.json({ error: 'Plan not found' }, { status: 404 });
+  await queryRows(
+    `insert into attempt_events (user_id, attempt_id, event, data)
+     values
+       ($1, $2, 'plan-cancelled', $3::jsonb),
+       ($1, $2, 'attempt-finished', $4::jsonb)`,
+    [
+      user.id,
+      data.attempt_id,
+      JSON.stringify({ planId }),
+      JSON.stringify({ outcome: 'cancelled', verified: false, status: 'cancelled-by-user' }),
+    ],
+  );
   return NextResponse.json({ ok: true });
 }

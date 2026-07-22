@@ -22,7 +22,7 @@ const stageRoot = join(outputRoot, 'stage');
 const downloadRoot = join(outputRoot, 'downloads');
 const nodeArchive = join(downloadRoot, `node-v${nodeVersion}-win-x64.zip`);
 
-rmSync(outputRoot, { recursive: true, force: true });
+rmSync(outputRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
 mkdirSync(stageRoot, { recursive: true });
 mkdirSync(downloadRoot, { recursive: true });
 
@@ -251,11 +251,14 @@ function xml(value) {
 }
 
 function run(command, args, cwd, extraEnv = {}) {
-  const executable = process.platform === 'win32' && command === 'npm' ? 'npm.cmd' : command;
-  const result = spawnSync(executable, args, {
+  const isNpm = command === 'npm';
+  const executable = isNpm ? process.execPath : command;
+  const commandArgs = isNpm ? [process.env.npm_execpath, ...args] : args;
+  const result = spawnSync(executable, commandArgs, {
     cwd,
     stdio: 'inherit',
     env: { ...process.env, ...extraEnv },
   });
+  if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed.`);
 }

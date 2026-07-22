@@ -2,33 +2,44 @@ import Link from 'next/link';
 import { ArrowRight, CircleDot, Laptop, Radio } from 'lucide-react';
 import { capabilities } from '@quiztaker/core';
 import { requireAuthenticatedUser } from '@/lib/auth';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { queryOne } from '@/lib/db';
 import { AppShell } from '@/components/app-shell';
 import { OperationsClient } from '@/components/operations-client';
 import { PageFrame, Panel } from '@/components/page-frame';
 
 export const dynamic = 'force-dynamic';
 
+interface HelperPresence {
+  id: string;
+  device_name: string;
+  version: string;
+  is_online: boolean;
+}
+
+interface ActiveJob {
+  id: string;
+  status: string;
+  outcome: { status?: string; verified?: boolean } | null;
+}
+
 export default async function Home() {
   const user = await requireAuthenticatedUser();
-  const supabase = createSupabaseAdminClient();
-  const { data: helper } = await supabase
-    .from('helper_presence')
-    .select('*')
-    .eq('user_id', user.id)
-    .is('revoked_at', null)
-    .order('last_seen_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const { data: activeJob } = helper ? await supabase
-    .from('jobs')
-    .select('id,status,outcome')
-    .eq('user_id', user.id)
-    .eq('helper_id', helper.id)
-    .in('status', ['queued', 'dispatched', 'running'])
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle() : { data: null };
+  const helper = await queryOne<HelperPresence>(
+    `select * from helper_presence
+     where user_id = $1 and revoked_at is null
+     order by last_seen_at desc nulls last
+     limit 1`,
+    [user.id],
+  );
+  const activeJob = helper ? await queryOne<ActiveJob>(
+    `select id, status, outcome
+     from jobs
+     where user_id = $1 and helper_id = $2
+       and status in ('queued', 'dispatched', 'running')
+     order by created_at desc
+     limit 1`,
+    [user.id, helper.id],
+  ) : null;
   const isOnline = helper?.is_online === true;
 
   return (
@@ -67,9 +78,13 @@ export default async function Home() {
               <Metric icon={<CircleDot className="size-4" />} label="Helper version" value={helper.version} />
             </div>
             <OperationsClient
-              helperId={helper.id}
+              helperId={String(helper.id)}
               capabilities={[...capabilities]}
-              initialJob={activeJob ? { id: activeJob.id, status: activeJob.status, outcome: activeJob.outcome } : null}
+              initialJob={activeJob ? {
+                id: String(activeJob.id),
+                status: String(activeJob.status),
+                outcome: activeJob.outcome ?? undefined,
+              } : null}
             />
           </>
         )}

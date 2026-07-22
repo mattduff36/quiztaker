@@ -41,3 +41,39 @@ test('executes a valid signed job through the local whitelist', async () => {
   assert.throws(() => startJob(envelope, helperId, secret, async () => {}), /nonce has already been used/);
   rmSync(directory, { recursive: true, force: true });
 });
+
+test('reports cancellation as the only terminal event', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'quiztaker-helper-cancel-test-'));
+  process.env.QUIZTAKER_HOME = join(directory, 'home');
+  process.env.QUIZTAKER_AUTOMATION_ROOT = directory;
+  writeFileSync(join(directory, 'pw-list-tabs.js'), 'setTimeout(() => {}, 30_000);\n');
+
+  const helperId = '177aa5e8-1f86-4a6d-a719-0a1282053b48';
+  const secret = deriveHelperSecret('integration-master-key-32-characters', helperId);
+  const envelope = signJob({
+    jobId: '92a21df0-62b0-42a7-8f8e-5d85947f80b8',
+    planId: 'ddf85569-65e5-497c-9698-28d17fe408f5',
+    attemptId: '3a5c9105-ce60-49f6-bf90-57d4d2857680',
+    helperId,
+    capabilityId: 'list-tabs',
+    capabilityVersion: 1,
+    script: 'pw-list-tabs.js',
+    args: [],
+    fingerprint: null,
+    nonce: '67e57b9e-a7e5-4247-8607-f7412b3753f7',
+    issuedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }, secret);
+  const events: JobEventInput[] = [];
+  const run = startJob(envelope, helperId, secret, async (event) => {
+    events.push(event);
+  });
+  run.cancel();
+  await run.completion;
+
+  const terminalEvents = events.filter((event) => (
+    event.event === 'completed' || event.event === 'failed' || event.event === 'cancelled'
+  ));
+  assert.deepEqual(terminalEvents.map((event) => event.event), ['cancelled']);
+  rmSync(directory, { recursive: true, force: true });
+});

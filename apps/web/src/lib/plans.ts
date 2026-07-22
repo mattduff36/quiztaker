@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getCapability, riskLevels, type PlanProposal, type PlanTarget } from '@quiztaker/core';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { queryOne, queryRows } from '@/lib/db';
 
 export interface CreatePlanInput {
   capabilityId: string;
@@ -22,45 +22,56 @@ export async function createPlan(userId: string, input: CreatePlanInput): Promis
   const capability = getCapability(input.capabilityId);
   if (!capability) throw new Error('Unknown capability');
   const risk = higherRisk(capability.risk, input.risk);
-  const now = new Date();
-  const row = {
-    attempt_id: randomUUID(),
-    user_id: userId,
-    helper_id: input.helperId,
-    source: input.source ?? 'manual-capability',
-    capability_id: capability.id,
-    capability_version: capability.version,
-    script: capability.script,
-    args: input.args ?? capability.args ?? [],
-    label: input.label ?? capability.label,
-    risk,
-    mutates_course: capability.mutatesCourse,
-    verifier: capability.verifier,
-    steps: input.steps ?? [],
-    constraints: input.constraints ?? null,
-    targets: input.targets ?? [],
-    confidence: Math.min(1, Math.max(0, input.confidence ?? 0)),
-    evidence: input.evidence ?? [],
-    fingerprint: input.fingerprint ?? null,
-    tab_idx: input.tabIdx ?? null,
-    expires_at: new Date(now.getTime() + 10 * 60_000).toISOString(),
-  };
-  const supabase = createSupabaseAdminClient();
-  const { data, error } = await supabase.from('plans').insert(row).select('*').single();
-  if (error) throw error;
-  await supabase.from('attempt_events').insert({
-    user_id: userId,
-    attempt_id: row.attempt_id,
-    event: 'attempt-created',
-    data: {
-      source: row.source,
-      capabilityId: row.capability_id,
-      capabilityVersion: row.capability_version,
-      planId: data.id,
+  const attemptId = randomUUID();
+  const source = input.source ?? 'manual-capability';
+  const args = input.args ?? capability.args ?? [];
+  const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
+  const row = await queryOne<Record<string, unknown>>(
+    `insert into plans (
+       attempt_id, user_id, helper_id, source, capability_id, capability_version,
+       script, args, label, risk, mutates_course, verifier, steps, constraints,
+       targets, confidence, evidence, fingerprint, tab_idx, expires_at
+     ) values (
+       $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13::jsonb,
+       $14::jsonb, $15::jsonb, $16, $17::jsonb, $18, $19, $20
+     )
+     returning *`,
+    [
+      attemptId,
+      userId,
+      input.helperId,
+      source,
+      capability.id,
+      capability.version,
+      capability.script,
+      JSON.stringify(args),
+      input.label ?? capability.label,
       risk,
-    },
-  });
-  return mapPlan(data);
+      capability.mutatesCourse,
+      capability.verifier,
+      JSON.stringify(input.steps ?? []),
+      input.constraints == null ? null : JSON.stringify(input.constraints),
+      JSON.stringify(input.targets ?? []),
+      Math.min(1, Math.max(0, input.confidence ?? 0)),
+      JSON.stringify(input.evidence ?? []),
+      input.fingerprint ?? null,
+      input.tabIdx ?? null,
+      expiresAt,
+    ],
+  );
+  if (!row) throw new Error('Could not persist plan');
+  await queryRows(
+    `insert into attempt_events (user_id, attempt_id, event, data)
+     values ($1, $2, 'attempt-created', $3::jsonb)`,
+    [userId, attemptId, JSON.stringify({
+      source,
+      capabilityId: capability.id,
+      capabilityVersion: capability.version,
+      planId: row.id,
+      risk,
+    })],
+  );
+  return mapPlan(row);
 }
 
 export function mapPlan(row: Record<string, unknown>): PlanProposal {
@@ -87,9 +98,9 @@ export function mapPlan(row: Record<string, unknown>): PlanProposal {
     tabIdx: row.tab_idx == null ? null : Number(row.tab_idx),
     confirmed: Boolean(row.confirmed),
     consumed: Boolean(row.consumed),
-    createdAt: String(row.created_at),
-    expiresAt: String(row.expires_at),
-    ...(row.confirmed_at ? { confirmedAt: String(row.confirmed_at) } : {}),
+    createdAt: new Date(String(row.created_at)).toISOString(),
+    expiresAt: new Date(String(row.expires_at)).toISOString(),
+    ...(row.confirmed_at ? { confirmedAt: new Date(String(row.confirmed_at)).toISOString() } : {}),
   };
 }
 
