@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import Link from 'next/link';
 import { Check, Clipboard, Download, LoaderCircle, RefreshCw } from 'lucide-react';
+import { productName } from '@/lib/brand';
 
 export function HelperOnboarding(props: {
   isPaired: boolean;
@@ -34,7 +35,7 @@ export function HelperOnboarding(props: {
         </Link>
       </Step>
       <Step number="02" title="Start helper">
-        <p className="text-sm leading-6 text-slate-600">Open QuizTaker Helper from the Start menu. Chrome remains local and interactive.</p>
+        <p className="text-sm leading-6 text-slate-600">Open {productName} Helper from the Start menu. Chrome remains local and interactive.</p>
         <div className="mt-5 rounded-md bg-slate-100 p-3 font-mono text-xs text-slate-700">Start QuizTaker Helper.cmd</div>
       </Step>
       <Step number="03" title="Pair this device">

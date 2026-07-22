@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { AppShell } from '@/components/app-shell';
 import { PageFrame, Panel } from '@/components/page-frame';
 import { ReviewList } from '@/components/review-list';
@@ -5,6 +6,11 @@ import { requireAuthenticatedUser } from '@/lib/auth';
 import { queryRows } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
+
+export const metadata: Metadata = {
+  title: 'Learning',
+  description: 'Inspect measured automation strategies and review items.',
+};
 
 export default async function LearningPage() {
   const user = await requireAuthenticatedUser();

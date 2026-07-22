@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { ArrowRight, LoaderCircle, UserPlus } from 'lucide-react';
+import { productName } from '@/lib/brand';
 import { authClient } from '@/lib/neon-auth/client';
 
 export function SignInForm() {
@@ -16,7 +17,7 @@ export function SignInForm() {
     setIsLoading(true);
     setMessage('');
     const result = isCreating
-      ? await authClient.signUp.email({ email, password, name: 'QuizTaker Operator' })
+      ? await authClient.signUp.email({ email, password, name: `${productName} Operator` })
       : await authClient.signIn.email({ email, password });
     if (result.error) {
       setMessage(result.error.message || 'Authentication failed.');
@@ -48,7 +49,7 @@ export function SignInForm() {
         id="password"
         type="password"
         required
-        minLength={12}
+        minLength={8}
         autoComplete={isCreating ? 'new-password' : 'current-password'}
         value={password}
         onChange={(event) => setPassword(event.target.value)}

@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowRight, CircleDot, Laptop, Radio } from 'lucide-react';
 import { capabilities } from '@quiztaker/core';
@@ -8,6 +9,11 @@ import { OperationsClient } from '@/components/operations-client';
 import { PageFrame, Panel } from '@/components/page-frame';
 
 export const dynamic = 'force-dynamic';
+
+export const metadata: Metadata = {
+  title: 'Operations',
+  description: 'Authorize and monitor local learning automation.',
+};
 
 interface HelperPresence {
   id: string;

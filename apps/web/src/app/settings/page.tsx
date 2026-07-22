@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { AppShell } from '@/components/app-shell';
 import { PageFrame, Panel } from '@/components/page-frame';
 import { RevokeHelperButton } from '@/components/revoke-helper-button';
@@ -5,6 +6,11 @@ import { requireAuthenticatedUser } from '@/lib/auth';
 import { queryRows } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
+
+export const metadata: Metadata = {
+  title: 'Settings',
+  description: 'Manage the operator account and paired automation helpers.',
+};
 
 export default async function SettingsPage() {
   const user = await requireAuthenticatedUser();

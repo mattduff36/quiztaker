@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { AppShell } from '@/components/app-shell';
 import { HelperOnboarding } from '@/components/helper-onboarding';
 import { PageFrame, Panel } from '@/components/page-frame';
@@ -5,6 +6,11 @@ import { requireAuthenticatedUser } from '@/lib/auth';
 import { queryOne } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
+
+export const metadata: Metadata = {
+  title: 'Local helper',
+  description: 'Pair and inspect the local Windows automation helper.',
+};
 
 export default async function HelperPage() {
   const user = await requireAuthenticatedUser();

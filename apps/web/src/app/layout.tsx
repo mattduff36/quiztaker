@@ -1,6 +1,11 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Sans, JetBrains_Mono } from "next/font/google";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
+import {
+  productDescription,
+  productName,
+  productSlogan,
+} from "@/lib/brand";
 import "./globals.css";
 
 const plex = IBM_Plex_Sans({
@@ -16,11 +21,32 @@ const jetbrains = JetBrains_Mono({
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://vitriol.co.uk"),
+  applicationName: productName,
   title: {
-    default: "QuizTaker Control",
-    template: "%s · QuizTaker Control",
+    default: productName,
+    template: `%s · ${productName}`,
   },
-  description: "Secure control plane for the local QuizTaker Windows helper.",
+  description: productDescription,
+  keywords: ["learning automation", "local browser automation", "control plane"],
+  manifest: "/manifest.webmanifest",
+  openGraph: {
+    type: "website",
+    locale: "en_GB",
+    url: "/",
+    siteName: productName,
+    title: productName,
+    description: productSlogan,
+  },
+  twitter: {
+    card: "summary",
+    title: productName,
+    description: productSlogan,
+  },
+  robots: {
+    index: false,
+    follow: false,
+  },
+  category: "technology",
 };
 
 export default function RootLayout({

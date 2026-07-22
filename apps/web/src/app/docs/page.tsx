@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import ReactMarkdown from 'react-markdown';
 import { AppShell } from '@/components/app-shell';
@@ -7,6 +8,11 @@ import { PageFrame, Panel } from '@/components/page-frame';
 import { requireAuthenticatedUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
+
+export const metadata: Metadata = {
+  title: 'Runbooks',
+  description: 'Browse operational procedures and learning automation guidance.',
+};
 
 const documents = {
   agents: { label: 'Agent guide', file: 'AGENTS.md' },

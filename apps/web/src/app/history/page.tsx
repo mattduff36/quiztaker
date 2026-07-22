@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { AppShell } from '@/components/app-shell';
 import { HistoryList } from '@/components/history-list';
 import { PageFrame } from '@/components/page-frame';
@@ -5,6 +6,11 @@ import { requireAuthenticatedUser } from '@/lib/auth';
 import { queryRows } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
+
+export const metadata: Metadata = {
+  title: 'History',
+  description: 'Review verified learning and automation outcomes.',
+};
 
 export default async function HistoryPage() {
   const user = await requireAuthenticatedUser();

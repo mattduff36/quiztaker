@@ -1,10 +1,17 @@
+import type { Metadata } from 'next';
 import { AlertTriangle, Archive, CheckCircle2, Download, ShieldAlert } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { PageFrame, Panel } from '@/components/page-frame';
 import { requireAuthenticatedUser } from '@/lib/auth';
+import { productName } from '@/lib/brand';
 import { getLatestHelperRelease } from '@/lib/releases';
 
 export const dynamic = 'force-dynamic';
+
+export const metadata: Metadata = {
+  title: 'Download',
+  description: `Download the local Windows helper for ${productName}.`,
+};
 
 export default async function DownloadPage() {
   const user = await requireAuthenticatedUser();
@@ -16,7 +23,7 @@ export default async function DownloadPage() {
           <Panel className="overflow-hidden">
             <div className="bg-slate-950 p-7 text-white">
               <Archive className="size-9 text-cyan-300" />
-              <h2 className="mt-5 text-3xl font-semibold tracking-tight">QuizTaker Helper</h2>
+              <h2 className="mt-5 text-3xl font-semibold tracking-tight">{productName} Helper</h2>
               <p className="mt-2 font-mono text-xs uppercase tracking-[0.18em] text-slate-400">
                 {release ? `Version ${release.version}` : 'No published release yet'}
               </p>
