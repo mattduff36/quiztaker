@@ -1,0 +1,57 @@
+[
+  {
+    "name": "expired HP login",
+    "probe": { "urlKind": "session-dead" },
+    "expected": { "detected": "session-dead", "capabilityId": null }
+  },
+  {
+    "name": "SCORM 1.2 player",
+    "probe": { "urlKind": "scorm-player", "scorm": "1.2" },
+    "expected": { "detected": "scorm-player", "capabilityId": "scorm-complete" }
+  },
+  {
+    "name": "SCORM 2004 wrapper",
+    "probe": { "urlKind": "content-player", "scorm": "2004" },
+    "expected": { "detected": "scorm-player", "capabilityId": "scorm-complete" }
+  },
+  {
+    "name": "SlickQuiz",
+    "probe": { "urlKind": "content-player", "hasSlickQuiz": true },
+    "expected": { "detected": "slickquiz-exam", "capabilityId": "slickquiz-solve" }
+  },
+  {
+    "name": "server assessment",
+    "probe": { "urlKind": "content-player", "hasAssessmentShell": true },
+    "expected": { "detected": "server-assessment", "capabilityId": "learn-capture" }
+  },
+  {
+    "name": "multi-activity container",
+    "probe": { "urlKind": "content-player", "hasActivityRows": true },
+    "expected": { "detected": "container", "capabilityId": "container-batch" }
+  },
+  {
+    "name": "document WBT",
+    "probe": { "urlKind": "content-player", "hasDocumentContent": true },
+    "expected": { "detected": "document-wbt", "capabilityId": "learn-capture" }
+  },
+  {
+    "name": "unknown content player",
+    "probe": { "urlKind": "content-player" },
+    "expected": { "detected": "unknown", "capabilityId": "learn-capture" }
+  },
+  {
+    "name": "certification landing",
+    "probe": { "urlKind": "cert-landing" },
+    "expected": { "detected": "cert-landing", "capabilityId": "cert-batch" }
+  },
+  {
+    "name": "class detail",
+    "probe": { "urlKind": "class-detail" },
+    "expected": { "detected": "class-detail", "capabilityId": "class-batch" }
+  },
+  {
+    "name": "external learning tool",
+    "probe": { "urlKind": "external-tool" },
+    "expected": { "detected": "external-tool", "capabilityId": "learn-capture" }
+  }
+]

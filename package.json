@@ -1,0 +1,19 @@
+{
+  "name": "tests",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js --port 4000",
+    "test": "node --test *.test.js",
+    "migrate:learning": "node migrate-learning-data.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.19.0",
+    "playwright": "^1.58.2"
+  }
+}

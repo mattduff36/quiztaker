@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Saba Agent Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f9dff'/%3E%3Ctext x='16' y='22' font-family='sans-serif' font-size='15' font-weight='700' text-anchor='middle' fill='%23041020'%3ESA%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <nav class="rail">
+      <div class="brand">
+        <span class="brand-mark">SA</span>
+        <span class="brand-text">Saba Agent</span>
+      </div>
+      <button class="nav-item active" data-view="dashboard">Dashboard</button>
+      <button class="nav-item" data-view="history">History</button>
+      <button class="nav-item" data-view="learning">Learning</button>
+      <button class="nav-item" data-view="docs">Docs</button>
+      <div class="rail-foot">
+        <span id="cdp-dot" class="dot dot-unknown" title="CDP status"></span>
+        <span id="cdp-label">CDP: checking…</span>
+      </div>
+    </nav>
+
+    <main class="content">
+      <header class="topbar">
+        <div id="cert-name" class="cert-name">No certification tab open</div>
+        <div id="task-progress" class="task-progress" hidden>
+          <span id="tp-icon" class="tp-icon tp-spin"></span>
+          <div class="tp-body">
+            <span id="tp-label" class="tp-label">Task running…</span>
+            <div id="tp-bar" class="tp-bar indeterminate"><span id="tp-fill"></span></div>
+          </div>
+          <span id="tp-count" class="tp-count"></span>
+        </div>
+        <div class="topbar-actions">
+          <button id="refresh-btn" class="btn btn-ghost">Refresh</button>
+          <button id="end-session-btn" class="btn btn-danger">End session</button>
+        </div>
+      </header>
+
+      <!-- Dashboard view -->
+      <section id="view-dashboard" class="view active">
+        <div class="grid">
+          <div class="panel">
+            <h2>Capabilities</h2>
+            <button id="autodetect-tile" class="autodetect">
+              <div class="autodetect-title">Auto-detect and complete</div>
+              <div class="autodetect-desc">Detect courses or activities on the current page, then choose what to complete.</div>
+              <div id="autodetect-status" class="autodetect-status"></div>
+            </button>
+            <div id="cards" class="cards"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <h2>Open tabs <span id="tabs-count" class="muted"></span></h2>
+              <button id="end-browser-btn" class="btn btn-danger btn-sm" title="Close the automation browser">End browser</button>
+            </div>
+            <div id="tabs-list" class="tabs-list">
+              <p class="muted">Loading…</p>
+            </div>
+
+            <form id="launch-url-form" class="launch-url">
+              <input id="launch-url-input" type="url" inputmode="url" placeholder="Launch a URL in the browser…" />
+              <button type="submit" class="btn btn-ghost btn-sm">Go</button>
+            </form>
+
+            <details id="recent-urls-wrap" class="recent-urls">
+              <summary>Recent URLs <span id="recent-urls-count" class="muted"></span></summary>
+              <div id="recent-urls-list"><p class="muted">None yet.</p></div>
+            </details>
+          </div>
+
+          <div class="panel panel-wide">
+            <h2>Current certification</h2>
+            <div id="cert-roster">
+              <p class="muted">No <code>ledetail</code> tab detected. Open a certification page in the browser and hit Refresh.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- History view -->
+      <section id="view-history" class="view">
+        <div class="panel">
+          <h2>Completion history</h2>
+          <div id="history-table"><p class="muted">Loading…</p></div>
+        </div>
+      </section>
+
+      <section id="view-learning" class="view">
+        <div class="panel">
+          <h2>Autonomous learning</h2>
+          <div id="learning-summary"><p class="muted">Loading…</p></div>
+          <div id="learning-strategies"></div>
+          <div id="learning-reviews"></div>
+        </div>
+      </section>
+
+      <!-- Docs view -->
+      <section id="view-docs" class="view">
+        <div class="docs-layout">
+          <aside class="docs-nav">
+            <button class="doc-item active" data-doc="AGENTS.md">AGENTS.md</button>
+            <button class="doc-item" data-doc="docs/QUIZ-TYPES.md">QUIZ-TYPES.md</button>
+            <button class="doc-item" data-doc="docs/RUNBOOK.md">RUNBOOK.md</button>
+          </aside>
+          <article id="doc-body" class="doc-body markdown"><p class="muted">Loading…</p></article>
+        </div>
+      </section>
+
+      <!-- Sticky live output -->
+      <div id="output-panel" class="output collapsed">
+        <div id="output-resizer" class="output-resizer" title="Drag to resize"></div>
+        <div class="output-head">
+          <span id="output-title">Output</span>
+          <span id="output-status" class="muted"></span>
+          <span class="spacer"></span>
+          <button id="output-cancel" class="btn btn-danger btn-sm" disabled>Cancel</button>
+          <button id="output-toggle" class="btn btn-ghost btn-sm">Hide</button>
+        </div>
+        <div id="output-banner" class="output-banner" hidden></div>
+        <pre id="output-body" class="output-body"></pre>
+      </div>
+    </main>
+  </div>
+
+  <div id="run-diagnosis" class="modal run-diagnosis" role="dialog" aria-modal="true" aria-labelledby="run-diagnosis-title" hidden>
+    <div class="modal-card diagnosis-card">
+      <div class="diagnosis-head">
+        <div id="run-diagnosis-icon" class="diagnosis-icon" aria-hidden="true">!</div>
+        <div>
+          <p class="diagnosis-kicker">Batch analysis</p>
+          <h2 id="run-diagnosis-title">Some items could not be completed</h2>
+          <p id="run-diagnosis-progress" class="modal-sub"></p>
+        </div>
+        <button id="run-diagnosis-close" class="btn btn-ghost btn-sm diagnosis-close" title="Close">&times;</button>
+      </div>
+      <div class="diagnosis-cause">
+        <div class="diagnosis-cause-label">Most likely cause</div>
+        <div class="diagnosis-cause-row">
+          <strong id="run-diagnosis-cause"></strong>
+          <span id="run-diagnosis-confidence" class="badge badge-warn"></span>
+        </div>
+        <p id="run-diagnosis-explanation"></p>
+      </div>
+      <div id="run-diagnosis-evidence-wrap" class="diagnosis-section">
+        <h3>Evidence found</h3>
+        <ul id="run-diagnosis-evidence"></ul>
+      </div>
+      <div class="diagnosis-section">
+        <h3>Affected items</h3>
+        <div id="run-diagnosis-targets" class="diagnosis-targets"></div>
+      </div>
+      <div class="diagnosis-section diagnosis-next">
+        <h3>Recommended next step</h3>
+        <ol id="run-diagnosis-recommendations"></ol>
+      </div>
+      <div class="modal-actions">
+        <button id="run-diagnosis-learning" class="btn btn-ghost">Open Learning review</button>
+        <button id="run-diagnosis-done" class="btn">Got it</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="plan-confirm" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="plan-confirm-title">Confirm automation plan</h2>
+        <button id="plan-confirm-close" class="btn btn-ghost btn-sm" title="Close">&times;</button>
+      </div>
+      <p id="plan-confirm-detail" class="modal-sub"></p>
+      <div id="plan-confirm-meta" class="plan-meta"></div>
+      <div class="plan-section">
+        <h3>Evidence</h3>
+        <ul id="plan-confirm-evidence"></ul>
+      </div>
+      <div class="plan-section">
+        <h3>Targets</h3>
+        <ul id="plan-confirm-targets"></ul>
+      </div>
+      <div class="plan-section">
+        <h3>Actions and verification</h3>
+        <p id="plan-confirm-steps"></p>
+      </div>
+      <div class="modal-actions">
+        <button id="plan-confirm-cancel" class="btn btn-ghost">Cancel</button>
+        <button id="plan-confirm-run" class="btn">Confirm and run</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Course selection modal (batch) -->
+  <div id="course-select" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="course-select-title">Select courses to complete</h2>
+        <button id="course-select-close" class="btn btn-ghost btn-sm" title="Close">&times;</button>
+      </div>
+      <p id="course-select-sub" class="modal-sub"></p>
+      <div class="modal-tools">
+        <label class="check"><input type="checkbox" id="course-select-all" checked> Select all</label>
+        <span id="course-select-count" class="muted"></span>
+      </div>
+      <div id="course-select-list" class="course-select-list"></div>
+      <div class="modal-actions">
+        <button id="course-select-cancel" class="btn btn-ghost">Cancel</button>
+        <button id="course-select-run" class="btn">Run selected</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- End-of-session overlay -->
+  <div id="session-end" class="session-end" hidden>
+    <div class="session-card">
+      <div id="session-end-icon" class="session-end-icon">&#10003;</div>
+      <h1>Session ended</h1>
+      <p id="session-end-sub" class="session-sub">Wrapping up…</p>
+      <div id="session-end-summary" class="session-summary"></div>
+      <div id="session-end-review" class="session-review" hidden></div>
+      <div id="session-end-files" class="session-files"></div>
+      <p class="session-close">You can now close this window.</p>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+node_modules/
+
+# Environment and deployment-local configuration.
+.env
+.env.*
+!.env.example
+.vercel/
+
+# Persistent Chrome profile used by the CDP browser. Contains cookies, logins,
+# and session data — must never be committed.
+.chrome-cdp-profile/
+
+# Local run artifacts, screenshots, attempt logs, learned state, and history.
+# The application creates these directories when needed.
+data/
+archive/
+
+# Downloaded research/reference artifacts are not application source.
+*.pdf
+*.zip
+quickspecs/
+DL*-QS.txt
+TASK.txt
+
+# Test and tool output.
+coverage/
+playwright-report/
+test-results/
+npm-debug.log*
