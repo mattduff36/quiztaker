@@ -8,6 +8,7 @@
 // Usage:
 //   npm start           # then open http://localhost:3000
 //   PORT=4000 npm start
+//   HOST=0.0.0.0 npm start  # explicitly allow network access
 //
 // No auth: intended for localhost use only.
 
@@ -47,6 +48,7 @@ function resolvePort() {
   return Number(process.env.PORT || 3000);
 }
 const PORT = resolvePort();
+const HOST = process.env.HOST || '127.0.0.1';
 const ROOT = __dirname;
 const app = express();
 app.use(express.json());
@@ -587,6 +589,6 @@ try {
   console.log('(live reload watch unavailable:', e.message + ')');
 }
 
-app.listen(PORT, () => {
-  console.log(`Saba agent dashboard: http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Saba agent dashboard: http://${HOST}:${PORT}`);
 });
