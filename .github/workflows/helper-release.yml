@@ -1,0 +1,64 @@
+name: Windows helper release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without the v prefix
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: npm
+      - name: Set release version
+        shell: pwsh
+        run: |
+          $version = if ("${{ inputs.version }}") { "${{ inputs.version }}" } else { "${{ github.ref_name }}".TrimStart("v") }
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - run: npm ci
+      - run: npm audit --workspace=@quiztaker/helper --audit-level=high
+      - run: npm test
+      - run: npm run typecheck
+      - name: Install WiX
+        run: dotnet tool install --global wix
+      - name: Build MSI and ZIP
+        run: npm run release:helper
+        env:
+          NODE_RUNTIME_VERSION: 22.18.0
+      - name: Generate CycloneDX SBOM
+        shell: pwsh
+        run: npm sbom --sbom-format cyclonedx | Out-File -Encoding utf8 apps/helper/release/quiztaker-helper-sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quiztaker-helper-windows-x64-v${{ env.RELEASE_VERSION }}
+          if-no-files-found: error
+          path: |
+            apps/helper/release/quiztaker-helper-windows-x64-v${{ env.RELEASE_VERSION }}.zip
+            apps/helper/release/release.json
+            apps/helper/release/quiztaker-helper-sbom.cdx.json
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release create "v$env:RELEASE_VERSION" `
+            "apps/helper/release/quiztaker-helper-windows-x64-v$env:RELEASE_VERSION.zip" `
+            "apps/helper/release/release.json" `
+            "apps/helper/release/quiztaker-helper-sbom.cdx.json" `
+            --title "QuizTaker Helper v$env:RELEASE_VERSION" `
+            --generate-notes `
+            --notes "Unsigned private Windows helper. SmartScreen warnings may appear."

@@ -12,12 +12,13 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 const { finishExecutor, startExecutor } = require('./lib/executor-ledger');
+const { dataPath } = require('./lib/paths');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function main() {
   const args = process.argv.slice(2);
   const isDryRun = args.includes('--dry');
-  const b = await chromium.connectOverCDP('http://127.0.0.1:9222');
+  const b = await chromium.connectOverCDP(process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222');
   const ctx = b.contexts()[0];
   const tabArg = args.find((arg) => /^\d+$/.test(arg));
   const tabIdx = tabArg == null ? null : Number(tabArg);
@@ -162,7 +163,7 @@ async function main() {
   }, { kind: apiKind.kind });
 
   console.log(JSON.stringify(result, null, 2));
-  const historyDir = path.join('data', 'course-history');
+  const historyDir = dataPath('course-history');
   fs.mkdirSync(historyDir, { recursive: true });
   fs.appendFileSync(path.join(historyDir, 'log.jsonl'), `${JSON.stringify({
     ts: new Date().toISOString(),

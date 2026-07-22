@@ -19,6 +19,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
+const { dataPath } = require('./lib/paths');
 
 function parseArgs(argv) {
   const args = { tabIndex: null, status: 'passed', score: 100, close: true, label: '' };
@@ -34,7 +35,7 @@ function parseArgs(argv) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const b = await chromium.connectOverCDP('http://127.0.0.1:9222');
+  const b = await chromium.connectOverCDP(process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222');
   const ctx = b.contexts()[0];
   const pages = ctx.pages();
 
@@ -135,7 +136,7 @@ async function main() {
   }
 
   // Log to history
-  const histDir = path.join('data', 'course-history');
+  const histDir = dataPath('course-history');
   fs.mkdirSync(histDir, { recursive: true });
   const rec = {
     ts: new Date().toISOString(),

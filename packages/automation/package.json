@@ -1,0 +1,13 @@
+{
+  "name": "@quiztaker/automation",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local-only Playwright executors packaged with the Windows helper",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node ../../dry-run-contract.test.js"
+  },
+  "dependencies": {
+    "playwright-core": "^1.58.2"
+  }
+}

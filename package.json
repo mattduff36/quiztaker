@@ -1,13 +1,24 @@
 {
-  "name": "tests",
+  "name": "quiztaker",
   "version": "1.0.0",
-  "description": "",
+  "description": "Hosted control plane and local Windows helper for Saba learning automation.",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js --port 4000",
-    "test": "node --test *.test.js",
-    "migrate:learning": "node migrate-learning-data.js"
+    "dev:web": "npm run dev --workspace=@quiztaker/web",
+    "dev:helper": "npm run dev --workspace=@quiztaker/helper",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run build --workspace=@quiztaker/core && npm run typecheck --workspaces --if-present",
+    "test": "node --test *.test.js && npm run test --workspaces --if-present",
+    "test:supabase": "npx supabase test db",
+    "migrate:learning": "node migrate-learning-data.js",
+    "release:helper": "npm run package:win --workspace=@quiztaker/helper"
   },
   "keywords": [],
   "author": "",

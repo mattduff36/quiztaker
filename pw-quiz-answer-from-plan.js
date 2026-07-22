@@ -11,6 +11,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { connectOverCdp } = require('./pw-cdp.js');
 const { currentAttemptId, attemptDir } = require('./quiz-log.js');
+const { dataPath } = require('./lib/paths');
 
 function arg(name) {
   const i = process.argv.indexOf(name);
@@ -27,14 +28,14 @@ function normalize(s) {
 }
 
 function readCurrent() {
-  const res = spawnSync('node', ['pw-quiz-read.js'], { encoding: 'utf8' });
+  const res = spawnSync(process.execPath, [path.join(__dirname, 'pw-quiz-read.js')], { encoding: 'utf8' });
   if (res.status !== 0) throw new Error(res.stderr || 'pw-quiz-read failed');
   const jsonStart = res.stdout.indexOf('{');
   return JSON.parse(res.stdout.slice(jsonStart));
 }
 
 async function main() {
-  const planPath = arg('--plan') || path.join('data', 'prep', 'attempt3-plan.json');
+  const planPath = arg('--plan') || dataPath('prep', 'attempt3-plan.json');
   const plan = JSON.parse(fs.readFileSync(planPath, 'utf8'));
 
   const q = readCurrent();

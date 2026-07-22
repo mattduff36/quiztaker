@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
 const { finishExecutor, startExecutor } = require('./lib/executor-ledger');
+const { dataPath } = require('./lib/paths');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 
@@ -96,7 +97,7 @@ async function main() {
     }
 
     // Log dir
-    const runDir = path.join(process.cwd(), 'data', 'runs', 'slickquiz-' + new Date().toISOString().replace(/[:.]/g, '-'));
+    const runDir = dataPath('runs', 'slickquiz-' + new Date().toISOString().replace(/[:.]/g, '-'));
     fs.mkdirSync(runDir, { recursive: true });
     fs.writeFileSync(path.join(runDir, 'answerkey.json'), JSON.stringify(preview.key, null, 2), 'utf8');
     const log = (obj) => fs.appendFileSync(path.join(runDir, 'events.jsonl'), JSON.stringify(obj) + '\n');

@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
+const { dataPath } = require('./lib/paths');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 
@@ -46,9 +47,12 @@ async function main() {
     console.error('Usage: node pw-tab-inspect.js <tabIdx> [outNameNoExt]');
     process.exit(2);
   }
-  const outName = process.argv[3] || `tab${tabIdx}`;
+  const outName = (process.argv[3] || `tab${tabIdx}`)
+    .replace(/[^a-z0-9._-]/gi, '-')
+    .replace(/^\.+/, '')
+    .slice(0, 100) || `tab${tabIdx}`;
 
-  const outDir = path.join(process.cwd(), 'data', 'prep');
+  const outDir = dataPath('prep');
   fs.mkdirSync(outDir, { recursive: true });
   const shot = path.join(outDir, `${outName}.png`);
   const txt = path.join(outDir, `${outName}.txt`);

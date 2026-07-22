@@ -27,6 +27,7 @@ const {
   waitForPlayerClose,
 } = require('./pw-container-batch');
 const { finishExecutor, startExecutor } = require('./lib/executor-ledger');
+const { dataPath } = require('./lib/paths');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -38,7 +39,7 @@ const only = argv
   .filter((arg) => /^--only=/.test(arg))
   .map((arg) => arg.slice(arg.indexOf('=') + 1));
 
-const HISTORY_DIR = path.join('data', 'course-history');
+const HISTORY_DIR = dataPath('course-history');
 const ACTIVITY_HISTORY = path.join(HISTORY_DIR, 'container.jsonl');
 const COURSE_HISTORY = path.join(HISTORY_DIR, 'batch.jsonl');
 fs.mkdirSync(HISTORY_DIR, { recursive: true });

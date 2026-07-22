@@ -18,8 +18,9 @@ const {
   recordStep,
 } = require('./lib/attempt-ledger');
 const { observeOutcome } = require('./lib/learning-engine');
+const { APP_ROOT, dataPath } = require('./lib/paths');
 
-const ROOT = path.resolve(__dirname, 'data', 'runs');
+const ROOT = dataPath('runs');
 const HISTORY_PATH = path.join(ROOT, 'history.json');
 const INDEX_PATH = path.join(ROOT, 'index.json');
 const CURRENT_PATH = path.join(ROOT, 'current-attempt.txt');
@@ -131,7 +132,7 @@ function finishAttempt(attemptId, { score, pass, note } = {}) {
       verified: typeof meta.score === 'number',
       status: typeof meta.score === 'number' ? `score ${meta.score}` : 'score unknown',
       failureSignature: passed ? null : 'assessment-below-pass-score',
-      artifacts: [path.relative(path.join(__dirname), dir).replace(/\\/g, '/')],
+      artifacts: [path.relative(APP_ROOT, dir).replace(/\\/g, '/')],
     });
     observeOutcome({
       attemptId: meta.ledgerAttemptId,

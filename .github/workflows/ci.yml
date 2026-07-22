@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: test-publishable-key
+      SUPABASE_SERVICE_ROLE_KEY: test-service-role-key
+      ALLOWED_EMAIL: operator@example.com
+      HELPER_MASTER_KEY: test-only-master-key-with-32-characters
+      GITHUB_REPOSITORY: mattduff36/quiztaker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: npm
+      - run: npm ci
+      # Stable Next.js 16.2 currently carries upstream high advisories with no
+      # non-preview fix. Keep reporting all findings; block critical releases.
+      - run: npm audit --audit-level=critical
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build

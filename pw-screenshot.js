@@ -8,9 +8,10 @@
 const fs = require('fs');
 const path = require('path');
 const { connectOverCdp } = require('./pw-cdp.js');
+const { DATA_ROOT } = require('./lib/paths');
 
 async function main() {
-  const dir = path.join(__dirname, 'data');
+  const dir = DATA_ROOT;
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const png = path.join(dir, process.env.SCREENSHOT_PATH || `quiz-screenshot-${stamp}.png`);

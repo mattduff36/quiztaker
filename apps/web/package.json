@@ -1,0 +1,40 @@
+{
+  "name": "@quiztaker/web",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "predev": "node scripts/sync-docs.mjs",
+    "dev": "next dev",
+    "prebuild": "node scripts/sync-docs.mjs",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@quiztaker/core": "1.0.0",
+    "@radix-ui/react-dialog": "^1.1.14",
+    "@supabase/ssr": "^0.7.0",
+    "@supabase/supabase-js": "^2.49.4",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.468.0",
+    "next": "16.2.11",
+    "nuqs": "^2.4.3",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "react-markdown": "^10.1.0",
+    "tailwind-merge": "^3.3.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@tailwindcss/typography": "^0.5.16",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.11",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

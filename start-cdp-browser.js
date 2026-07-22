@@ -75,6 +75,7 @@ async function launch() {
     viewport: null, // use the real window size, not a fixed viewport
     args: [
       `--remote-debugging-port=${PORT}`,
+      '--remote-debugging-address=127.0.0.1',
       '--restore-last-session',
       '--no-first-run',
       '--no-default-browser-check',

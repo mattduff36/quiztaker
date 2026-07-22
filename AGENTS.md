@@ -42,6 +42,26 @@ The single most important architectural fact: **we attach to the user's
 browser** — we do NOT launch our own. All cookies, sessions and SSO belong to
 the user. Do not close their landing tab, do not clear cookies.
 
+## Hosted control plane and packaged helper
+
+The repository is now an npm-workspace monorepo while the legacy local
+dashboard remains operational:
+
+- `apps/web` is the authenticated Next.js/Vercel control plane.
+- `apps/helper` is the interactive Windows helper. It polls outbound over
+  HTTPS, validates signed jobs against the local capability whitelist, and
+  keeps mutable state under `%LOCALAPPDATA%\QuizTaker Helper\`.
+- `packages/core` contains shared TypeScript contracts, policy, signing,
+  outcome, and diagnosis logic.
+- `packages/automation` is the package boundary for the local Playwright
+  executors. Root `pw-*.js` compatibility entrypoints remain until hosted
+  parity is verified.
+- `supabase/migrations` is the hosted ledger, RLS, and private-artifact schema.
+
+Use `npm run dev:web` for the control plane, `npm run dev:helper` for the local
+helper, and `npm start` for the legacy dashboard. Deployment and recovery are
+documented in `docs/DEPLOYMENT.md`.
+
 ---
 
 ## Local dashboard

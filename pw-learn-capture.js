@@ -10,9 +10,9 @@ const path = require('path');
 const { chromium } = require('playwright');
 const { probePage } = require('./lib/page-probe');
 const { queueReview, suggestNextAction } = require('./lib/learning-engine');
+const { dataPath } = require('./lib/paths');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
-const ROOT = __dirname;
 
 function stamp() {
   return new Date().toISOString().replace(/[:.]/g, '-');
@@ -30,7 +30,7 @@ async function main() {
     const page = pages[tabIdx];
     if (!page) throw new Error(`No tab at index ${tabIdx}`);
 
-    const dir = path.join(ROOT, 'data', 'learn', stamp());
+    const dir = dataPath('learn', stamp());
     fs.mkdirSync(dir, { recursive: true });
 
     const title = await page.title().catch(() => '');
@@ -111,7 +111,7 @@ async function main() {
     fs.writeFileSync(path.join(dir, 'dom-preview.html'), capture.htmlPreview || '');
     fs.writeFileSync(path.join(dir, 'probe.json'), JSON.stringify({ buttons: capture.buttons, frames: capture.frames }, null, 2));
     fs.writeFileSync(path.join(dir, 'normalized-probe.json'), JSON.stringify(normalizedProbe, null, 2));
-    const indexFile = path.join(ROOT, 'data', 'learn', 'index.jsonl');
+    const indexFile = dataPath('learn', 'index.jsonl');
     fs.appendFileSync(indexFile, `${JSON.stringify({ ...meta, dir: relativeDir })}\n`);
 
     if (['unknown', 'external-tool', 'document-wbt', 'server-assessment'].includes(detected)) {

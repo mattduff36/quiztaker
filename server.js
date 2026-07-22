@@ -6,8 +6,8 @@
 // UI can invoke the whitelisted pw-* scripts and watch their stdout live.
 //
 // Usage:
-//   npm start           # then open http://localhost:3000
-//   PORT=4000 npm start
+//   npm start           # then open http://127.0.0.1:3000
+//   PORT=4000 npm start # listen on 127.0.0.1:4000
 //   HOST=0.0.0.0 npm start  # explicitly allow network access
 //
 // No auth: intended for localhost use only.
@@ -33,6 +33,7 @@ const {
 const { classifyOutcome } = require('./lib/outcome');
 const { authorizeRun } = require('./lib/plan-policy');
 const { diagnoseRun } = require('./lib/run-diagnosis');
+const { dataPath } = require('./lib/paths');
 const {
   getLearningSummary,
   observeOutcome,
@@ -96,7 +97,7 @@ function tryParseJson(s) {
 
 // ---- recent URLs (persisted across sessions) -----------------------------
 
-const RECENT_URLS_FILE = path.join(ROOT, 'data', 'recent-urls.json');
+const RECENT_URLS_FILE = dataPath('recent-urls.json');
 const RECENT_URLS_MAX = 40;
 
 function readRecentUrls() {

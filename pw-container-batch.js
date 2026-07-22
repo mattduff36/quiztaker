@@ -18,9 +18,10 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 const { finishExecutor, startExecutor } = require('./lib/executor-ledger');
+const { dataPath } = require('./lib/paths');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const HIST_DIR = path.join('data', 'course-history');
+const HIST_DIR = dataPath('course-history');
 fs.mkdirSync(HIST_DIR, { recursive: true });
 const HIST = path.join(HIST_DIR, 'container.jsonl');
 const COURSE_HIST = path.join(HIST_DIR, 'batch.jsonl');
@@ -262,7 +263,7 @@ async function main() {
   });
   const tabArg = args.find((arg) => /^\d+$/.test(arg));
   const tabIdx = tabArg == null ? 0 : Number(tabArg);
-  const b = await chromium.connectOverCDP('http://127.0.0.1:9222');
+  const b = await chromium.connectOverCDP(process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222');
   const ctx = b.contexts()[0];
   const container = ctx.pages()[tabIdx];
   if (!container) throw new Error(`No tab at index ${tabIdx}`);

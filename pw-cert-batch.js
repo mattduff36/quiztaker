@@ -30,6 +30,7 @@ const {
   readCourseList,
 } = require('./lib/cert-status');
 const { finishExecutor, startExecutor } = require('./lib/executor-ledger');
+const { dataPath } = require('./lib/paths');
 
 // Cert URL is captured from the current landing tab at connect time so the same
 // script works for any certification the user is on.
@@ -42,7 +43,7 @@ const only = argv.filter(a => /^--only=/.test(a)).map(argVal);
 const skip = argv.filter(a => /^--skip=/.test(a)).map(argVal);
 const dry = argv.includes('--dry');
 
-const HIST_DIR = path.join('data', 'course-history');
+const HIST_DIR = dataPath('course-history');
 fs.mkdirSync(HIST_DIR, { recursive: true });
 const HIST = path.join(HIST_DIR, 'batch.jsonl');
 function log(o) { fs.appendFileSync(HIST, JSON.stringify({ ts: new Date().toISOString(), ...o }) + '\n'); }
@@ -50,7 +51,7 @@ function log(o) { fs.appendFileSync(HIST, JSON.stringify({ ts: new Date().toISOS
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function connect() {
-  const b = await chromium.connectOverCDP('http://127.0.0.1:9222');
+  const b = await chromium.connectOverCDP(process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222');
   return { b, ctx: b.contexts()[0] };
 }
 
