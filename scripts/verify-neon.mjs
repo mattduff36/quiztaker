@@ -38,6 +38,11 @@ try {
     'strategies',
     'review_items',
     'artifacts',
+    'browser_sessions',
+    'recent_urls',
+    'operator_sessions',
+    'learning_captures',
+    'sync_cursors',
   ];
   const tables = await sql`
     select tablename from pg_tables

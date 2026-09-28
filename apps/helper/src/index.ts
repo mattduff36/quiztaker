@@ -1,11 +1,12 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { existsSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
 import { classifyOutcome } from '@quiztaker/core';
 import { ControlPlaneClient } from './client.js';
 import {
   ensureHelperDirectories,
   getAutomationRoot,
+  getHelperHome,
   migrateLegacyConfig,
   readConfig,
 } from './config.js';
@@ -15,7 +16,9 @@ import {
   pairInteractively,
   resolveHelperLaunch,
 } from './pairing.js';
-import { readLocalHistory } from './sync.js';
+import { isAllowedArtifact } from './artifacts.js';
+import { rememberOutbox, takeOutboxBatch } from './outbox.js';
+import { readLocalCaptures, readLocalHistory, readLocalReviews } from './sync.js';
 import { migrateLegacyLocalData } from './migrate.js';
 import { HELPER_VERSION } from './version.js';
 import { minimizeHelperWindow, shouldAutoMinimize } from './windows.js';
@@ -24,6 +27,7 @@ let isStopping = false;
 let hasAnnouncedOnline = false;
 let runningJob: { jobId: string; run: RunningJob } | null = null;
 let nextSyncAt = 0;
+let nextStrategyPullAt = 0;
 let nextReleaseCheckAt = 0;
 let hasReportedConnectionRemediation = false;
 
@@ -63,9 +67,22 @@ async function main(): Promise<void> {
         hasAnnouncedOnline = true;
         await announceOnline(config.controlPlaneUrl);
       }
+      await flushOutbox(client);
       if (Date.now() >= nextSyncAt) {
-        await client.syncHistory(readLocalHistory());
+        await client.syncHistory({
+          history: readLocalHistory(),
+          reviews: readLocalReviews(),
+          captures: readLocalCaptures(),
+        });
         nextSyncAt = Date.now() + 5 * 60_000;
+      }
+      if (Date.now() >= nextStrategyPullAt) {
+        try {
+          await writeStrategySnapshot(await client.getStrategies());
+        } catch (error) {
+          console.error('Strategy snapshot was not updated:', error instanceof Error ? error.message : error);
+        }
+        nextStrategyPullAt = Date.now() + 60_000;
       }
       if (Date.now() >= nextReleaseCheckAt) {
         const release = await client.getLatestRelease();
@@ -85,7 +102,10 @@ async function main(): Promise<void> {
             envelope,
             config.helperId,
             client.deviceSecret,
-            (event) => client.sendEvent(jobId, event),
+            (event) => client.sendEvent(jobId, event).catch((error: unknown) => {
+              rememberOutbox(jobId, event);
+              throw error;
+            }),
           );
           runningJob = { jobId, run };
           void monitorCancellation(client, jobId, run);
@@ -94,7 +114,7 @@ async function main(): Promise<void> {
               const outcome = classifyOutcome({ script: envelope.payload.script, code, output });
               for (const artifact of outcome.artifacts ?? []) {
                 const file = isAbsolute(artifact) ? artifact : resolve(getAutomationRoot(), artifact);
-                if (existsSync(file)) await client.uploadArtifact(jobId, file);
+                if (existsSync(file) && isAllowedArtifact(file)) await client.uploadArtifact(jobId, file);
               }
             })
             .catch((error: unknown) => console.error('Job failed:', error))
@@ -166,6 +186,36 @@ async function monitorCancellation(
 function stop(): void {
   isStopping = true;
   runningJob?.run.cancel();
+}
+
+async function flushOutbox(client: ControlPlaneClient): Promise<void> {
+  const batch = takeOutboxBatch();
+  if (!batch.events.length) {
+    batch.commit([]);
+    return;
+  }
+  const failed = [];
+  for (const item of batch.events) {
+    try {
+      await client.sendEvent(item.jobId, item.event);
+    } catch {
+      failed.push(item);
+    }
+  }
+  batch.commit(failed);
+}
+
+async function writeStrategySnapshot(snapshot: {
+  schemaVersion: number;
+  revision: number;
+  strategies: Record<string, unknown>;
+}): Promise<void> {
+  ensureHelperDirectories();
+  mkdirSync(join(getHelperHome(), 'data', 'knowledge'), { recursive: true });
+  writeFileSync(
+    join(getHelperHome(), 'data', 'knowledge', 'strategies.json'),
+    JSON.stringify({ schemaVersion: snapshot.schemaVersion, revision: snapshot.revision, strategies: snapshot.strategies }, null, 2),
+  );
 }
 
 function isNewerVersion(candidate: string, current: string): boolean {

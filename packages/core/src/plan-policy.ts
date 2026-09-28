@@ -17,7 +17,7 @@ export function authorizeRun(input: {
   if (!capability) return denied(400, 'Unknown capability');
 
   const isMutating = isMutatingRun(input.script, input.args);
-  if (!isMutating) return { ok: true, status: 200 };
+  if (!isMutating && !capability.requiresConfirmation) return { ok: true, status: 200 };
   if (!input.plan) return denied(403, 'A confirmed plan is required');
   if (!input.plan.confirmed) return denied(403, 'The plan has not been confirmed');
   if (input.plan.consumed) return denied(409, 'The plan has already been consumed');

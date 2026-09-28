@@ -5,12 +5,15 @@ import {
   classifyOutcome,
   deriveHelperSecret,
   diagnoseRun,
+  getCapability,
   signJob,
   type JobEnvelope,
   type JobEventInput,
 } from '@quiztaker/core';
-import { queryOne, queryRows } from '@/lib/db';
+import { queryOne, queryRows, withTransaction, type SqlQuery } from '@/lib/db';
 import { getServerEnv } from '@/lib/env';
+import { applyStructuredResult } from '@/lib/parity-state';
+import { nextStrategyState } from '@/lib/strategy-state';
 import { mapPlan } from '@/lib/plans';
 
 interface JobRow extends Record<string, unknown> {
@@ -26,6 +29,7 @@ interface JobRow extends Record<string, unknown> {
   fingerprint: string | null;
   nonce: string;
   status: string;
+  input?: Record<string, unknown>;
 }
 
 export async function createJob(userId: string, planId: string): Promise<{ jobId: string }> {
@@ -35,7 +39,8 @@ export async function createJob(userId: string, planId: string): Promise<{ jobId
   );
   if (!rawPlan) throw new Error('Plan not found');
   let plan = mapPlan(rawPlan);
-  if (!plan.mutatesCourse && !plan.confirmed) {
+  const capability = getCapability(plan.capabilityId);
+  if (capability && !capability.requiresConfirmation && !plan.confirmed) {
     rawPlan = await queryOne<Record<string, unknown>>(
       `update plans
        set confirmed = true, confirmed_at = now()
@@ -79,6 +84,7 @@ export async function claimNextJob(helperId: string, userId: string): Promise<Jo
     script: String(claimed.script),
     args: claimed.args,
     fingerprint: claimed.fingerprint,
+    ...(claimed.input?.capabilityId ? { input: claimed.input } : {}),
     nonce: String(claimed.nonce),
     issuedAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + 5 * 60_000).toISOString(),
@@ -109,26 +115,28 @@ export async function recordJobEvent(
     eventData.bytes = Buffer.byteLength(text);
     eventData.truncated = text.length > 2_048;
   }
-  if (!isOutputEvent || input.sequence <= 202) {
-    const inserted = await queryOne<{ id: number }>(
-      `insert into job_events (user_id, job_id, sequence, event, data, occurred_at)
-       values ($1, $2, $3, $4, $5::jsonb, $6)
-       on conflict (job_id, sequence) do nothing
-       returning id`,
-      [userId, jobId, input.sequence, input.event, JSON.stringify(eventData), input.occurredAt],
-    );
-    if (!inserted) return;
-  }
-  if (input.event === 'started') {
-    await queryRows(
-      `update jobs
-       set status = 'running', started_at = $2
-       where id = $1 and status = 'dispatched'`,
-      [jobId, input.occurredAt],
-    );
+  const isTerminal = ['completed', 'failed', 'cancelled'].includes(input.event);
+  if (!isTerminal) {
+    if (!isOutputEvent || input.sequence <= 202) {
+      const inserted = await queryOne<{ id: number }>(
+        `insert into job_events (user_id, job_id, sequence, event, data, occurred_at)
+         values ($1, $2, $3, $4, $5::jsonb, $6)
+         on conflict (job_id, sequence) do nothing
+         returning id`,
+        [userId, jobId, input.sequence, input.event, JSON.stringify(eventData), input.occurredAt],
+      );
+      if (!inserted) return;
+    }
+    if (input.event === 'started') {
+      await queryRows(
+        `update jobs
+         set status = 'running', started_at = $2
+         where id = $1 and status = 'dispatched'`,
+        [jobId, input.occurredAt],
+      );
+    }
     return;
   }
-  if (!['completed', 'failed', 'cancelled'].includes(input.event)) return;
 
   if (!output) {
     const chunks = await queryRows<{ data: { text?: string } }>(
@@ -139,32 +147,6 @@ export async function recordJobEvent(
     );
     output = chunks.map((row) => String(row.data?.text ?? '')).join('');
   }
-  const pathname = `${userId}/${jobId}/output.txt`;
-  const blob = await put(pathname, output, {
-    access: 'private',
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    contentType: 'text/plain; charset=utf-8',
-  });
-  const hash = createHash('sha256').update(output).digest('hex');
-  await queryRows(
-    `insert into artifacts (
-       user_id, helper_id, job_id, storage_url, pathname, media_type, size_bytes, sha256
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8)
-     on conflict (storage_url) do update set
-       size_bytes = excluded.size_bytes,
-       sha256 = excluded.sha256`,
-    [
-      userId,
-      helperId,
-      jobId,
-      blob.url,
-      blob.pathname,
-      'text/plain; charset=utf-8',
-      Buffer.byteLength(output),
-      hash,
-    ],
-  );
   const code = input.event === 'cancelled' ? null : Number(input.data.code ?? 1);
   const outcome = input.event === 'cancelled'
     ? { outcome: 'cancelled' as const, verified: false, status: 'cancelled' }
@@ -173,35 +155,54 @@ export async function recordJobEvent(
   const status = input.event === 'completed' && outcome.outcome === 'success' && outcome.verified
     ? 'completed'
     : input.event === 'cancelled' ? 'cancelled' : 'failed';
-  await queryRows(
+  const plan = await queryOne<{ label: string; targets: Array<{ id?: string; title: string }> }>(
+    'select label, targets from plans where id = $1',
+    [job.plan_id],
+  );
+  const probeOnly = ['list-tabs', 'cdp-check', 'cert-status', 'detect', 'cert-dry-run', 'tab-inspect', 'fit-tab', 'start-browser', 'close-browser', 'open-url', 'learn-capture'].includes(job.capability_id);
+  await withTransaction(async (sql) => {
+  const locked = await sql<{ status: string }>(
+    'select status from jobs where id = $1 and helper_id = $2 and user_id = $3 for update',
+    [jobId, helperId, userId],
+  );
+  if (!locked[0] || ['completed', 'failed', 'cancelled', 'helper-offline'].includes(locked[0].status)) return;
+  const artifact = await storeJobOutput(userId, jobId, output);
+  await sql(
+    `insert into job_events (user_id, job_id, sequence, event, data, occurred_at)
+     values ($1, $2, $3, $4, $5::jsonb, $6)
+     on conflict (job_id, sequence) do nothing`,
+    [userId, jobId, input.sequence, input.event, JSON.stringify(eventData), input.occurredAt],
+  );
+  await sql(
     `update jobs
      set status = $2, exit_code = $3, outcome = $4::jsonb, diagnosis = $5::jsonb,
          output_url = $6, finished_at = $7
-     where id = $1`,
+     where id = $1 and status not in ('completed', 'failed', 'cancelled', 'helper-offline')`,
     [
       jobId,
       status,
       code,
       JSON.stringify(outcome),
       diagnosis == null ? null : JSON.stringify(diagnosis),
-      blob.url,
+      artifact?.url ?? null,
       input.occurredAt,
     ],
   );
-  await queryRows(
+  await sql(
     `update helpers set status = 'online', active_job_id = null where id = $1`,
     [helperId],
   );
-  await queryRows(
+  await sql(
     `insert into attempt_events (user_id, attempt_id, event, data, occurred_at)
-     values ($1, $2, 'attempt-finished', $3::jsonb, $4)`,
-    [userId, job.attempt_id, JSON.stringify({ ...outcome, diagnosis, jobId }), input.occurredAt],
+     select $1, $2, 'attempt-finished', $3::jsonb, $4
+     where not exists (
+       select 1 from attempt_events
+       where user_id = $1 and attempt_id = $2 and event = 'attempt-finished'
+         and data->>'jobId' = $5
+     )`,
+    [userId, job.attempt_id, JSON.stringify({ ...outcome, diagnosis, jobId }), input.occurredAt, jobId],
   );
-  const plan = await queryOne<{ label: string; targets: Array<{ id?: string; title: string }> }>(
-    'select label, targets from plans where id = $1',
-    [job.plan_id],
-  );
-  await queryRows(
+  await sql(
     `insert into history_events (
        user_id, helper_id, source_id, kind, title, result, detail, occurred_at, payload
      ) values ($1, $2, $3, 'automation', $4, $5, $6, $7, $8::jsonb)
@@ -220,20 +221,80 @@ export async function recordJobEvent(
       JSON.stringify({ jobId, outcome, diagnosis }),
     ],
   );
-  await updateStrategyEvidence({
-    userId,
-    attemptId: job.attempt_id,
-    capabilityId: job.capability_id,
-    capabilityVersion: job.capability_version,
-    fingerprint: job.fingerprint,
-    targets: plan?.targets ?? [],
-    verified: outcome.verified,
-    failureSignature: outcome.failureSignature,
-    diagnosis,
+  if (artifact) {
+    await sql(
+      `insert into artifacts (
+         user_id, helper_id, job_id, storage_url, pathname, media_type, size_bytes, sha256
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8)
+       on conflict (storage_url) do update set
+         size_bytes = excluded.size_bytes,
+         sha256 = excluded.sha256`,
+      [userId, helperId, jobId, artifact.url, artifact.pathname, 'text/plain; charset=utf-8', artifact.size, artifact.hash],
+    );
+  }
+  if (input.data.result && typeof input.data.result === 'object') {
+    await sql(
+      'update jobs set result = $2::jsonb where id = $1',
+      [jobId, JSON.stringify(input.data.result)],
+    );
+    await applyStructuredResult({
+      userId,
+      helperId,
+      jobId,
+      capabilityId: job.capability_id,
+      result: input.data.result as Record<string, unknown>,
+    }, sql);
+  }
+  if (job.capability_id === 'close-browser') {
+    await sql(
+      `update operator_sessions
+       set status = $2, ended_at = $3
+       where close_job_id = $1 and status = 'ending'`,
+      [jobId, status === 'completed' ? 'ended' : 'close_failed', input.occurredAt],
+    );
+  }
+  if (!probeOnly) {
+    await queueStrategyEvidence(sql, {
+      userId,
+      attemptId: job.attempt_id,
+      capabilityId: job.capability_id,
+      capabilityVersion: job.capability_version,
+      fingerprint: job.fingerprint,
+      targets: plan?.targets ?? [],
+      verified: outcome.verified,
+      failureSignature: outcome.failureSignature,
+      diagnosis,
+    });
+  }
   });
 }
 
-async function updateStrategyEvidence(input: {
+async function storeJobOutput(
+  userId: string,
+  jobId: string,
+  output: string,
+): Promise<{ url: string; pathname: string; hash: string; size: number } | null> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) return null;
+  try {
+    const pathname = `${userId}/${jobId}/output.txt`;
+    const blob = await put(pathname, output, {
+      access: 'private',
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      contentType: 'text/plain; charset=utf-8',
+    });
+    return {
+      url: blob.url,
+      pathname: blob.pathname,
+      hash: createHash('sha256').update(output).digest('hex'),
+      size: Buffer.byteLength(output),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function queueStrategyEvidence(sql: SqlQuery, input: {
   userId: string;
   attemptId: string;
   capabilityId: string;
@@ -244,26 +305,42 @@ async function updateStrategyEvidence(input: {
   failureSignature?: string;
   diagnosis: unknown;
 }): Promise<void> {
-  const existing = await queryOne<Record<string, unknown>>(
+  await sql(
+    'select pg_advisory_xact_lock(hashtext($1))',
+    [`${input.userId}:${input.capabilityId}:${input.capabilityVersion}:${input.fingerprint ?? ''}`],
+  );
+  const existingRows = await sql<Record<string, unknown>>(
     `select * from strategies
      where user_id = $1 and capability_id = $2 and capability_version = $3
-       and fingerprint is not distinct from $4`,
+       and fingerprint is not distinct from $4
+     for update`,
     [input.userId, input.capabilityId, input.capabilityVersion, input.fingerprint],
   );
-  const targetValues = [...new Set([
-    ...((existing?.targets as string[] | null) ?? []),
-    ...input.targets.map((target) => target.id || target.title),
-  ])];
-  const successes = Number(existing?.successes || 0) + (input.verified ? 1 : 0);
-  const failures = Number(existing?.failures || 0) + (input.verified ? 0 : 1);
-  const status = input.verified && successes >= 3 && targetValues.length >= 2
-    ? 'promoted'
-    : input.verified ? 'candidate' : 'needs-review';
-  const strategy = await queryOne<{ id: string }>(
+  const existing = existingRows[0];
+  const priorEvidence = (existing?.evidence as { successAttemptIds?: string[]; failureAttemptIds?: string[]; lastSuccessAt?: string; lastFailureAt?: string } | null) ?? {};
+  const next = nextStrategyState(existing ? {
+    successes: Number(existing.successes || 0),
+    failures: Number(existing.failures || 0),
+    status: String(existing.status || 'candidate'),
+    targets: (existing.targets as string[] | null) ?? [],
+    evidence: {
+      successAttemptIds: priorEvidence.successAttemptIds ?? [],
+      failureAttemptIds: priorEvidence.failureAttemptIds ?? [],
+      lastSuccessAt: priorEvidence.lastSuccessAt,
+      lastFailureAt: priorEvidence.lastFailureAt,
+    },
+  } : null, {
+    attemptId: input.attemptId,
+    verified: input.verified,
+    targets: input.targets.map((target) => target.id || target.title),
+    at: new Date().toISOString(),
+  });
+  const { successes, failures, status, targets: targetValues, evidence } = next;
+  await sql(
     `insert into strategies (
        user_id, capability_id, capability_version, fingerprint, status,
-       successes, failures, targets, actions, last_failure_signature, updated_at
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, now())
+       successes, failures, targets, actions, last_failure_signature, evidence, updated_at
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11::jsonb, now())
      on conflict (user_id, capability_id, capability_version, fingerprint)
      do update set
        status = excluded.status,
@@ -271,8 +348,13 @@ async function updateStrategyEvidence(input: {
        failures = excluded.failures,
        targets = excluded.targets,
        last_failure_signature = excluded.last_failure_signature,
+       evidence = excluded.evidence,
+       revision = strategies.revision + 1,
        updated_at = now()
-     returning id`,
+     where not (
+       jsonb_exists(coalesce(strategies.evidence->'successAttemptIds', '[]'::jsonb), $12)
+       or jsonb_exists(coalesce(strategies.evidence->'failureAttemptIds', '[]'::jsonb), $12)
+     )`,
     [
       input.userId,
       input.capabilityId,
@@ -284,22 +366,36 @@ async function updateStrategyEvidence(input: {
       JSON.stringify(targetValues),
       JSON.stringify((existing?.actions as unknown[]) ?? []),
       input.verified ? null : input.failureSignature || 'unverified',
+      JSON.stringify(evidence),
+      input.attemptId,
     ],
   );
-  if (!input.verified) {
+  if (next.demoted) {
     const recommendation = (input.diagnosis as { likelyCause?: { recommendation?: string } } | null)
       ?.likelyCause?.recommendation || 'Review the captured evidence and run detection again.';
-    await queryRows(
+    await sql(
       `insert into review_items (
          user_id, attempt_id, strategy_id, type, title, detail, next_action
-       ) values ($1, $2, $3, 'run-regression', $4, $5, $6)`,
+       )
+       select $1, $2, strategies.id, 'run-regression', $3, $4, $5
+       from strategies
+       where strategies.user_id = $1
+         and strategies.capability_id = $6
+         and strategies.capability_version = $7
+         and strategies.fingerprint is not distinct from $8
+         and not exists (
+           select 1 from review_items
+           where user_id = $1 and attempt_id = $2 and type = 'run-regression'
+         )`,
       [
         input.userId,
         input.attemptId,
-        strategy?.id ?? null,
         `${input.capabilityId} needs review`,
         input.failureSignature || 'The helper did not provide verified completion evidence.',
         recommendation,
+        input.capabilityId,
+        input.capabilityVersion,
+        input.fingerprint,
       ],
     );
   }

@@ -18,6 +18,9 @@ const schema = z.object({
   confidence: z.number().min(0).max(1).optional(),
   fingerprint: z.string().max(200).nullable().optional(),
   tabIdx: z.number().int().min(0).nullable().optional(),
+  source: z.enum(['auto-detect', 'manual-capability', 'direct-readonly']).optional(),
+  capabilityInput: z.record(z.string(), z.unknown()).optional(),
+  constraints: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 export async function POST(request: Request) {

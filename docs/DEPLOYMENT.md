@@ -101,6 +101,40 @@ The v1 package is unsigned and may trigger SmartScreen or Defender warnings.
 The packaging script includes dormant Authenticode hooks for a future publisher
 certificate.
 
+## Hosted parity rollout
+
+Apply `database/migrations/0003_hosted_parity.sql` with `npm run db:migrate` before
+enabling new Operations actions. The migration is additive. Do not drop the new
+tables to roll back.
+
+- Protocol 1 helpers keep the original cards: start browser, list tabs,
+  certification status, certification batch, dry-run, SCORM, container, and
+  learning capture.
+- Protocol 2 helpers advertise supported capability versions and unlock
+  detection, class batch, SlickQuiz, tab fit/inspect, CDP check, open URL, and
+  browser close.
+- Set `PARITY_NEW_ACTIONS=0` to stop creating plans for those new actions while
+  leaving existing rows readable. Legacy cards stay available.
+- Browser targets expire when the helper rotates the CDP session or the tab
+  fingerprint changes. The control plane rejects a stale target instead of
+  guessing a tab index. Refresh tabs and detect again.
+- Open URL accepts any HTTP or HTTPS address only after confirmation. Vitriol
+  does not fetch the address. Stored recent URLs drop userinfo, fragments, and
+  query keys that look like tokens, secrets, passwords, codes, sessions, or
+  credentials. Use Forget to hide a recent URL.
+- End Session moves `open → ending → ended`. If the browser close cannot be
+  queued, the row stays `close_failed` and can be retried with a new
+  idempotency key. A running course-state job blocks browser close unless the
+  caller explicitly sets `forceClose`.
+- Postgres is the authority for strategy evidence. Helpers upload observations
+  and replace their local `strategies.json` from `GET /api/helper/strategies`.
+  They do not merge counters back into Postgres.
+- Import existing local history with `npm run import:legacy -- --dry`, then run
+  it again with `IMPORT_USER_ID` set to the signed-in profile id. Repeating the
+  import does not duplicate rows.
+- `server.js` and `public/` stay in service until a protected preview and
+  production both pass the parity checklist and cutover is explicitly approved.
+
 ## Privacy boundary
 
 - Chrome, CDP, SSO cookies, and the persistent Chrome profile stay local.

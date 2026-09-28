@@ -1,5 +1,7 @@
 export const riskLevels = ['none', 'low', 'medium', 'high'] as const;
 
+export const capabilityEffects = ['observe', 'browser-state', 'course-state'] as const;
+
 export interface Capability {
   id: string;
   version: number;
@@ -8,6 +10,8 @@ export interface Capability {
   description: string;
   risk: (typeof riskLevels)[number];
   mutatesCourse: boolean;
+  effect: (typeof capabilityEffects)[number];
+  requiresConfirmation: boolean;
   args?: string[];
   dryRunArgs?: string[];
   card?: boolean;
@@ -62,6 +66,7 @@ export interface SignedJobPayload {
   nonce: string;
   issuedAt: string;
   expiresAt: string;
+  input?: Record<string, unknown>;
 }
 
 export interface JobEnvelope {

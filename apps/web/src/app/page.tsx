@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { ArrowRight, CircleDot, Laptop, Radio } from 'lucide-react';
-import { capabilities } from '@quiztaker/core';
+import { ArrowRight, CircleDot, Laptop } from 'lucide-react';
 import { requireAuthenticatedUser } from '@/lib/auth';
 import { queryOne } from '@/lib/db';
 import { AppShell } from '@/components/app-shell';
@@ -22,12 +21,6 @@ interface HelperPresence {
   is_online: boolean;
 }
 
-interface ActiveJob {
-  id: string;
-  status: string;
-  outcome: { status?: string; verified?: boolean } | null;
-}
-
 export default async function Home() {
   const user = await requireAuthenticatedUser();
   const helper = await queryOne<HelperPresence>(
@@ -37,15 +30,6 @@ export default async function Home() {
      limit 1`,
     [user.id],
   );
-  const activeJob = helper ? await queryOne<ActiveJob>(
-    `select id, status, outcome
-     from jobs
-     where user_id = $1 and helper_id = $2
-       and status in ('queued', 'dispatched', 'running')
-     order by created_at desc
-     limit 1`,
-    [user.id, helper.id],
-  ) : null;
   const isOnline = helper?.is_online === true;
 
   return (
@@ -78,20 +62,7 @@ export default async function Home() {
           </Panel>
         ) : (
           <>
-            <div className="mb-6 grid gap-4 sm:grid-cols-3">
-              <Metric icon={<Radio className="size-4" />} label="Connection" value={isOnline ? 'Live' : 'Awaiting heartbeat'} />
-              <Metric icon={<Laptop className="size-4" />} label="Device" value={helper.device_name} />
-              <Metric icon={<CircleDot className="size-4" />} label="Helper version" value={helper.version} />
-            </div>
-            <OperationsClient
-              helperId={String(helper.id)}
-              capabilities={[...capabilities]}
-              initialJob={activeJob ? {
-                id: String(activeJob.id),
-                status: String(activeJob.status),
-                outcome: activeJob.outcome ?? undefined,
-              } : null}
-            />
+            <OperationsClient helperId={String(helper.id)} />
           </>
         )}
       </PageFrame>
@@ -99,11 +70,3 @@ export default async function Home() {
   );
 }
 
-function Metric(props: { icon: React.ReactNode; label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-slate-300 bg-white p-4">
-      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">{props.icon}{props.label}</div>
-      <p className="mt-3 truncate font-semibold text-slate-950">{props.value}</p>
-    </div>
-  );
-}

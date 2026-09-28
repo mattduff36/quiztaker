@@ -117,7 +117,7 @@ function stageAutomation() {
   const automationRoot = join(stageRoot, 'automation');
   mkdirSync(automationRoot, { recursive: true });
   for (const name of readdirSync(repositoryRoot)) {
-    if (/^pw-.*\.js$/i.test(name) || ['start-cdp-browser.js', 'quiz-log.js'].includes(name)) {
+    if ((/^pw-.*\.js$/i.test(name) && !/^pw-quiz-/i.test(name)) || name === 'start-cdp-browser.js') {
       cpSync(join(repositoryRoot, name), join(automationRoot, name));
     }
   }

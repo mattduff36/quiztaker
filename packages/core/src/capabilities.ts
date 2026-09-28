@@ -1,5 +1,20 @@
 import type { Capability } from './types.js';
 
+const capabilityPolicy: Record<string, {
+  effect: Capability['effect'];
+  requiresConfirmation: boolean;
+}> = {
+  'start-browser': { effect: 'browser-state', requiresConfirmation: true },
+  'fit-tab': { effect: 'browser-state', requiresConfirmation: true },
+  'close-browser': { effect: 'browser-state', requiresConfirmation: true },
+  'open-url': { effect: 'browser-state', requiresConfirmation: true },
+  'cert-batch': { effect: 'course-state', requiresConfirmation: true },
+  'class-batch': { effect: 'course-state', requiresConfirmation: true },
+  'scorm-complete': { effect: 'course-state', requiresConfirmation: true },
+  'container-batch': { effect: 'course-state', requiresConfirmation: true },
+  'slickquiz-solve': { effect: 'course-state', requiresConfirmation: true },
+};
+
 export const capabilities: readonly Capability[] = [
   capability('start-browser', 1, 'start-cdp-browser.js', 'Start CDP browser', 'Launch Chrome with loopback remote debugging.', 'low', false, 'cdp-connected', { card: true, refreshAfter: 'tabs' }),
   capability('list-tabs', 1, 'pw-list-tabs.js', 'List tabs', 'Refresh tabs in the attached browser.', 'none', false, 'process-exit', { card: true, refreshAfter: 'tabs' }),
@@ -51,7 +66,22 @@ function capability(
   verifier: string,
   options: CapabilityOptions = {},
 ): Capability {
-  return { id, version, script, label, description, risk, mutatesCourse, verifier, ...options };
+  const policy = capabilityPolicy[id] ?? { effect: 'observe' as const, requiresConfirmation: false };
+  return { id, version, script, label, description, risk, mutatesCourse, verifier, ...policy, ...options };
+}
+
+export function capabilityManifest(): Array<{
+  id: string;
+  version: number;
+  effect: Capability['effect'];
+  requiresConfirmation: boolean;
+}> {
+  return capabilities.map((item) => ({
+    id: item.id,
+    version: item.version,
+    effect: item.effect,
+    requiresConfirmation: item.requiresConfirmation,
+  }));
 }
 
 export function getCapability(id: string): Capability | null {

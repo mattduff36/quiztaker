@@ -1,4 +1,4 @@
-import type { JobEnvelope, JobEventInput } from '@quiztaker/core';
+import { capabilityManifest, PROTOCOL_VERSION, type JobEnvelope, type JobEventInput } from '@quiztaker/core';
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { HelperConfig } from './config.js';
@@ -27,6 +27,8 @@ export class ControlPlaneClient {
         ...state,
         version: HELPER_VERSION,
         cdpPort: Number(process.env.PLAYWRIGHT_CDP_PORT || 9222),
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: capabilityManifest(),
       }),
     });
   }
@@ -62,12 +64,21 @@ export class ControlPlaneClient {
     return body.cancelRequested === true;
   }
 
-  async syncHistory(history: Array<Record<string, unknown>>): Promise<void> {
-    if (!history.length) return;
+  async syncHistory(payload: {
+    history: Array<Record<string, unknown>>;
+    reviews?: Array<Record<string, unknown>>;
+    captures?: Array<Record<string, unknown>>;
+  }): Promise<void> {
+    if (!payload.history.length && !payload.reviews?.length && !payload.captures?.length) return;
     await this.request('/api/helper/sync', {
       method: 'POST',
-      body: JSON.stringify({ history }),
+      body: JSON.stringify(payload),
     });
+  }
+
+  async getStrategies(): Promise<{ schemaVersion: number; revision: number; strategies: Record<string, unknown> }> {
+    const response = await this.request('/api/helper/strategies', { method: 'GET' });
+    return response.json() as Promise<{ schemaVersion: number; revision: number; strategies: Record<string, unknown> }>;
   }
 
   async uploadArtifact(jobId: string, filePath: string): Promise<void> {

@@ -58,6 +58,37 @@ export function readLocalHistory(): HistorySyncEvent[] {
   return [...new Map(values.map((value) => [value.sourceId, value])).values()];
 }
 
+export function readLocalReviews(): Array<Record<string, unknown>> {
+  const files = [
+    join(getHelperHome(), 'data', 'knowledge', 'review-queue.jsonl'),
+    join(getAutomationRoot(), 'data', 'knowledge', 'review-queue.jsonl'),
+  ];
+  return files.flatMap((file) => readJsonl(file))
+    .filter((row) => row.status !== 'resolved' && row.title)
+    .map((row) => ({
+      sourceId: String(row.id || row.ts || row.title),
+      type: String(row.type || 'review'),
+      title: String(row.title),
+      detail: String(row.detail || row.summary || ''),
+      nextAction: String(row.nextAction || row.next_action || row.recommendation || ''),
+    }));
+}
+
+export function readLocalCaptures(): Array<Record<string, unknown>> {
+  const indexFiles = [
+    join(getHelperHome(), 'data', 'learn', 'index.jsonl'),
+    join(getAutomationRoot(), 'data', 'learn', 'index.jsonl'),
+  ];
+  return indexFiles.flatMap((file) => readJsonl(file)).map((row) => ({
+    sourceId: String(row.id || row.path || row.fingerprint || row.ts),
+    fingerprint: row.fingerprint ? String(row.fingerprint) : null,
+    title: String(row.title || row.label || 'Learning capture'),
+    detail: String(row.detail || ''),
+    capturedAt: normalizeDate(row.ts || row.capturedAt),
+    probe: row,
+  }));
+}
+
 function eventFor(
   kind: string,
   title: string,

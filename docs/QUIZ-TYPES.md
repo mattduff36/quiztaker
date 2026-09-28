@@ -338,6 +338,14 @@ Certifications acquired end-to-end via the batch:
 ---
 
 <!-- AUTO-EVIDENCE:START -->
+## Hosted Vitriol targeting
+
+Hosted runs do not trust a tab index captured earlier. The helper publishes a
+browser-session id, revision, and per-tab fingerprint. A confirmed plan must
+match that snapshot. Refresh the tab list after navigation, then detect again
+before a class, SCORM, container, or SlickQuiz run. Timed server assessments
+stay manual: detection may capture them, and it must not submit an attempt.
+
 ## Automated evidence summary
 
 This section is generated from verified attempt evidence in `data/knowledge/strategies.json`.
@@ -350,5 +358,6 @@ This section is generated from verified attempt evidence in `data/knowledge/stra
 - **container-batch** `legacy-container-batch` — promoted; 6 verified success(es), 1 failure(s), 7 distinct target(s).
 - **scorm-complete** `legacy-scorm-complete` — candidate; 1 verified success(es), 0 failure(s), 1 distinct target(s).
 - **server-assessment** `legacy-server-assessment` — candidate; 2 verified success(es), 6 failure(s), 8 distinct target(s).
+- **start-browser** `unfingerprinted` — candidate; 0 verified success(es), 0 failure(s), 1 distinct target(s).
 
 <!-- AUTO-EVIDENCE:END -->

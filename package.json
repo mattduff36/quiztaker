@@ -20,6 +20,8 @@
     "test": "node --test *.test.js && npm run test --workspaces --if-present",
     "test:db": "node --env-file=.env.local scripts/verify-neon.mjs",
     "db:migrate": "node --env-file=.env.local scripts/migrate-neon.mjs",
+    "import:legacy": "node --env-file-if-exists=.env.local scripts/import-legacy-knowledge.mjs",
+    "test:parity": "node scripts/parity-headed.mjs",
     "migrate:learning": "node migrate-learning-data.js",
     "release:helper": "npm run package:win --workspace=@quiztaker/helper"
   },
@@ -36,7 +38,7 @@
   "overrides": {
     "@better-auth/passkey": "1.6.24",
     "better-auth": "1.6.24",
-    "postcss": "8.5.22",
-    "sharp": "0.35.3"
+    "next": "16.3.6",
+    "sharp": "0.35.5"
   }
 }

@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { getCapabilityForRun } from './capabilities.js';
+import { validateCapabilityInput } from './protocol.js';
 import type { JobEnvelope, SignedJobPayload } from './types.js';
 
 export function signJob(payload: SignedJobPayload, secret: string): JobEnvelope {
@@ -17,6 +18,10 @@ export function verifyJob(envelope: JobEnvelope, secret: string, now = new Date(
     capability.id !== envelope.payload.capabilityId ||
     capability.version !== envelope.payload.capabilityVersion
   ) return false;
+  if (envelope.payload.input?.capabilityId) {
+    const validated = validateCapabilityInput(envelope.payload.capabilityId, envelope.payload.input);
+    if (!validated.ok || !sameArgs(validated.args, envelope.payload.args)) return false;
+  }
 
   const expected = Buffer.from(createSignature(envelope.payload, secret), 'hex');
   const received = Buffer.from(envelope.signature, 'hex');
@@ -25,6 +30,10 @@ export function verifyJob(envelope: JobEnvelope, secret: string, now = new Date(
 
 export function deriveHelperSecret(masterKey: string, helperId: string): string {
   return createHmac('sha256', masterKey).update(`helper:${helperId}`).digest('base64url');
+}
+
+function sameArgs(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function createSignature(payload: SignedJobPayload, secret: string): string {

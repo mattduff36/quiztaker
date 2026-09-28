@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { getCapability, riskLevels, type PlanProposal, type PlanTarget } from '@quiztaker/core';
+import { getCapability, riskLevels, validateCapabilityInput, type PlanProposal, type PlanTarget } from '@quiztaker/core';
+import { capabilityNegotiationError } from '@/lib/capability-negotiation';
+import { parityAllows } from '@/lib/parity';
 import { queryOne, queryRows } from '@/lib/db';
 
 export interface CreatePlanInput {
@@ -16,24 +18,35 @@ export interface CreatePlanInput {
   evidence?: string[];
   fingerprint?: string | null;
   tabIdx?: number | null;
+  capabilityInput?: Record<string, unknown>;
 }
 
 export async function createPlan(userId: string, input: CreatePlanInput): Promise<PlanProposal> {
   const capability = getCapability(input.capabilityId);
   if (!capability) throw new Error('Unknown capability');
+  if (!parityAllows(capability.id)) throw new Error('This action is disabled');
+  await assertHelperSupports(userId, input.helperId, capability.id, capability.version);
+  const target = input.capabilityInput?.target as { browserSessionId?: string; revision?: number } | undefined;
   const risk = higherRisk(capability.risk, input.risk);
   const attemptId = randomUUID();
   const source = input.source ?? 'manual-capability';
-  const args = input.args ?? capability.args ?? [];
+  let args = input.args ?? capability.args ?? [];
+  const capabilityInput = input.capabilityInput ?? { capabilityId: capability.id };
+  if (input.capabilityInput || ['cert-batch', 'class-batch', 'open-url', 'fit-tab', 'slickquiz-solve', 'tab-inspect'].includes(capability.id)) {
+    const validated = validateCapabilityInput(capability.id, capabilityInput);
+    if (!validated.ok) throw new Error(validated.error);
+    args = validated.args;
+  }
   const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
   const row = await queryOne<Record<string, unknown>>(
     `insert into plans (
        attempt_id, user_id, helper_id, source, capability_id, capability_version,
        script, args, label, risk, mutates_course, verifier, steps, constraints,
-       targets, confidence, evidence, fingerprint, tab_idx, expires_at
+       targets, confidence, evidence, fingerprint, tab_idx, expires_at, input,
+       browser_session_id, target_revision
      ) values (
        $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13::jsonb,
-       $14::jsonb, $15::jsonb, $16, $17::jsonb, $18, $19, $20
+       $14::jsonb, $15::jsonb, $16, $17::jsonb, $18, $19, $20, $21::jsonb, $22, $23
      )
      returning *`,
     [
@@ -57,6 +70,9 @@ export async function createPlan(userId: string, input: CreatePlanInput): Promis
       input.fingerprint ?? null,
       input.tabIdx ?? null,
       expiresAt,
+      JSON.stringify(capabilityInput),
+      target?.browserSessionId ?? null,
+      Number.isInteger(target?.revision) ? target?.revision : null,
     ],
   );
   if (!row) throw new Error('Could not persist plan');
@@ -102,6 +118,25 @@ export function mapPlan(row: Record<string, unknown>): PlanProposal {
     expiresAt: new Date(String(row.expires_at)).toISOString(),
     ...(row.confirmed_at ? { confirmedAt: new Date(String(row.confirmed_at)).toISOString() } : {}),
   };
+}
+
+export async function assertHelperSupports(
+  userId: string,
+  helperId: string,
+  capabilityId: string,
+  capabilityVersion: number,
+): Promise<void> {
+  const helper = await queryOne<{ protocol_version: number; supported_capabilities: Array<{ id?: string; version?: number }> }>(
+    'select protocol_version, supported_capabilities from helpers where id = $1 and user_id = $2',
+    [helperId, userId],
+  );
+  const error = capabilityNegotiationError({
+    protocolVersion: helper?.protocol_version ?? 1,
+    supported: Array.isArray(helper?.supported_capabilities) ? helper.supported_capabilities : [],
+    capabilityId,
+    capabilityVersion,
+  });
+  if (error) throw new Error(error);
 }
 
 function higherRisk(left: PlanProposal['risk'], right?: PlanProposal['risk']): PlanProposal['risk'] {

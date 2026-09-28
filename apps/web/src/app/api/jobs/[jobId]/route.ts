@@ -10,7 +10,7 @@ export async function GET(
   const user = await getAuthenticatedUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { jobId } = await context.params;
-  const [job, events] = await Promise.all([
+  const [job, events, artifacts] = await Promise.all([
     queryOne<Record<string, unknown>>(
       'select * from jobs where id = $1 and user_id = $2',
       [jobId, user.id],
@@ -22,9 +22,16 @@ export async function GET(
        order by sequence`,
       [jobId, user.id],
     ),
+    queryRows(
+      `select id, pathname, media_type, size_bytes
+       from artifacts
+       where job_id = $1 and user_id = $2
+       order by created_at`,
+      [jobId, user.id],
+    ),
   ]);
   if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
-  return NextResponse.json({ job, events });
+  return NextResponse.json({ job, events, artifacts });
 }
 
 export async function DELETE(

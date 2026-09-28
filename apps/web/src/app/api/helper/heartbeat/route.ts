@@ -8,6 +8,11 @@ const schema = z.object({
   activeJobId: z.string().uuid().optional(),
   version: z.string().min(1).max(50),
   cdpPort: z.number().int().min(1024).max(65535),
+  protocolVersion: z.number().int().min(1).max(100).optional(),
+  capabilities: z.array(z.object({
+    id: z.string().min(1).max(80),
+    version: z.number().int().positive(),
+  })).max(50).optional(),
 });
 
 export async function POST(request: Request) {
@@ -17,7 +22,8 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: 'Invalid heartbeat' }, { status: 400 });
   await queryRows(
     `update helpers
-     set status = $2, active_job_id = $3, version = $4, cdp_port = $5, last_seen_at = now()
+     set status = $2, active_job_id = $3, version = $4, cdp_port = $5,
+         protocol_version = $6, supported_capabilities = $7::jsonb, last_seen_at = now()
      where id = $1`,
     [
       helper.helperId,
@@ -25,7 +31,9 @@ export async function POST(request: Request) {
       parsed.data.activeJobId ?? null,
       parsed.data.version,
       parsed.data.cdpPort,
+      parsed.data.protocolVersion ?? 1,
+      JSON.stringify(parsed.data.capabilities ?? []),
     ],
   );
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, minimumProtocolVersion: 2 });
 }
