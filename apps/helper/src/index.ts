@@ -1,7 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
-import { classifyOutcome } from '@quiztaker/core';
+import { PROTOCOL_VERSION, classifyOutcome } from '@quiztaker/core';
 import { ControlPlaneClient } from './client.js';
 import {
   ensureHelperDirectories,
@@ -21,6 +21,7 @@ import { rememberOutbox, takeOutboxBatch } from './outbox.js';
 import { readLocalCaptures, readLocalHistory, readLocalReviews } from './sync.js';
 import { migrateLegacyLocalData } from './migrate.js';
 import { HELPER_VERSION } from './version.js';
+import { helperUpdateError, installHelperUpdate, isNewerVersion, reconcileHelperUpdate } from './updater.js';
 import { minimizeHelperWindow, shouldAutoMinimize } from './windows.js';
 
 let isStopping = false;
@@ -33,6 +34,7 @@ let hasReportedConnectionRemediation = false;
 
 async function main(): Promise<void> {
   ensureHelperDirectories();
+  await reconcileHelperUpdate(getHelperHome(), HELPER_VERSION);
   const args = process.argv.slice(2);
   const launch = resolveHelperLaunch(args);
   const legacyMigration = migrateLegacyConfig();
@@ -54,15 +56,33 @@ async function main(): Promise<void> {
   const config = shouldPair || !savedConfig ? await pairInteractively(args) : savedConfig;
 
   const client = new ControlPlaneClient(config);
-  console.log(`Vitriol Helper ${HELPER_VERSION}`);
+  console.log(`Vitriol Helper ${HELPER_VERSION} (protocol ${PROTOCOL_VERSION})`);
   console.log(`Device: ${config.deviceName} (${config.helperId})`);
   console.log(`Control plane: ${config.controlPlaneUrl}`);
 
   while (!isStopping) {
     try {
-      await client.heartbeat(runningJob
-        ? { status: 'busy', activeJobId: runningJob.jobId }
-        : { status: 'online' });
+      const heartbeat = await client.heartbeat({
+        ...(runningJob
+          ? { status: 'busy' as const, activeJobId: runningJob.jobId }
+          : { status: 'online' as const }),
+        updateError: await helperUpdateError(getHelperHome()),
+      });
+      if (heartbeat.update && !runningJob && !isStopping) {
+        const outcome = await installHelperUpdate({
+          offer: heartbeat.update,
+          helperHome: getHelperHome(),
+          controlPlaneUrl: config.controlPlaneUrl,
+        });
+        if (outcome === 'restarting') {
+          console.log(`Installing Vitriol Helper ${heartbeat.update.version}. This window will close and reopen.`);
+          await delay(1_000);
+          process.exit(0);
+        }
+        if (outcome === 'failed') {
+          console.error(await helperUpdateError(getHelperHome()) || 'The helper update failed.');
+        }
+      }
       if (!hasAnnouncedOnline) {
         hasAnnouncedOnline = true;
         await announceOnline(config.controlPlaneUrl);
@@ -89,6 +109,7 @@ async function main(): Promise<void> {
         const currentVersion = HELPER_VERSION;
         if (release && isNewerVersion(release.version, currentVersion)) {
           console.log(`Helper update available: v${release.version}`);
+          console.log('Choose Update helper on the Operations page, or download:');
           console.log(release.downloadUrl);
         }
         nextReleaseCheckAt = Date.now() + 6 * 60 * 60_000;
@@ -216,15 +237,6 @@ async function writeStrategySnapshot(snapshot: {
     join(getHelperHome(), 'data', 'knowledge', 'strategies.json'),
     JSON.stringify({ schemaVersion: snapshot.schemaVersion, revision: snapshot.revision, strategies: snapshot.strategies }, null, 2),
   );
-}
-
-function isNewerVersion(candidate: string, current: string): boolean {
-  const left = candidate.split('.').map(Number);
-  const right = current.split('.').map(Number);
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    if ((left[index] || 0) !== (right[index] || 0)) return (left[index] || 0) > (right[index] || 0);
-  }
-  return false;
 }
 
 process.on('SIGINT', stop);

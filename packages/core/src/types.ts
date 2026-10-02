@@ -95,4 +95,6 @@ export interface HelperRelease {
   downloadUrl: string;
   sha256: string;
   minimumHelperVersion: string;
+  installerUrl: string | null;
+  installerSha256: string | null;
 }

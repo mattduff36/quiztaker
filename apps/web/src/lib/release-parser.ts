@@ -12,6 +12,7 @@ interface ParsedGitHubRelease {
 }
 
 const HELPER_ZIP_PATTERN = /^vitriol-helper-windows-x64-v.*\.zip$/i;
+const HELPER_MSI_PATTERN = /^VitriolHelper-.+-win-x64\.msi$/i;
 
 export function parseGitHubRelease(
   value: unknown,
@@ -22,6 +23,7 @@ export function parseGitHubRelease(
 
   const zip = release.assets.find((asset) => HELPER_ZIP_PATTERN.test(asset.name));
   if (!zip) return null;
+  const installer = release.assets.find((asset) => HELPER_MSI_PATTERN.test(asset.name));
 
   const manifest = isRecord(manifestValue) ? manifestValue : {};
   return {
@@ -32,6 +34,8 @@ export function parseGitHubRelease(
     minimumHelperVersion: typeof manifest.minimumHelperVersion === 'string'
       ? manifest.minimumHelperVersion
       : '1.0.0',
+    installerUrl: installer?.browser_download_url ?? null,
+    installerSha256: typeof manifest.installerSha256 === 'string' ? manifest.installerSha256 : null,
   };
 }
 

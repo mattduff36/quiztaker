@@ -4,11 +4,13 @@ import { getAuthenticatedUser } from '@/lib/auth';
 import { hasValidRequestOrigin } from '@/lib/security';
 import { createCapabilityPlan, endOperatorSession, forgetRecentUrl } from '@/lib/operations';
 import { createJob } from '@/lib/jobs';
+import { describeHelperUpdate } from '@/lib/helper-update';
+import { getLatestHelperRelease } from '@/lib/releases';
 import { queryOne } from '@/lib/db';
 
 const schema = z.object({
   helperId: z.string().uuid(),
-  action: z.enum(['plan', 'forget-url', 'end-session']),
+  action: z.enum(['plan', 'forget-url', 'end-session', 'request-helper-update']),
   capabilityId: z.string().optional(),
   capabilityInput: z.record(z.string(), z.unknown()).optional(),
   source: z.enum(['auto-detect', 'manual-capability', 'direct-readonly']).optional(),
@@ -40,6 +42,9 @@ export async function POST(request: Request) {
       if (!parsed.data.url) return NextResponse.json({ error: 'URL is required' }, { status: 400 });
       await forgetRecentUrl(user.id, parsed.data.url);
       return NextResponse.json({ ok: true });
+    }
+    if (parsed.data.action === 'request-helper-update') {
+      return await requestHelperUpdate(user.id, parsed.data.helperId);
     }
     if (parsed.data.action === 'end-session') {
       const result = await endOperatorSession({
@@ -78,4 +83,53 @@ export async function POST(request: Request) {
     const status = /stale|disabled|roster|required|active/i.test(message) ? 409 : 400;
     return NextResponse.json({ error: message }, { status });
   }
+}
+
+async function requestHelperUpdate(userId: string, helperId: string) {
+  const helper = await queryOne<{
+    version: string;
+    protocol_version: number | null;
+    supports_self_update: boolean | null;
+  }>(
+    `select version, protocol_version, supports_self_update
+     from helpers
+     where id = $1 and user_id = $2 and revoked_at is null`,
+    [helperId, userId],
+  );
+  if (!helper) return NextResponse.json({ error: 'Helper not found' }, { status: 404 });
+  const release = await getLatestHelperRelease({ fresh: true }).catch(() => null);
+  const decision = describeHelperUpdate({
+    currentVersion: helper.version,
+    protocolVersion: Number(helper.protocol_version ?? 1),
+    supportsSelfUpdate: helper.supports_self_update === true,
+    release,
+  });
+  if (!release) {
+    return NextResponse.json({ error: 'No published helper release is available.' }, { status: 503 });
+  }
+  if (!decision.needed) {
+    return NextResponse.json({
+      status: 'current',
+      version: decision.latestVersion,
+      installerAvailable: decision.installerAvailable,
+    });
+  }
+  if (decision.mode === 'queue' && decision.latestVersion) {
+    await queryOne(
+      `update helpers
+       set update_requested_version = $3, update_requested_at = now(), update_error = null
+       where id = $1 and user_id = $2`,
+      [helperId, userId, decision.latestVersion],
+    );
+  }
+  const status = decision.mode === 'queue'
+    ? 'queued'
+    : decision.mode === 'download'
+      ? 'download'
+      : 'current';
+  return NextResponse.json({
+    status,
+    version: decision.latestVersion,
+    installerAvailable: decision.installerAvailable,
+  });
 }

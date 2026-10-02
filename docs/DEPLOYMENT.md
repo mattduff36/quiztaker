@@ -93,7 +93,13 @@ a version. The Windows runner verifies tests and audit status, checks the
 pinned Node.js runtime against Node's published SHA-256 list, builds a per-user
 Vitriol Helper WiX MSI, packages the MSI and instructions in
 `vitriol-helper-windows-x64-vX.Y.Z.zip`, emits checksums and a CycloneDX SBOM,
-and attaches the files to a GitHub Release. Before announcing the release,
+and attaches the ZIP, the MSI, checksums, and the SBOM to a GitHub Release.
+The Operations page shows **Update helper** when the paired helper is still on
+protocol 1 or behind that release. Helpers from v1.0.4 download the release,
+check its SHA-256, install the per-user MSI, and restart. Older helpers cannot
+apply an update themselves; the same button downloads the MSI, or the ZIP when
+a release has no separate installer. Pairing data under
+`%LOCALAPPDATA%\QuizTaker Helper\` is kept. Before announcing the release,
 confirm the authenticated Download page shows the version and checksum, then
 install, pair, heartbeat, and poll one job from a Windows 10/11 x64 session.
 

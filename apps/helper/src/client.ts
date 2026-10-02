@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { HelperConfig } from './config.js';
 import { unprotectSecret } from './config.js';
+import type { HelperUpdateOffer } from './updater.js';
 import { HELPER_VERSION } from './version.js';
 
 interface PollResponse {
@@ -20,17 +21,26 @@ export class ControlPlaneClient {
     return this.secret;
   }
 
-  async heartbeat(state: { status: 'online' | 'busy'; activeJobId?: string }): Promise<void> {
-    await this.request('/api/helper/heartbeat', {
+  async heartbeat(state: {
+    status: 'online' | 'busy';
+    activeJobId?: string;
+    updateError?: string;
+  }): Promise<{ update: HelperUpdateOffer | null }> {
+    const response = await this.request('/api/helper/heartbeat', {
       method: 'POST',
       body: JSON.stringify({
-        ...state,
+        status: state.status,
+        ...(state.activeJobId ? { activeJobId: state.activeJobId } : {}),
+        ...(state.updateError ? { updateError: state.updateError } : {}),
         version: HELPER_VERSION,
         cdpPort: Number(process.env.PLAYWRIGHT_CDP_PORT || 9222),
         protocolVersion: PROTOCOL_VERSION,
         capabilities: capabilityManifest(),
+        supportsSelfUpdate: true,
       }),
     });
+    const payload = await response.json().catch(() => null) as { update?: unknown } | null;
+    return { update: readUpdateOffer(payload?.update) };
   }
 
   async poll(): Promise<JobEnvelope | null> {
@@ -115,4 +125,23 @@ export class ControlPlaneClient {
     }
     return response;
   }
+}
+
+function readUpdateOffer(value: unknown): HelperUpdateOffer | null {
+  if (!value || typeof value !== 'object') return null;
+  const update = value as Partial<HelperUpdateOffer>;
+  if (
+    typeof update.version !== 'string'
+    || typeof update.requestedAt !== 'string'
+    || typeof update.downloadUrl !== 'string'
+    || typeof update.sha256 !== 'string'
+  ) return null;
+  return {
+    version: update.version,
+    requestedAt: update.requestedAt,
+    downloadUrl: update.downloadUrl,
+    sha256: update.sha256,
+    installerUrl: typeof update.installerUrl === 'string' ? update.installerUrl : null,
+    installerSha256: typeof update.installerSha256 === 'string' ? update.installerSha256 : null,
+  };
 }

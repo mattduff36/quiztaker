@@ -73,6 +73,8 @@ const release = {
   publishedAt: new Date().toISOString(),
   file: basename(zipPath),
   sha256: sha256(readFileSync(zipPath)),
+  installerFile: msiName,
+  installerSha256: msiHash,
   minimumHelperVersion: '1.0.0',
   signed: false,
 };
@@ -159,6 +161,7 @@ function writeInstallNotes() {
     '',
     'This private release is intentionally unsigned and may show Windows SmartScreen warnings.',
     'Install the MSI, generate a pairing code on the website, then click "Launch Vitriol Helper".',
+    'Later updates can be installed from the Operations page. Pairing is kept across upgrades.',
     'The Start-menu shortcut always selects production. A pairing link opened from a local development site selects only that local origin.',
     'Production and local-development pairings are stored separately and survive upgrades or uninstall/reinstall.',
     'After connecting, the helper confirms it is online and minimizes automatically while it polls for work.',

@@ -51,6 +51,8 @@ test('falls back to the public release page when the GitHub API is rate-limited'
     downloadUrl: zipUrl,
     sha256: 'abc123',
     minimumHelperVersion: '1.0.0',
+    installerUrl: null,
+    installerSha256: null,
   });
   assert.deepEqual(requestedUrls, [
     `https://api.github.com/repos/${repository}/releases/latest`,
@@ -92,6 +94,8 @@ test('prefers newer fallback metadata when the primary API response is stale', a
     downloadUrl: newerZipUrl,
     sha256: 'newer-sha',
     minimumHelperVersion: '1.0.0',
+    installerUrl: null,
+    installerSha256: null,
   });
 });
 
@@ -125,6 +129,8 @@ test('prefers newer primary metadata when the public page response is stale', as
     downloadUrl: getZipUrl(newerTagName),
     sha256: 'newer-sha',
     minimumHelperVersion: '1.0.0',
+    installerUrl: null,
+    installerSha256: null,
   });
 });
 

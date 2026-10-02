@@ -27,6 +27,8 @@ test('parses a Vitriol helper release and manifest', () => {
     downloadUrl: 'https://example.com/vitriol-helper.zip',
     sha256: 'abc123',
     minimumHelperVersion: '1.0.0',
+    installerUrl: null,
+    installerSha256: null,
   });
   assert.equal(getReleaseManifestUrl(validRelease), 'https://example.com/release.json');
 });
@@ -38,7 +40,26 @@ test('uses safe manifest defaults when release metadata is absent', () => {
     downloadUrl: 'https://example.com/vitriol-helper.zip',
     sha256: '',
     minimumHelperVersion: '1.0.0',
+    installerUrl: null,
+    installerSha256: null,
   });
+});
+
+test('includes the MSI when the release publishes one', () => {
+  assert.equal(parseGitHubRelease({
+    ...validRelease,
+    assets: [
+      ...validRelease.assets,
+      {
+        name: 'VitriolHelper-1.0.0-win-x64.msi',
+        browser_download_url: 'https://github.com/mattduff36/quiztaker/releases/download/v1.0.0/VitriolHelper-1.0.0-win-x64.msi',
+      },
+    ],
+  }, {
+    sha256: 'abc123',
+    installerSha256: 'def456',
+    minimumHelperVersion: '1.0.0',
+  })?.installerUrl, 'https://github.com/mattduff36/quiztaker/releases/download/v1.0.0/VitriolHelper-1.0.0-win-x64.msi');
 });
 
 test('rejects a release without the Vitriol ZIP asset', () => {

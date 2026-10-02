@@ -15,10 +15,16 @@ export interface ReleaseFetch {
 
 const GITHUB_ORIGIN = 'https://github.com';
 const FRESH_RELEASE_REQUEST: RequestInit = { cache: 'no-store' };
+const releaseCache = new Map<string, { at: number; value: HelperRelease | null }>();
 
-export async function getLatestHelperRelease(): Promise<HelperRelease | null> {
+export async function getLatestHelperRelease(options?: { fresh?: boolean }): Promise<HelperRelease | null> {
   const repository = getServerEnv().GITHUB_REPOSITORY;
-  return loadLatestHelperRelease(repository);
+  const cached = releaseCache.get(repository);
+  const maxAge = cached?.value ? 5 * 60_000 : 30_000;
+  if (!options?.fresh && cached && Date.now() - cached.at < maxAge) return cached.value;
+  const value = await loadLatestHelperRelease(repository);
+  releaseCache.set(repository, { at: Date.now(), value });
+  return value;
 }
 
 export async function loadLatestHelperRelease(
@@ -117,7 +123,7 @@ function getNewestRelease(releases: unknown[]): unknown | null {
   }, null);
 }
 
-function compareVersions(left: string, right: string): number {
+export function compareVersions(left: string, right: string): number {
   const leftParts = left.split('.').map(Number);
   const rightParts = right.split('.').map(Number);
   const length = Math.max(leftParts.length, rightParts.length);

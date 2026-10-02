@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AlertTriangle, Check, LoaderCircle, Play, X } from 'lucide-react';
+import { AlertTriangle, Check, Download, LoaderCircle, Play, X } from 'lucide-react';
 import { Panel } from '@/components/page-frame';
 
 interface TabRow {
@@ -52,6 +52,17 @@ interface ContextResponse {
   captures?: Array<{ id: string; title: string; fingerprint: string | null }>;
   activeJob?: { id: string; status: string; capability_id?: string; outcome?: { status?: string }; diagnosis?: Diagnosis | null; output_url?: string } | null;
   parityEnabled?: boolean;
+  helperUpdate?: {
+    needed: boolean;
+    protocolBlocked: boolean;
+    currentVersion: string;
+    latestVersion: string | null;
+    installerAvailable: boolean;
+    canSelfUpdate: boolean;
+    mode: 'none' | 'download' | 'queue';
+    requestedVersion: string | null;
+    error: string | null;
+  };
 }
 
 interface Diagnosis {
@@ -81,6 +92,9 @@ export function OperationsClient(props: { helperId: string }) {
   const [job, setJob] = useState<ContextResponse['activeJob']>(null);
   const [busy, setBusy] = useState(false);
   const [forceCloseOffer, setForceCloseOffer] = useState(false);
+  const [updateNote, setUpdateNote] = useState('');
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [showManualDownload, setShowManualDownload] = useState(false);
 
   const load = useCallback(async () => {
     const response = await fetch('/api/operations/context', { cache: 'no-store' });
@@ -117,7 +131,8 @@ export function OperationsClient(props: { helperId: string }) {
 
   const session = context?.session;
   const selected = session?.tabs?.find((tab) => tab.targetId === selectedTarget) ?? null;
-  const protocolReady = (context?.helper?.protocol_version ?? 1) >= 2;
+  const update = context?.helperUpdate;
+  const protocolReady = Number(context?.helper?.protocol_version ?? 1) >= 2;
   const courseItems = session?.roster?.courses ?? [];
   const activityItems = session?.roster?.activities
     ?? (session?.detection?.selection?.kind === 'class-activities' ? session.detection.selection.items ?? [] : []);
@@ -198,6 +213,54 @@ export function OperationsClient(props: { helperId: string }) {
     setPendingPlan(null);
   }
 
+  function openHelperDownload(installerAvailable: boolean) {
+    const link = document.createElement('a');
+    link.href = `/helper/download?asset=${installerAvailable ? 'installer' : 'archive'}`;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
+  async function requestHelperUpdate() {
+    const update = context?.helperUpdate;
+    if (!update?.needed) return;
+    setError('');
+    if (update.mode === 'download') {
+      openHelperDownload(update.installerAvailable);
+      const jobActive = Boolean(job && ['queued', 'dispatched', 'running'].includes(job.status));
+      setUpdateNote(downloadNote(update.latestVersion, update.installerAvailable, jobActive));
+      return;
+    }
+    setUpdateBusy(true);
+    try {
+      const response = await fetch('/api/operations/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'request-helper-update', helperId: props.helperId }),
+      });
+      const value = await response.json() as { error?: string; status?: string; version?: string; installerAvailable?: boolean };
+      if (!response.ok) {
+        setError(value.error || 'Could not start the helper update');
+        return;
+      }
+      if (value.status === 'download') {
+        setShowManualDownload(true);
+        setUpdateNote(`The helper could not install v${value.version} itself. Use the download link, close Vitriol Helper, run the installer, then start it again.`);
+        return;
+      }
+      if (value.status === 'queued') {
+        setUpdateNote(`The helper is downloading v${value.version}. It will close, install the update, and open again.`);
+        await load();
+        return;
+      }
+      setUpdateNote('This helper is already on the latest release.');
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
   async function endSession(forceClose: boolean) {
     setBusy(true);
     const response = await fetch('/api/operations/actions', {
@@ -222,7 +285,25 @@ export function OperationsClient(props: { helperId: string }) {
   return (
     <div className="space-y-6">
       {error ? <div className="flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><AlertTriangle className="size-4" />{error}</div> : null}
-      {!protocolReady ? <p className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">The paired helper needs the parity update before detection, tab targeting, class runs, SlickQuiz, and URL controls can run. Existing course cards still queue.</p> : null}
+      {context && (update?.protocolBlocked || update?.needed) ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div className="min-w-0 flex-1">
+            <p>{updateBanner(update, protocolReady)}</p>
+            {updateNote ? <p className="mt-2 font-medium">{updateNote}</p> : null}
+            {!updateNote && update?.error ? <p className="mt-2 font-medium">{update.error}</p> : null}
+            {!updateNote && !update?.error && update?.requestedVersion ? <p className="mt-2 font-medium">Update to v{update.requestedVersion} is queued. Keep the helper running until it restarts.</p> : null}
+            {showManualDownload || (update?.error && update.mode === 'queue') ? (
+              <a className="mt-2 inline-block font-semibold underline" href={`/helper/download?asset=${update?.installerAvailable ? 'installer' : 'archive'}`} target="_blank" rel="noopener">Download the installer</a>
+            ) : null}
+          </div>
+          {update?.needed ? (
+            <button type="button" className="inline-flex shrink-0 items-center gap-2 rounded-md bg-amber-800 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={updateBusy} onClick={() => void requestHelperUpdate()}>
+              {updateBusy ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+              Update helper
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <div className="grid gap-4 lg:grid-cols-[1.1fr_.9fr]">
         <Panel title="Open tabs" meta={<button className="text-xs font-semibold text-cyan-800" disabled={busy || Boolean(active)} onClick={() => run('list-tabs', { capabilityId: 'list-tabs' }, true)}>Refresh</button>}>
           <div className="max-h-80 space-y-2 overflow-auto p-4">
@@ -333,6 +414,26 @@ export function OperationsClient(props: { helperId: string }) {
       ) : null}
     </div>
   );
+}
+
+function updateBanner(update: NonNullable<ContextResponse['helperUpdate']> | undefined, protocolReady: boolean): string {
+  const installed = update?.currentVersion ? ` Installed v${update.currentVersion}.` : '';
+  if (!protocolReady) {
+    const install = update?.canSelfUpdate
+      ? ' Update helper downloads and installs the current release.'
+      : ' This installed helper cannot update itself.';
+    return `The paired helper needs the parity update before detection, tab targeting, class runs, SlickQuiz, and URL controls can run. Existing course cards still queue.${installed}${install}`;
+  }
+  return `Helper v${update?.currentVersion ?? 'unknown'} is installed. v${update?.latestVersion ?? 'latest'} is ready to install.`;
+}
+
+function downloadNote(version: string | null, installerAvailable: boolean, jobActive: boolean): string {
+  const label = version ? `v${version}` : 'the latest helper';
+  const wait = jobActive ? ' Wait until the current job finishes before closing the helper.' : '';
+  if (installerAvailable) {
+    return `${label} is downloading. Close the Vitriol Helper window, run the installer, then start Vitriol Helper again. Pairing stays on this PC. If SmartScreen appears, choose More info, then Run anyway.${wait}`;
+  }
+  return `${label} is downloading. Close the Vitriol Helper window, extract the ZIP, run the MSI, then start Vitriol Helper again. Pairing stays on this PC.${wait}`;
 }
 
 function DetectionPanel(props: {

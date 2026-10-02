@@ -2,7 +2,9 @@ import { NextResponse } from 'next/server';
 import { capabilityManifest } from '@quiztaker/core';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { queryOne, queryRows } from '@/lib/db';
+import { describeHelperUpdate } from '@/lib/helper-update';
 import { parityEnabled } from '@/lib/parity';
+import { getLatestHelperRelease } from '@/lib/releases';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,10 +12,13 @@ export async function GET() {
   const user = await getAuthenticatedUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const helper = await queryOne<Record<string, unknown>>(
-    `select id, device_name, version, is_online, status, protocol_version, supported_capabilities
-     from helper_presence
-     where user_id = $1 and revoked_at is null
-     order by last_seen_at desc nulls last
+    `select presence.id, presence.device_name, presence.version, presence.is_online, presence.status,
+            presence.protocol_version, presence.supported_capabilities,
+            helpers.supports_self_update, helpers.update_requested_version, helpers.update_error
+     from helper_presence presence
+     join helpers on helpers.id = presence.id
+     where presence.user_id = $1 and presence.revoked_at is null
+     order by presence.last_seen_at desc nulls last
      limit 1`,
     [user.id],
   );
@@ -51,8 +56,18 @@ export async function GET() {
       [user.id],
     ),
   ]);
+  const release = await getLatestHelperRelease().catch(() => null);
+  const helperUpdate = describeHelperUpdate({
+    currentVersion: String(helper.version ?? '0.0.0'),
+    protocolVersion: Number(helper.protocol_version ?? 1),
+    supportsSelfUpdate: helper.supports_self_update === true,
+    requestedVersion: typeof helper.update_requested_version === 'string' ? helper.update_requested_version : null,
+    error: typeof helper.update_error === 'string' ? helper.update_error : null,
+    release,
+  });
   return NextResponse.json({
     helper,
+    helperUpdate,
     session,
     recentUrls,
     activeJob,
