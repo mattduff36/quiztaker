@@ -95,7 +95,7 @@ Vitriol Helper WiX MSI, packages the MSI and instructions in
 `vitriol-helper-windows-x64-vX.Y.Z.zip`, emits checksums and a CycloneDX SBOM,
 and attaches the ZIP, the MSI, checksums, and the SBOM to a GitHub Release.
 The Operations page shows **Update helper** when the paired helper is still on
-protocol 1 or behind that release. Helpers from v1.0.4 download the release,
+protocol 1 or behind that release. Helpers from v1.0.5 download the release,
 check its SHA-256, install the per-user MSI, and restart. Older helpers cannot
 apply an update themselves; the same button downloads the MSI, or the ZIP when
 a release has no separate installer. Pairing data under

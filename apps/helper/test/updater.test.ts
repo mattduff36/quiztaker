@@ -11,6 +11,7 @@ import {
   helperUpdateError,
   installHelperUpdate,
   isAllowedReleaseHost,
+  quoteCommandArg,
   reconcileHelperUpdate,
   type HelperUpdateOffer,
 } from '../src/updater.js';
@@ -38,6 +39,15 @@ test('prefers a checksummed MSI and otherwise uses the ZIP', () => {
   const zip = chooseReleaseAsset(offer({ installerUrl: msiUrl, installerSha256: null }));
   assert.equal(zip?.kind, 'zip');
   assert.equal(chooseReleaseAsset(offer({ downloadUrl: 'https://example.com/helper.zip' })), null);
+});
+
+test('quotes Windows short paths and rejects command metacharacters', () => {
+  assert.equal(
+    quoteCommandArg('C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\helper-update.msi'),
+    '"C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\helper-update.msi"',
+  );
+  assert.throws(() => quoteCommandArg('C:\\temp\\helper%TEMP%.msi'));
+  assert.throws(() => quoteCommandArg('C:\\temp\\helper&whoami.msi'));
 });
 
 test('the installer script waits for this process and does not embed a download URL', () => {
@@ -81,7 +91,7 @@ test('downloads a verified MSI and launches the installer once', async () => {
     spawnImpl: (commandLine) => commands.push(commandLine),
   });
 
-  assert.equal(first, 'restarting');
+  assert.equal(first, 'restarting', readFileSync(join(home, 'updates', 'status.json'), 'utf8'));
   assert.equal(second, 'skipped');
   assert.equal(commands.length, 1);
   assert.match(commands[0], /apply-update\.cmd/);

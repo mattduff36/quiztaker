@@ -9,7 +9,7 @@ export const HELPER_RELEASE_REPOSITORY = 'mattduff36/quiztaker';
 
 const MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024;
 const RELEASE_VERSION = /^\d+\.\d+\.\d+$/;
-const SAFE_COMMAND_ARG = /^[A-Za-z0-9 .:_\-\\/@]+$/;
+const SAFE_COMMAND_ARG = /^[A-Za-z0-9 .:_\-\\/@~()[\]]+$/;
 const REDIRECT_HOSTS = new Set([
   'github.com',
   'objects.githubusercontent.com',
