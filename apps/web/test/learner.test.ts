@@ -13,16 +13,30 @@ test('learner stays stopped when no API key is configured', async () => {
   assert.match(result.error || '', /API key/);
 });
 
-test('learner rejects a submit action returned by the model', async () => {
+test('learner asks which current control to use instead of running a submit action', async () => {
+  let calls = 0;
   const result = await requestLearnerDecision({
     apiKey: 'test-key',
-    snapshot,
-    fetchImpl: async () => new Response(JSON.stringify({
-      choices: [{ message: { content: '{"action":"submit"}' } }],
-    })),
+    snapshot: {
+      ...snapshot,
+      buttons: [{ id: 'b1', name: 'Next' }, { id: 'b2', name: 'Submit exam' }],
+    },
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '{"action":"submit","note":"RAW_PROVIDER_TEXT"}' } }],
+      }));
+    },
   });
-  assert.equal(result.stop, true);
-  assert.equal(result.action, undefined);
+  assert.equal(calls, 1);
+  assert.equal(result.stop, undefined);
+  assert.equal(result.error, undefined);
+  assert.equal(result.action?.action, 'ask-user');
+  if (result.action?.action !== 'ask-user') return;
+  assert.equal(result.action.question, 'I need a safe control on this page. Which of these should I use?');
+  assert.deepEqual(result.action.options, ['Next', 'The reservoir answer']);
+  assert.equal(JSON.stringify(result).includes('RAW_PROVIDER_TEXT'), false);
+  assert.equal(JSON.stringify(result).includes('submit'), false);
 });
 
 test('gemini uses later flash models when no backup list is configured', () => {
@@ -212,4 +226,88 @@ test('learner returns an allowlisted answer selection', async () => {
     })),
   });
   assert.deepEqual(result.action, { action: 'answer-select', targetId: 'c1' });
+});
+
+test('learner asks for help when the model action is not JSON', async () => {
+  let calls = 0;
+  const result = await requestLearnerDecision({
+    apiKey: 'test-key',
+    snapshot: { title: 'Empty', buttons: [], choices: [] },
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'not json RAW_PROVIDER_TEXT' } }],
+      }));
+    },
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(result, {
+    action: { action: 'ask-user', question: 'I need a safe next step on this page. What should I do?' },
+  });
+  assert.equal(JSON.stringify(result).includes('RAW_PROVIDER_TEXT'), false);
+});
+
+test('learner asks using current controls when the model target is not on the page', async () => {
+  const result = await requestLearnerDecision({
+    apiKey: 'test-key',
+    snapshot: {
+      buttons: [
+        { id: 'b1', name: 'Course interaction: 3_100_click1' },
+        { id: 'b2', name: 'Next' },
+        { id: 'b3', name: 'Home' },
+      ],
+    },
+    fetchImpl: async () => new Response(JSON.stringify({
+      choices: [{ message: { content: '{"action":"click","targetId":"b9","raw":"RAW_PROVIDER_TEXT"}' } }],
+    })),
+  });
+  assert.deepEqual(result.action, {
+    action: 'ask-user',
+    question: 'I need a safe control on this page. Which of these should I use?',
+    options: ['Course interaction: 3_100_click1', 'Next', 'Home'],
+  });
+  assert.equal(result.stop, undefined);
+  assert.equal(JSON.stringify(result).includes('RAW_PROVIDER_TEXT'), false);
+});
+
+test('learner still clicks a current navigation control', async () => {
+  const result = await requestLearnerDecision({
+    apiKey: 'test-key',
+    snapshot,
+    fetchImpl: async () => new Response(JSON.stringify({
+      choices: [{ message: { content: '{"action":"click","targetId":"b1"}' } }],
+    })),
+  });
+  assert.deepEqual(result.action, { action: 'click', targetId: 'b1' });
+});
+
+test('learner keeps an auth failure distinct from a help request', async () => {
+  const result = await requestLearnerDecision({
+    apiKey: 'test-key',
+    snapshot,
+    fetchImpl: async () => new Response('unauthorized', { status: 401 }),
+  });
+  assert.equal(result.action, undefined);
+  assert.equal(result.stop, true);
+  assert.match(result.error || '', /failed \(401\)/);
+});
+
+test('learner sends the page address without query or hash', async () => {
+  let sent = '';
+  await requestLearnerDecision({
+    apiKey: 'test-key',
+    snapshot: {
+      ...snapshot,
+      url: 'https://hpi-external.sabacloud.com/Saba/Web_spf/NA/app/me/ledetail/cours1?token=secret#section',
+    },
+    fetchImpl: async (_url, init) => {
+      sent = String(init?.body);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '{"action":"wait","ms":500}' } }],
+      }));
+    },
+  });
+  const page = JSON.parse(JSON.parse(sent).messages[1].content) as { url?: string };
+  assert.equal(page.url, 'https://hpi-external.sabacloud.com/Saba/Web_spf/NA/app/me/ledetail/cours1');
+  assert.equal(sent.includes('token=secret'), false);
 });

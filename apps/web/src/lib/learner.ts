@@ -142,7 +142,7 @@ export async function requestLearnerDecision(input: {
       } | null;
       const content = body?.choices?.[0]?.message?.content ?? '';
       const decided = decideLearnerStep(content, snapshot);
-      if (!decided.ok) return { stop: true, error: decided.error };
+      if (!decided.ok) return { action: askUserForInvalidModelAction(snapshot) };
       return { action: decided.action };
     }
     last = response;
@@ -153,6 +153,24 @@ export async function requestLearnerDecision(input: {
   }
   const status = last?.status ?? 0;
   return { stop: true, error: providerExhausted(status) };
+}
+
+const unsafeControl = /\b(submit|finish|exit|end test|grade)\b/i;
+
+function askUserForInvalidModelAction(snapshot: LearnerSnapshot): LearnerAction {
+  const options: string[] = [];
+  const seen = new Set<string>();
+  for (const control of [...(snapshot.buttons ?? []), ...(snapshot.choices ?? [])]) {
+    const name = String(control?.name ?? '').trim().slice(0, 120);
+    if (!name || unsafeControl.test(name) || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    options.push(name);
+    if (options.length === 3) break;
+  }
+  const question = options.length
+    ? 'I need a safe control on this page. Which of these should I use?'
+    : 'I need a safe next step on this page. What should I do?';
+  return options.length ? { action: 'ask-user', question, options } : { action: 'ask-user', question };
 }
 
 function providerExhausted(status: number): string {
