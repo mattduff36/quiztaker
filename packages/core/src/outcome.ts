@@ -50,6 +50,16 @@ export function classifyOutcome(input: {
     };
   }
 
+  // The packaged helper's browser supervisor returns JSON, not a course result.
+  // Require its positive connection observation; exit code zero alone is not proof.
+  if (input.script === 'start-cdp-browser.js') {
+    let connected = false;
+    try { connected = JSON.parse(text)?.connected === true; } catch { /* No connection evidence. */ }
+    return connected
+      ? { outcome: 'success', verified: true, status: 'browser-connected', artifacts }
+      : { outcome: 'failure', verified: false, status: 'browser-not-connected', failureSignature: 'cdp-not-connected', artifacts };
+  }
+
   if (structured) {
     const isComplete = structured.total > 0 && structured.completed === structured.total;
     const result: RunOutcome = {

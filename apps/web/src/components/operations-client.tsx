@@ -51,7 +51,7 @@ interface ContextResponse {
   } | null;
   recentUrls?: Array<{ url: string; title: string; seen_count: number }>;
   captures?: Array<{ id: string; title: string; fingerprint: string | null }>;
-  activeJob?: { id: string; status: string; capability_id?: string; outcome?: { status?: string }; diagnosis?: Diagnosis | null; output_url?: string } | null;
+  activeJob?: { id: string; status: string; capability_id?: string; outcome?: { status?: string }; diagnosis?: Diagnosis | null; output_url?: string; result?: unknown } | null;
   parityEnabled?: boolean;
   learnerEnabled?: boolean;
   helperUpdate?: {
@@ -151,7 +151,8 @@ export function OperationsClient(props: { helperId: string }) {
       if (disposed) return;
       setPollError('');
       setJob(value.job);
-      setOutput(value.events.map((event) => event.data?.text ?? '').join(''));
+      setOutput(value.events.map((event) => event.data?.text ?? '').join('')
+        || (value.job.result ? JSON.stringify(value.job.result, null, 2) : ''));
       if (isActive && !['queued', 'dispatched', 'running'].includes(value.job.status)) void load();
       } catch (cause) {
         if (!disposed) setPollError(errorMessage(cause, 'Could not refresh job status. Check your network and retry.'));
@@ -413,6 +414,7 @@ export function OperationsClient(props: { helperId: string }) {
             <summary className="cursor-pointer text-sm font-medium text-slate-700">Browser connection tools</summary>
             <div className="mt-3 flex flex-wrap gap-2">
               <Action disabled={!helperReady || !protocolReady || busy || Boolean(active)} onClick={() => run('cdp-check', { capabilityId: 'cdp-check' }, true)}>Check browser connection</Action>
+              {browserReady ? <Action disabled={!helperReady || busy || Boolean(active)} onClick={() => run('start-browser', { capabilityId: 'start-browser' }, false)}>Reconnect browser</Action> : null}
             </div>
           </details>
         </Panel>
