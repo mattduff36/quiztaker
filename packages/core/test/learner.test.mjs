@@ -48,6 +48,30 @@ test('learner click is limited to navigation labels and verify ignores the model
   });
 });
 
+test('learner allows an exact course interaction and rejects other targets', () => {
+  const page = {
+    buttons: [
+      { id: 'b1', name: 'Course interaction: 1_110_click1' },
+      { id: 'b4', name: 'Course interaction: 1_110_slide' },
+      { id: 'b5', name: 'Course interaction: scan-and-store.jpg' },
+      { id: 'b6', name: 'Open topic: Scan and Store (notstarted)' },
+    ],
+    choices: snapshot.choices,
+  };
+  assert.deepEqual(parseLearnerAction({ action: 'click', targetId: 'b1' }, page), {
+    ok: true,
+    action: { action: 'click', targetId: 'b1' },
+  });
+  assert.equal(parseLearnerAction({ action: 'click', targetId: 'b4' }, page).ok, false);
+  assert.equal(parseLearnerAction({ action: 'click', targetId: 'b5' }, page).ok, false);
+  assert.equal(parseLearnerAction({ action: 'click', targetId: 'b9' }, page).ok, false);
+  assert.deepEqual(parseLearnerAction({ action: 'click', targetId: 'b6' }, page), {
+    ok: true,
+    action: { action: 'click', targetId: 'b6' },
+  });
+  assert.equal(parseLearnerAction({ action: 'click', targetId: 'b2' }, snapshot).ok, false);
+});
+
 test('learner-rejects-submit', () => {
   const named = parseLearnerAction({ action: 'submit' }, snapshot);
   const clicked = parseLearnerAction({ action: 'click', targetId: 'b2' }, snapshot);

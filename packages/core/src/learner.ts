@@ -15,6 +15,8 @@ export const learnerActions = new Set([
 const deniedLearnerActions = new Set(['exit', 'submit', 'launch', 'scorm-complete']);
 const submitLabel = /\b(submit|finish|exit|end test|grade)\b/i;
 const navigationLabel = /^(next(?: page| slide)?|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch|resume|menu|home|contents)$/i;
+const openTopicLabel = /^Open topic: .{1,140}$/;
+const courseInteractionLabel = /^Course interaction: \d+_\d+_click\d+$/;
 
 export interface LearnerControl {
   id: string;
@@ -82,8 +84,11 @@ export function parseLearnerAction(
     const target = (pool ?? []).find((item) => item.id === targetId);
     if (!target) return { ok: false, error: 'Learner target is not on the page' };
     if (submitLabel.test(target.name)) return { ok: false, error: 'Learner cannot submit the quiz' };
-    if (name === 'click' && !navigationLabel.test(target.name.trim()) && !/^Open topic: .{1,140}$/.test(target.name)) {
-      return { ok: false, error: 'Learner click is limited to navigation controls' };
+    if (name === 'click') {
+      const label = target.name.trim();
+      if (!navigationLabel.test(label) && !openTopicLabel.test(label) && !courseInteractionLabel.test(label)) {
+        return { ok: false, error: 'Learner click is limited to navigation controls' };
+      }
     }
     return { ok: true, action: { action: name, targetId } };
   }

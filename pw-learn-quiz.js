@@ -8,7 +8,9 @@
 // step asks for them. Every page is sent to the provider with saved context;
 // an ask-user action
 // prints LEARNER_QUESTION and stops with needs-user-input. That is incomplete
-// and never a successful completion. Guidance is not a shell argument.
+// and never a successful completion. The same action and target on an unchanged
+// view stops after three attempts and asks the operator to resume. Guidance is
+// not a shell argument.
 //
 // Usage:
 //   node pw-learn-quiz.js <tabIdx> [--dry]
@@ -20,6 +22,10 @@ const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 const MAX_STEPS = 80;
 const SUBMIT_LABEL = /\b(submit|finish|exit|end test|grade)\b/i;
 const NAVIGATION_LABEL = /^(next(?: page| slide)?|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch|resume|menu|home|contents)$/i;
+const OPEN_TOPIC_LABEL = /^Open topic: .{1,140}$/;
+const COURSE_INTERACTION_LABEL = /^Course interaction: \d+_\d+_click\d+$/;
+const REPEATED_VIEW_LIMIT = 3;
+const REPEATED_VIEW_OPTION = 'Done, resume now';
 const PASS_EVIDENCE = /\byou passed\b|\byour score:\s*100\s*%/i;
 const FAIL_EVIDENCE = /\b(not passed|did not pass|failed|unsuccessful|not successful)\b/i;
 const ALLOWED = new Set(['click', 'answer-select', 'scroll', 'wait', 'capture', 'verify', 'ask-user']);
@@ -74,6 +80,46 @@ function learnerQuestionLine(payload) {
   return `LEARNER_QUESTION ${JSON.stringify(payload)}`;
 }
 
+function clickLabelAllowed(name) {
+  const trimmed = String(name || '').trim();
+  return NAVIGATION_LABEL.test(trimmed) || OPEN_TOPIC_LABEL.test(trimmed) || COURSE_INTERACTION_LABEL.test(trimmed);
+}
+
+function screenElementControlName(id, className) {
+  const classes = new Set(String(className || '').split(/\s+/).filter(Boolean));
+  if (!classes.has('screenElement')) return '';
+  if (classes.has('backbtn')) return 'Previous';
+  if (classes.has('nextbtn')) return 'Next';
+  if (classes.has('box') && /^\d+_\d+_click\d+$/.test(String(id || ''))) {
+    return `Course interaction: ${id}`;
+  }
+  return '';
+}
+
+function learnerActionSignature(action) {
+  const name = typeof action?.action === 'string' ? action.action : '';
+  const targetId = typeof action?.targetId === 'string' ? action.targetId : '';
+  return `${name}\u0000${targetId}`;
+}
+
+function noteRepeatedLearnerAction(state, action, snapshot) {
+  const signature = learnerActionSignature(action);
+  const same = Boolean(state)
+    && state.signature === signature
+    && sameLearnerView(state.snapshot, snapshot);
+  const count = same ? state.count + 1 : 1;
+  if (count >= REPEATED_VIEW_LIMIT) {
+    return {
+      state: { signature: '', snapshot: null, count: 0 },
+      question: {
+        question: 'This action has not changed the page. Choose Done, resume now when you want another look.',
+        options: [REPEATED_VIEW_OPTION],
+      },
+    };
+  }
+  return { state: { signature, snapshot, count }, question: null };
+}
+
 function localActionAllowed(action, snapshot) {
   if (!action || typeof action !== 'object') return false;
   if (!ALLOWED.has(action.action)) return false;
@@ -82,7 +128,7 @@ function localActionAllowed(action, snapshot) {
     const pool = action.action === 'click' ? snapshot.buttons : snapshot.choices;
     const target = (pool || []).find((item) => item.id === action.targetId);
     if (!target || SUBMIT_LABEL.test(target.name)) return false;
-    if (action.action === 'click' && !NAVIGATION_LABEL.test(target.name.trim()) && !/^Open topic: .{1,140}$/.test(target.name)) return false;
+    if (action.action === 'click' && !clickLabelAllowed(target.name)) return false;
   }
   return true;
 }
@@ -101,12 +147,18 @@ async function accessibleName(locator) {
         if (title) return `Open topic: ${title}${status ? ` (${status})` : ''}`;
       }
       if (parent?.matches('.menuStartBtn')) return 'Start';
+      if (parent?.classList?.contains('screenElement')) {
+        return { screenElement: true, id: parent.id || '', className: String(parent.className || '') };
+      }
     }
     const id = el.getAttribute('id');
     const explicit = id ? el.ownerDocument.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
     const wrapping = el.closest('label');
     return (explicit?.textContent || wrapping?.textContent || el.innerText || el.textContent || el.getAttribute('title') || el.getAttribute('alt') || el.getAttribute('value') || '');
   }).catch(() => '');
+  if (text && typeof text === 'object' && text.screenElement) {
+    return screenElementControlName(text.id, text.className).slice(0, 160);
+  }
   return String(text).replace(/\s+/g, ' ').trim().slice(0, 160);
 }
 
@@ -138,7 +190,7 @@ async function readControls(page, role, prefix, navigationOnly) {
       if (!await handle.isVisible().catch(() => false) || !await handle.isEnabled().catch(() => false)) continue;
       const name = await accessibleName(handle);
       if (!name || SUBMIT_LABEL.test(name)) continue;
-      if (navigationOnly && !NAVIGATION_LABEL.test(name.trim()) && !/^Open topic: .{1,140}$/.test(name)) continue;
+      if (navigationOnly && !clickLabelAllowed(name)) continue;
       if (await isSubmitControl(handle)) continue;
       const id = `${prefix}${listed.length + 1}`;
       handles.set(id, handle);
@@ -279,8 +331,10 @@ async function main() {
       return;
     }
     reader = createActionReader();
+    let repeatState = null;
     for (let step = 1; step <= MAX_STEPS; step += 1) {
       const { snapshot, handles } = await readSnapshot(page);
+      console.log(`LEARNER_PROGRESS ${JSON.stringify({ message: `Reading ${snapshot.title || 'the current course page'}.` })}`);
       if (pageShowsPass(snapshot)) { finish(true); return; }
       const action = await reader.request(snapshot);
       if (!localActionAllowed(action, snapshot)) {
@@ -296,6 +350,24 @@ async function main() {
         await emitQuestion(question, snapshot, browser);
         return;
       }
+      let view = snapshot;
+      let viewHandles = handles;
+      if (action.action !== 'verify') {
+        const current = await readSnapshot(page);
+        if (!sameLearnerView(snapshot, current.snapshot)) {
+          console.log(`Learner step ${step}: page changed while deciding; inspecting again`);
+          continue;
+        }
+        view = current.snapshot;
+        viewHandles = current.handles;
+      }
+      const repeated = noteRepeatedLearnerAction(repeatState, action, view);
+      repeatState = repeated.state;
+      if (repeated.question) {
+        console.log(`Learner step ${step}: repeated unchanged ${action.action}`);
+        await emitQuestion(repeated.question, view, browser);
+        return;
+      }
       if (action.action === 'verify') {
         if (!pageShowsPass(snapshot)) {
           console.log(`Learner step ${step}: page does not show a pass`);
@@ -304,19 +376,17 @@ async function main() {
         finish(true);
         return;
       }
-      const current = await readSnapshot(page);
-      if (!sameLearnerView(snapshot, current.snapshot)) {
-        console.log(`Learner step ${step}: page changed while deciding; inspecting again`);
-        continue;
-      }
       const popup = action.action === 'click' ? page.waitForEvent('popup', { timeout: 2500 }).catch(() => null) : null;
-      await applyAction(page, action, current.snapshot, current.handles);
+      await applyAction(page, action, view, viewHandles);
       const opened = popup ? await popup : null;
       if (opened) {
         await opened.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => undefined);
         page = opened;
         console.log('Following the course window opened by the selected control');
       }
+      const target = [...(view.buttons || []), ...(view.choices || [])].find((item) => item.id === action.targetId);
+      const activity = action.action === 'click' ? `Opened ${target?.name || 'the selected control'}.` : action.action === 'answer-select' ? `Selected ${target?.name || 'an answer'}.` : action.action === 'scroll' ? 'Scrolled to look for more course content.' : 'Checking the current page.';
+      console.log(`LEARNER_PROGRESS ${JSON.stringify({ message: activity })}`);
       console.log(`Learner step ${step}: ${action.action}`);
     }
     finish(false, 'step-cap');
@@ -340,7 +410,11 @@ module.exports = {
   learnerQuestionPayload,
   learnerQuestionLine,
   LEARNER_NEEDS_INPUT,
+  accessibleName,
   readControls,
   visibleFrames,
   sameLearnerView,
+  clickLabelAllowed,
+  screenElementControlName,
+  noteRepeatedLearnerAction,
 };

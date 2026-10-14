@@ -7,6 +7,8 @@ const {
   learnerQuestionPayload,
   learnerQuestionLine,
   LEARNER_NEEDS_INPUT,
+  screenElementControlName,
+  noteRepeatedLearnerAction,
 } = require('./pw-learn-quiz');
 
 test('learn quiz argv accepts a tab index and dry run only', () => {
@@ -100,10 +102,71 @@ test('embedded course navigation includes visible link buttons and skips hidden 
 });
 
 
+test('course interaction names allow only the exact hotspot id', () => {
+  const snapshot = {
+    buttons: [
+      { id: 'b1', name: 'Course interaction: 1_110_click1' },
+      { id: 'b2', name: 'Course interaction: 1_110_slide' },
+      { id: 'b3', name: 'Course interaction: scan-and-store.jpg' },
+      { id: 'b4', name: 'Finish' },
+    ],
+    choices: [],
+  };
+  assert.equal(localActionAllowed({ action: 'click', targetId: 'b1' }, snapshot), true);
+  assert.equal(localActionAllowed({ action: 'click', targetId: 'b2' }, snapshot), false);
+  assert.equal(localActionAllowed({ action: 'click', targetId: 'b3' }, snapshot), false);
+  assert.equal(localActionAllowed({ action: 'click', targetId: 'b4' }, snapshot), false);
+  assert.equal(localActionAllowed({ action: 'click', targetId: 'b9' }, snapshot), false);
+  assert.equal(screenElementControlName('1_110_backbtn', 'screenElement box backbtn'), 'Previous');
+  assert.equal(screenElementControlName('1_110_nextbtn', 'screenElement box nextbtn'), 'Next');
+  assert.equal(screenElementControlName('1_110_click1', 'screenElement box'), 'Course interaction: 1_110_click1');
+  assert.equal(screenElementControlName('1_110_slide', 'screenElement image'), '');
+  assert.equal(screenElementControlName('1_110_clickhint1', 'screenElement box'), '');
+});
+
+test('repeated unchanged actions stop on the third and reset when the view or action changes', () => {
+  const view = { text: 'Scan and Store', buttons: [{ id: 'b1', name: 'Course interaction: 1_110_click1' }] };
+  const moved = { text: 'Next slide', buttons: [{ id: 'b1', name: 'Next' }] };
+  let state = null;
+  state = noteRepeatedLearnerAction(state, { action: 'scroll' }, view).state;
+  state = noteRepeatedLearnerAction(state, { action: 'scroll' }, view).state;
+  assert.equal(state.count, 2);
+  const stopped = noteRepeatedLearnerAction(state, { action: 'scroll' }, view);
+  assert.equal(stopped.state.count, 0);
+  assert.deepEqual(stopped.question, {
+    question: 'This action has not changed the page. Choose Done, resume now when you want another look.',
+    options: ['Done, resume now'],
+  });
+  const changedView = noteRepeatedLearnerAction(state, { action: 'scroll' }, moved);
+  assert.equal(changedView.question, null);
+  assert.equal(changedView.state.count, 1);
+  const changedAction = noteRepeatedLearnerAction(changedView.state, { action: 'click', targetId: 'b1' }, moved);
+  assert.equal(changedAction.question, null);
+  assert.equal(changedAction.state.count, 1);
+  let verify = null;
+  verify = noteRepeatedLearnerAction(verify, { action: 'verify' }, view).state;
+  verify = noteRepeatedLearnerAction(verify, { action: 'verify' }, view).state;
+  const verifyStop = noteRepeatedLearnerAction(verify, { action: 'verify' }, view);
+  assert.deepEqual(verifyStop.question.options, ['Done, resume now']);
+  const otherTarget = noteRepeatedLearnerAction(changedAction.state, { action: 'click', targetId: 'b2' }, moved);
+  assert.equal(otherTarget.question, null);
+  assert.equal(otherTarget.state.count, 1);
+});
+
 test('an action computed for a stale course screen must be reinspected', () => {
   const { sameLearnerView } = require('./pw-learn-quiz');
   const before = { text: 'Welcome', buttons: [{ id: 'b1', name: 'Start' }] };
   assert.equal(sameLearnerView(before, { ...before }), true);
   assert.equal(sameLearnerView(before, { text: 'Introduction', buttons: [{ id: 'b1', name: 'Next' }] }), false);
   assert.equal(sameLearnerView(before, { text: 'Welcome', buttons: [] }), false);
+});
+
+
+test('slide adapter preserves existing menu topic and Start names', async () => {
+  const { accessibleName } = require('./pw-learn-quiz');
+  const locator = (parent) => ({getAttribute: async () => null, evaluate: async (fn) => fn({ matches: () => true, parentElement: parent })});
+  const base = { classList: { contains: () => true }, className: 'screenElement panel', matches: () => false };
+  assert.equal(await accessibleName(locator({ ...base, id: 'menuscreen_panel_1', querySelector: (sel) => sel === '.topicStatus' ? {className:'topicStatus incomplete'} : {textContent:'iSend'} })), 'Open topic: iSend (incomplete)');
+  assert.equal(await accessibleName(locator({ ...base, id: 'menuscreen_panel_1_launchButton', matches: () => true })), 'Start');
+  assert.equal(await accessibleName(locator({ ...base, id: '1_110_click1', className: 'screenElement box' })), 'Course interaction: 1_110_click1');
 });

@@ -412,3 +412,15 @@ the provider was deciding. Brightwave tiles use empty `button.invisibutton`
 overlays: their visible topic labels are in `menuTopicButtonClosed*` children
 of `menuscreen_panel_N`. Next/Back/Home names come from visible navBtn parents.
 Do not treat the welcome wrapper saying "course is in progress" as material.
+
+A later slide is not those navBtn parents. On the captured "Take a look at
+Scan and Store" screen (`1_110`), the transparent buttons sit on visible
+`.screenElement` boxes. `.backbtn` / `.nextbtn` (`1_110_backbtn`,
+`1_110_nextbtn`) are Previous and Next. A `.box` whose id matches
+`N_N_clickN` (observed `1_110_click1`, 150×140 over Scan and Store) is an
+unlabelled hotspot named `Course interaction: <id>`. The name is the element
+id only. The full-slide image button (`1_110_slide`, `.screenElement.image`)
+is not a control. This is recognition of that overlay, not a completed course
+and not a verified passing strategy. If the same action and target leave the
+view unchanged three times, the learner asks the operator to resume instead of
+repeating until the step cap.
