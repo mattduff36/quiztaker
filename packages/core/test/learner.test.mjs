@@ -72,6 +72,50 @@ test('learner allows an exact course interaction and rejects other targets', () 
   assert.equal(parseLearnerAction({ action: 'click', targetId: 'b2' }, snapshot).ok, false);
 });
 
+test('learner normalizes one action wrapper and keeps current-target and submit guards', () => {
+  const page = {
+    buttons: [
+      { id: 'b1', name: 'Next' },
+      { id: 'b2', name: 'Submit' },
+    ],
+    choices: snapshot.choices,
+  };
+  assert.deepEqual(parseLearnerAction({ action: 'click', targetId: 'b1' }, page), {
+    ok: true,
+    action: { action: 'click', targetId: 'b1' },
+  });
+  assert.deepEqual(parseLearnerAction({
+    action: { action: 'click', targetId: 'b1' },
+    stop: false,
+    error: null,
+  }, page), {
+    ok: true,
+    action: { action: 'click', targetId: 'b1' },
+  });
+  const wrappedSubmit = parseLearnerAction({ action: { action: 'submit' }, stop: false, error: null }, page);
+  assert.equal(wrappedSubmit.ok, false);
+  if (!wrappedSubmit.ok) assert.match(wrappedSubmit.error, /not allowed/i);
+  const wrappedSubmitClick = parseLearnerAction({ action: { action: 'click', targetId: 'b2' } }, page);
+  assert.equal(wrappedSubmitClick.ok, false);
+  if (!wrappedSubmitClick.ok) assert.match(wrappedSubmitClick.error, /submit/i);
+  const wrappedUnknown = parseLearnerAction({ action: { action: 'dance' } }, page);
+  assert.equal(wrappedUnknown.ok, false);
+  if (!wrappedUnknown.ok) assert.match(wrappedUnknown.error, /not allowed/i);
+  const missingTarget = parseLearnerAction({ action: { action: 'click' }, stop: false }, page);
+  assert.equal(missingTarget.ok, false);
+  if (!missingTarget.ok) assert.match(missingTarget.error, /target/i);
+  const absentTarget = parseLearnerAction({ action: { action: 'click', targetId: 'b9' } }, page);
+  assert.equal(absentTarget.ok, false);
+  if (!absentTarget.ok) assert.match(absentTarget.error, /not on the page/i);
+  const recursive = parseLearnerAction({ action: { action: { action: 'click', targetId: 'b1' } } }, page);
+  assert.equal(recursive.ok, false);
+  if (!recursive.ok) assert.match(recursive.error, /not allowed/i);
+  assert.deepEqual(decideLearnerStep('{"action":{"action":"click","targetId":"b1"},"stop":false}', page), {
+    ok: true,
+    action: { action: 'click', targetId: 'b1' },
+  });
+});
+
 test('learner-rejects-submit', () => {
   const named = parseLearnerAction({ action: 'submit' }, snapshot);
   const clicked = parseLearnerAction({ action: 'click', targetId: 'b2' }, snapshot);

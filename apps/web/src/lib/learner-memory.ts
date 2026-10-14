@@ -513,7 +513,24 @@ function observedSummary(
 }
 
 function conversationLines(history: LearnerHistoryEntry[]): string[] {
-  return history.map((entry) => `${entry.role}: ${entry.text}`);
+  return history.map((entry) => `${entry.role}: ${entry.role === 'assistant' ? flatModelActionText(entry.text) : entry.text}`);
+}
+
+function flatModelActionText(text: string): string {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return text;
+    const record = parsed as Record<string, unknown>;
+    const wrapped = record.action;
+    if (!wrapped || typeof wrapped !== 'object' || Array.isArray(wrapped)) return text;
+    const inner = wrapped as Record<string, unknown>;
+    if (typeof inner.action !== 'string') return text;
+    const siblings = { ...record };
+    delete siblings.action;
+    return JSON.stringify({ ...siblings, ...inner });
+  } catch {
+    return text;
+  }
 }
 
 function materialLines(materials: LearnerMaterial[], question?: string): string[] {

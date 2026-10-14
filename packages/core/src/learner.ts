@@ -72,7 +72,7 @@ export function parseLearnerAction(
   snapshot: LearnerSnapshot,
 ): { ok: true; action: LearnerAction } | { ok: false; error: string } {
   if (!value || typeof value !== 'object') return { ok: false, error: 'Learner action is missing' };
-  const record = value as Record<string, unknown>;
+  const record = normalizeLearnerActionRecord(value as Record<string, unknown>);
   const name = typeof record.action === 'string' ? record.action : '';
   if (deniedLearnerActions.has(name) || !learnerActions.has(name)) {
     return { ok: false, error: 'Learner action is not allowed' };
@@ -113,6 +113,16 @@ export function decideLearnerStep(
     return { ok: false, error: 'Learner response was not JSON' };
   }
   return parseLearnerAction(parsed, snapshot);
+}
+
+function normalizeLearnerActionRecord(record: Record<string, unknown>): Record<string, unknown> {
+  const wrapped = record.action;
+  if (!wrapped || typeof wrapped !== 'object' || Array.isArray(wrapped)) return record;
+  const inner = wrapped as Record<string, unknown>;
+  if (typeof inner.action !== 'string') return record;
+  const siblings = { ...record };
+  delete siblings.action;
+  return { ...siblings, ...inner };
 }
 
 function parseAskUser(

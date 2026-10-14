@@ -420,6 +420,32 @@ test('forty conversation entries leave no room for navigation history', () => {
 });
 
 
+test('model context flattens one action wrapper and stored history stays wrapped', () => {
+  const stored = JSON.stringify({
+    action: { action: 'click', targetId: 'b1' },
+    stop: false,
+    error: null,
+  });
+  const flat = JSON.stringify({ action: 'scroll' });
+  const user = 'Read Device Features first';
+  const history: LearnerHistoryEntry[] = [
+    { role: 'user', text: user, at: '2026-01-01T00:00:00.000Z' },
+    { role: 'assistant', text: stored, at: '2026-01-01T00:00:01.000Z' },
+    { role: 'assistant', text: flat, at: '2026-01-01T00:00:02.000Z' },
+  ];
+  const shown = displayLearnerHistory(history);
+  assert.equal(shown[1]?.text, stored);
+  assert.deepEqual(JSON.parse(shown[1]!.text).action, { action: 'click', targetId: 'b1' });
+  assert.equal(shown[2]?.text, flat);
+  const composed = composeLearnerSnapshot({ text: 'current page' }, { history, materials: [] });
+  assert.match(composed.text!, /user: Read Device Features first/);
+  assert.match(composed.text!, /assistant: \{"stop":false,"error":null,"action":"click","targetId":"b1"\}/);
+  assert.equal(composed.text!.includes('"action":{"action":"click"'), false);
+  assert.match(composed.text!, /assistant: \{"action":"scroll"\}/);
+  assert.equal(history[1]?.text, stored);
+  assert.deepEqual(JSON.parse(history[1]!.text).action, { action: 'click', targetId: 'b1' });
+});
+
 test('quiz context retrieves relevant earlier material rather than only the last pages', () => {
   const material = (text: string) => ({ text, title: 'Device Features', url: 'https://example.com/course', at: '2026-01-01' });
   const snapshot = composeLearnerSnapshot({ text: 'Which searchable PDF feature uses OCR?', choices: [{ id: 'c1', name: 'OCR' }] }, {
