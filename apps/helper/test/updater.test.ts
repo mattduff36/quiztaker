@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -8,6 +9,7 @@ import {
   chooseReleaseAsset,
   classifyReleaseAsset,
   createApplyScript,
+  createHelperRestartLines,
   helperUpdateError,
   installHelperUpdate,
   isAllowedReleaseHost,
@@ -54,7 +56,10 @@ test('the installer script waits for this process and does not embed a download 
   const script = createApplyScript();
   assert.match(script, /msiexec\.exe/);
   assert.match(script, /\/qn \/norestart/);
-  assert.match(script, /--control-plane-url="%CONTROL%"/);
+  assert.match(script, /set "ARG=--control-plane-url=%CONTROL%"/);
+  assert.match(script, /if \/I "%CONTROL%"=="https:\/\/www\.vitriol\.co\.uk" set "ARG=--production"/);
+  assert.match(script, /start "" \/D "%DIR%" cmd\.exe \/d \/s \/c ""%LAUNCHER%" %ARG%"/);
+  assert.doesNotMatch(script, /start "" "%LAUNCHER%" --control-plane-url="%CONTROL%"/);
   assert.doesNotMatch(script, /github\.com/);
   assert.doesNotMatch(script, /tasklist[^\r\n]*\|/);
   assert.match(script, /findstr \/C:"%PID%" "%PROCESS_CHECK%"/);
@@ -151,6 +156,55 @@ test('records a checksum failure and does not retry that same request', async ()
   assert.equal(downloads, 2);
 });
 
+test('restarts the spaced install path with the production argument', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const launcher = 'C:\\Users\\mattd\\AppData\\Local\\Programs\\Vitriol Helper\\Start Vitriol Helper.cmd';
+  const directory = 'C:\\Users\\mattd\\AppData\\Local\\Programs\\Vitriol Helper';
+  const productionCommand = `start "" /D "${directory}" cmd.exe /d /s /c ""${launcher}" --production"`;
+  assert.equal(expandRestartCommand(launcher, 'https://www.vitriol.co.uk'), productionCommand);
+  assert.equal(
+    expandRestartCommand(launcher, 'http://127.0.0.1:4000'),
+    `start "" /D "${directory}" cmd.exe /d /s /c ""${launcher}" --control-plane-url=http://127.0.0.1:4000"`,
+  );
+  assert.doesNotMatch(productionCommand, /start "" "[^"]*Vitriol Helper\\Start Vitriol Helper\.cmd" --/);
+
+  const root = mkdtempSync(join(tmpdir(), 'vitriol-restart-'));
+  const folder = join(root, 'Programs', 'Vitriol Helper');
+  mkdirSync(folder, { recursive: true });
+  const sampleLauncher = join(folder, 'Start Vitriol Helper.cmd');
+  const output = join(root, 'launched.txt');
+  writeFileSync(sampleLauncher, [
+    '@echo off',
+    `>"${output}" echo ARGS=%*`,
+    `>>"${output}" echo CD=%CD%`,
+    'exit /b 0',
+    '',
+  ].join('\r\n'));
+  const script = join(root, 'restart.cmd');
+  writeFileSync(script, [
+    '@echo off',
+    'setlocal EnableExtensions',
+    'set "LAUNCHER=%~1"',
+    'set "CONTROL=%~2"',
+    ...createHelperRestartLines(),
+    'exit /b 0',
+    '',
+  ].join('\r\n'));
+
+  rmSync(output, { force: true });
+  runRestartScript(script, sampleLauncher, 'https://www.vitriol.co.uk');
+  const production = readLaunchResult(output);
+  assert.equal(production.args, '--production');
+  assert.equal(production.cwd, folder);
+
+  rmSync(output, { force: true });
+  runRestartScript(script, sampleLauncher, 'http://127.0.0.1:4000');
+  const local = readLaunchResult(output);
+  assert.equal(local.args, '--control-plane-url=http://127.0.0.1:4000');
+  assert.equal(local.cwd, folder);
+});
+
 test('clears update state once the installed version catches up', async () => {
   const home = mkdtempSync(join(tmpdir(), 'vitriol-helper-update-'));
   mkdirSync(join(home, 'updates'), { recursive: true });
@@ -176,6 +230,44 @@ test('reports an installer exit code when the version stays behind', async () =>
   await reconcileHelperUpdate(home, '1.0.2');
   assert.match(await helperUpdateError(home) || '', /1603/);
 });
+
+function expandRestartCommand(launcher: string, controlOrigin: string): string {
+  const directory = launcher.slice(0, launcher.lastIndexOf('\\'));
+  const argument = controlOrigin === 'https://www.vitriol.co.uk'
+    ? '--production'
+    : `--control-plane-url=${controlOrigin}`;
+  return `start "" /D "${directory}" cmd.exe /d /s /c ""${launcher}" ${argument}"`;
+}
+
+function runRestartScript(script: string, launcher: string, controlOrigin: string): void {
+  // Windows PowerShell 5.1 Start-Process splits an argument array on spaces.
+  // Node's execFile quoting matches the updater's cmd.exe /d /s /c launch.
+  execFileSync('cmd.exe', ['/d', '/c', script, launcher, controlOrigin], {
+    windowsHide: true,
+  });
+  execFileSync('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    'if (-not (Select-String -LiteralPath $env:VITRIOL_RESTART_CMD -Pattern \'cmd\\.exe /d /s /c ""%LAUNCHER%" %ARG%"\' -Quiet)) { exit 1 }',
+  ], {
+    env: { ...process.env, VITRIOL_RESTART_CMD: script },
+    windowsHide: true,
+  });
+}
+
+function readLaunchResult(output: string): { args: string; cwd: string } {
+  const deadline = Date.now() + 5_000;
+  while (!existsSync(output)) {
+    if (Date.now() > deadline) break;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
+  const lines = readFileSync(output, 'utf8').trim().split(/\r?\n/);
+  return {
+    args: lines[0]?.replace(/^ARGS=/, '') || '',
+    cwd: lines[1]?.replace(/^CD=/, '') || '',
+  };
+}
 
 function offer(overrides: Partial<HelperUpdateOffer> = {}): HelperUpdateOffer {
   return {

@@ -134,10 +134,24 @@ export function createApplyScript(): string {
     '"%SystemRoot%\\System32\\msiexec.exe" /i "%MSI%" /qn /norestart',
     'set "CODE=%ERRORLEVEL%"',
     '>"%RESULT%" echo %CODE%',
-    'if exist "%LAUNCHER%" start "" "%LAUNCHER%" --control-plane-url="%CONTROL%"',
+    ...createHelperRestartLines(),
     'exit /b 0',
     '',
   ].join('\r\n');
+}
+
+export function createHelperRestartLines(): string[] {
+  // `start` drops quotes around a spaced path when another quoted argument is
+  // present, so "Vitriol Helper" is executed as "Vitriol". `cmd /s /c` removes
+  // only the outer quote pair and leaves the launcher path quoted. The www
+  // origin uses the same --production argument as the Start-menu shortcut.
+  return [
+    'for %%I in ("%LAUNCHER%") do set "DIR=%%~dpI"',
+    'set "DIR=%DIR:~0,-1%"',
+    'set "ARG=--control-plane-url=%CONTROL%"',
+    'if /I "%CONTROL%"=="https://www.vitriol.co.uk" set "ARG=--production"',
+    'if exist "%LAUNCHER%" start "" /D "%DIR%" cmd.exe /d /s /c ""%LAUNCHER%" %ARG%"',
+  ];
 }
 
 export function quoteCommandArg(value: string): string {
