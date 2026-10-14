@@ -43,6 +43,7 @@ export function GuidedRunner(props: {
   const [answer, setAnswer] = useState('');
   const [customReply, setCustomReply] = useState(false);
   const [settingsNeeded, setSettingsNeeded] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
   const [objective, setObjective] = useState('Read the selected course material, then work through its related quiz.');
   const [memory, setMemory] = useState<CourseMemory | null>(null);
   const objectiveEdited = useRef(false);
@@ -67,7 +68,7 @@ export function GuidedRunner(props: {
   const replies = openModuleRequest ? ['Done, resume now'] : [...new Set(question?.options || [])].filter((option) => option.trim());
   const showReplyField = Boolean(question?.model && (customReply || replies.length === 0));
   const pauseTab = uniqueQuestionTab(question?.url, session?.tabs || []);
-  const pauseTargetId = pauseTab?.targetId;
+  const pauseTargetId = pauseTab?.targetId || (!props.selectedTarget ? restoredPauseTab?.targetId : undefined);
   const { selectedTarget, onSelect } = props;
   useEffect(() => {
     if (!busy && pauseTargetId && pauseTargetId !== selectedTarget) onSelect(pauseTargetId);
@@ -137,7 +138,7 @@ export function GuidedRunner(props: {
   async function start(quickReply?: string) {
     if (locked.current || !(pauseTab || selected) || !props.ready || props.active) return;
     locked.current = true; stopped.current = false;
-    setBusy(true); props.onBusy(true); setSettingsNeeded(false);
+    setBusy(true); props.onBusy(true); setSettingsNeeded(false); setReplyError(null);
     const reply = quickReply ?? answer.trim();
     const guidance = question?.model && !(openModuleRequest && quickReply === 'Done, resume now') && reply ? `Previous question: ${question.question}\nUser answer: ${reply}`.slice(0, 2000) : undefined;
     setQuestion(null);
@@ -177,9 +178,9 @@ export function GuidedRunner(props: {
       const launch = await freshContext(targetId);
       if (launch.tab.fingerprint !== fresh.tab.fingerprint) throw new Error('The page changed before the run started. Inspect it again.');
       const result = await waitForJob(await queue(capability, launch.target, guidance));
-      setAnswer(''); setCustomReply(false);
       const asked = learnerQuestion(result.output);
       if (asked) {
+        setAnswer(''); setCustomReply(false);
         const paused = await api<Context>('/api/operations/context');
         checkStopped();
         const pausedTab = uniqueQuestionTab(asked.url, paused.session?.tabs || []);
@@ -192,15 +193,17 @@ export function GuidedRunner(props: {
         return;
       }
       if (result.job.status === 'completed' && result.job.outcome?.verified === true) {
+        setAnswer(''); setCustomReply(false);
         setStage('Completion verified'); setMessage('The run reported verified completion. Its evidence is available in History and Advanced tools.');
       } else {
+        if (question) { setQuestion(question); setReplyError('The run could not continue. Your reply is still here; check the message below before trying again.'); }
         setStage('The run needs attention');
         const providerProblem = /provider|learner.*(?:request|key|connection)|api key|quota|rate limit/i.test(result.output);
         setSettingsNeeded(providerProblem);
         setMessage(providerProblem ? 'The AI connection did not complete a request. Test your provider in Settings, then try again.' : 'The run stopped without verified completion. You can inspect again after opening the intended question or resolving the issue shown in Advanced tools.');
       }
     } catch (error) {
-      if (mounted.current) { if (question) setQuestion(question); setStage(stopped.current ? 'Stopped' : 'Your input is needed'); setMessage(error instanceof Error ? error.message : 'The run could not continue. Inspect again.'); }
+      if (mounted.current) { if (question) { setQuestion(question); setReplyError(error instanceof Error ? error.message : 'Could not continue. Your reply has been kept.'); } setStage(stopped.current ? 'Stopped' : 'Your input is needed'); setMessage(error instanceof Error ? error.message : 'The run could not continue. Inspect again.'); }
     } finally {
       locked.current = false;
       if (mounted.current) { setBusy(false); props.onBusy(false); void props.onRefresh(); }
@@ -225,6 +228,7 @@ export function GuidedRunner(props: {
     </label>
     <label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol work towards?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setObjective(event.target.value); }} disabled={busy || props.active} maxLength={1000} rows={2} className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6" /><span className="text-xs font-normal text-slate-600">This goal and your replies are remembered as you move through the course.</span></label>
     {!question ? <div role="status" aria-live="polite"><p className="font-semibold text-slate-950">{stage}</p><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{message}</p></div> : null}
+    {replyError ? <p role="alert" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">{replyError}</p> : null}
     {question ? <section className="space-y-4 border-t border-slate-200 pt-5" aria-labelledby="assistant-request-title">
       <h3 id="assistant-request-title" className="text-base font-semibold text-slate-950">{openModuleRequest || !question.model ? 'Action needed in the helper browser' : 'Your AI assistant has a question'}</h3>
       <p className="text-sm leading-6 text-slate-600">{openModuleRequest ? 'Vitriol could not find quiz controls on this page. Learning is paused until you are ready.' : 'Learning is paused. Choose a reply below or write your own to continue.'}</p>
