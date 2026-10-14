@@ -197,13 +197,15 @@ export function GuidedRunner(props: {
       </select>
     </label>
     {!question ? <div role="status" aria-live="polite"><p className="font-semibold text-slate-950">{stage}</p><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{message}</p></div> : null}
-    {question ? <section className="space-y-4 border-y border-cyan-200 bg-cyan-50 px-4 py-5 sm:px-5" aria-labelledby="assistant-request-title">
+    {question ? <section className="space-y-4 border-t border-slate-200 pt-5" aria-labelledby="assistant-request-title">
       <h3 id="assistant-request-title" className="text-lg font-semibold text-cyan-950">{openModuleRequest || !question.model ? 'Action needed in the helper browser' : 'Your AI assistant has a question'}</h3>
-      <p className="max-w-2xl text-base font-medium leading-7 text-slate-950">{openModuleRequest ? 'Open the quiz question or module you want to work on in the helper browser. Then return here and resume.' : question.question}</p>
-      <p className="text-sm leading-6 text-cyan-900">{openModuleRequest ? 'Vitriol could not find quiz controls on this page. Learning is paused until you are ready.' : 'Learning is paused. Choose a reply below or write your own to continue.'}</p>
+      <p className="text-sm leading-6 text-slate-600">{openModuleRequest ? 'Vitriol could not find quiz controls on this page. Learning is paused until you are ready.' : 'Learning is paused. Choose a reply below or write your own to continue.'}</p>
+      <div className="border border-teal-300 bg-teal-100 px-5 py-4 sm:px-6"><p className="max-w-3xl text-lg font-semibold leading-8 text-teal-950">{openModuleRequest ? 'Open the quiz question or module you want to work on in the helper browser. Then return here and resume.' : question.question}</p></div>
       {question.model ? <>
-        {replies.length ? <div className="space-y-2"><p className="text-sm font-semibold text-cyan-950">{openModuleRequest ? 'When you are ready' : 'Suggested replies — click to send and continue'}</p><div className="flex flex-wrap gap-3">{replies.map((option) => <button key={option} type="button" disabled={!props.ready || busy || props.active} onClick={() => void start(option)} className="min-h-11 rounded-md bg-slate-950 px-4 py-3 text-left text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:opacity-40">{option}</button>)}</div></div> : null}
-        {!showReplyField ? <button type="button" onClick={() => setCustomReply(true)} className="min-h-11 text-sm font-semibold text-cyan-900 underline underline-offset-4">Write a different reply</button> : null}
+        <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+          {replies.map((option) => <button key={option} type="button" disabled={!props.ready || busy || props.active} onClick={() => void start(option)} className="min-h-11 rounded-md bg-slate-950 px-4 py-3 text-left text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:opacity-40">{option}</button>)}
+          {!showReplyField ? <button type="button" onClick={() => setCustomReply(true)} className="min-h-11 text-sm font-semibold text-slate-700 underline underline-offset-4 hover:text-teal-900">Write a different reply</button> : null}
+        </div>
         {showReplyField ? <><label className="grid gap-2 text-sm font-medium text-slate-950">Your reply<textarea autoFocus={customReply} value={answer} maxLength={1400} onChange={(event) => setAnswer(event.target.value)} className="min-h-24 rounded-md border border-slate-400 bg-white p-3" /></label><p className="text-xs text-cyan-900">Replies may be shared with your AI provider. Do not include passwords or API keys.</p></> : null}
       </> : null}
     </section> : null}
