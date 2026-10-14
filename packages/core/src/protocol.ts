@@ -89,6 +89,7 @@ export function validateCapabilityInput(
         : argsForTarget(input.target);
     case 'scorm-complete':
     case 'container-batch':
+    case 'quiz-learn':
       return withDryRun(argsForTarget(input.target), input.dryRun === true);
     case 'cert-batch':
       return withDryRun({ ok: true, args: onlyArgs(input.titles) }, input.dryRun === true);

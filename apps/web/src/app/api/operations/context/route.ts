@@ -3,17 +3,29 @@ import { capabilityManifest } from '@quiztaker/core';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { queryOne, queryRows } from '@/lib/db';
 import { describeHelperUpdate } from '@/lib/helper-update';
+import { getServerEnv } from '@/lib/env';
+import { learnerIsEnabled } from '@/lib/learner';
 import { parityEnabled } from '@/lib/parity';
 import { getLatestHelperRelease } from '@/lib/releases';
 
 export const dynamic = 'force-dynamic';
+
+function learnerReady(): boolean {
+  const env = getServerEnv();
+  return learnerIsEnabled({
+    learnerApiKey: env.LEARNER_API_KEY,
+    cursorApiKey: env.CURSOR_API_KEY,
+    nodeEnv: process.env.NODE_ENV,
+    vercel: process.env.VERCEL,
+  });
+}
 
 export async function GET() {
   const user = await getAuthenticatedUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const helper = await queryOne<Record<string, unknown>>(
     `select presence.id, presence.device_name, presence.version, presence.is_online, presence.status,
-            presence.protocol_version, presence.supported_capabilities,
+            helpers.protocol_version, helpers.supported_capabilities,
             helpers.supports_self_update, helpers.update_requested_version, helpers.update_error
      from helper_presence presence
      join helpers on helpers.id = presence.id
@@ -23,7 +35,12 @@ export async function GET() {
     [user.id],
   );
   if (!helper) {
-    return NextResponse.json({ helper: null, parityEnabled: parityEnabled(), capabilities: capabilityManifest() });
+    return NextResponse.json({
+      helper: null,
+      parityEnabled: parityEnabled(),
+      learnerEnabled: learnerReady(),
+      capabilities: capabilityManifest(),
+    });
   }
   const helperId = String(helper.id);
   const [session, recentUrls, activeJob, captures] = await Promise.all([
@@ -73,6 +90,7 @@ export async function GET() {
     activeJob,
     captures,
     parityEnabled: parityEnabled(),
+    learnerEnabled: learnerReady(),
     capabilities: capabilityManifest(),
   });
 }

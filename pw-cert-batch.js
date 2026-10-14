@@ -8,12 +8,16 @@
 //   - Recognises Successful courses via their `PRINT CERTIFICATE` button, so the
 //     roster reader always sees the full 12-course list.
 //   - Scrolls the page before reading the roster so courses below the fold are captured.
-//   - Dismisses "Evaluate this course?" prompts, then re-expands collapsed
+//   - Dismisses course-evaluation prompts, including "Congratulations! Do you
+//     want to evaluate the course now?". A blocked module click screenshots
+//     the page, closes that overlay, and continues. Then re-expands collapsed
 //     requirement cards after every return to the landing page.
 //   - Preflights VIEW controls for `.trq-aria-disabled`, sequence notices, and
 //     incomplete prerequisite counters instead of waiting for an impossible player.
-//   - Diagnoses unexpected no-player outcomes and emits a structured
-//     `AUTOMATION_RESULT` consumed by the dashboard failure modal and ledger.
+//   - Diagnoses unexpected no-player outcomes. A "Remaining Attempts
+//     Confirmation" dialog is reported as attempt-confirmation and Proceed is
+//     not clicked. Emits a structured `AUTOMATION_RESULT` consumed by the
+//     dashboard failure modal and ledger.
 //
 // Usage:
 //   node pw-cert-batch.js [--only="Course Name"]... [--skip="Course Name"]... [--dry]
@@ -259,6 +263,23 @@ async function forceClosePlayer(ctx) {
   }
 }
 
+async function findAttemptGate(ctx) {
+  for (const page of ctx.pages()) {
+    const gate = await page.evaluate(() => {
+      const text = (document.body?.innerText || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!/Remaining Attempts Confirmation/i.test(text)) return null;
+      const attempts = text.match(/(\d+)\s+attempts remaining/i);
+      return {
+        title: document.title,
+        url: location.href,
+        attempts: attempts ? Number(attempts[1]) : null,
+      };
+    }).catch(() => null);
+    if (gate) return { page, ...gate };
+  }
+  return null;
+}
+
 async function diagnoseNoPlayer(page, course, screenshotPath) {
   const pageState = await page.evaluate(() => {
     const text = (document.body?.innerText || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
@@ -425,13 +446,24 @@ async function main() {
 
     const player = await findPlayerTab(ctx, 20000);
     if (!player) {
+      const gate = await findAttemptGate(ctx);
+      const shotPage = gate?.page || landing;
       const screenshotPath = path.join(HIST_DIR, `no-player-${Date.now()}.png`);
       let artifact = null;
       try {
-        await landing.screenshot({ path: screenshotPath });
+        await shotPage.screenshot({ path: screenshotPath });
         artifact = screenshotPath.replace(/\\/g, '/');
       } catch {}
-      const diagnosis = await diagnoseNoPlayer(landing, course, artifact);
+      const diagnosis = gate
+        ? {
+          reason: 'attempt-confirmation',
+          evidence: [
+            `Remaining Attempts Confirmation is open${gate.attempts == null ? '' : ` (${gate.attempts} attempts remaining)`}. Proceed was not clicked.`,
+          ],
+          destinationUrl: gate.url,
+          artifact,
+        }
+        : await diagnoseNoPlayer(landing, course, artifact);
       results.push({
         course: course.title,
         action: course.action,

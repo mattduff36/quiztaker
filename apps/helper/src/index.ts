@@ -127,6 +127,10 @@ async function main(): Promise<void> {
               rememberOutbox(jobId, event);
               throw error;
             }),
+            {
+              proposeLearnerStep: (snapshot) => client.proposeLearnerStep(jobId, snapshot),
+              isCancellationRequested: () => client.isCancellationRequested(jobId),
+            },
           );
           runningJob = { jobId, run };
           void monitorCancellation(client, jobId, run);

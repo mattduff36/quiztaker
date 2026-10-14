@@ -183,8 +183,12 @@ Detailed CMI element mapping is in `docs/QUIZ-TYPES.md#scorm-fast-complete`.
  SCORM/SlickQuiz/global probes, and a stable normalized fingerprint under
  `data/learn/<timestamp>/`; also creates a learning review.
 - `pw-detect.js [idx]` — read-only registry-driven probe/planner for the
- explicitly selected tab. Outputs confidence, evidence, targets, risk, steps,
- verifier, and one concrete action plan.
+  explicitly selected tab. Outputs confidence, evidence, targets, risk, steps,
+  verifier, and one concrete action plan.
+- `pw-learn-quiz.js <tabIdx> [--dry]` — confirmed learner for an unknown or
+  document quiz. It reads the selected CDP tab and applies only the actions
+  the control plane returns. It does not submit, and it does not run for a
+  server-scored assessment.
 - `npm test` — offline fixture replay, verifier, promotion/demotion,
  confirmation-policy, ledger, and dry-run contract tests.
 - `npm run migrate:learning` — idempotently backfills legacy logs/captures into

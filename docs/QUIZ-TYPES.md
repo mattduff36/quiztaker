@@ -27,10 +27,13 @@ if the fast path fails.
 - **Note** — the roster is rendered by Angular; lazy-loads rows below the
   fold, so scroll first (the batch script handles this). Returning from a
   course can also collapse requirement cards and remove their course rows from
-  the DOM. Saba may first display an "Evaluate this course?" prompt whose
-  overlay blocks those cards. Shared roster reads dismiss that prompt without
-  opting into the evaluation, then expand every module toggle with
-  `aria-expanded="false"` before collecting or clicking course actions.
+  the DOM. Saba may first display an evaluation prompt, worded either
+  "Evaluate this course?" or "Congratulations! You have completed the course.
+  Do you want to evaluate the course now?" The overlay blocks those cards.
+  Shared roster reads dismiss it with Close, never Evaluate, then expand
+  every module toggle with `aria-expanded="false"` before collecting or
+  clicking course actions. If a toggle click is blocked, the run screenshots
+  the viewport, closes this overlay when it is still there, and continues.
 - **Sequential prerequisite lock** — a blocked WBT can misleadingly show
   `In Progress` and a VIEW button. The child button itself is not disabled,
   but its parent `trq-splitbutton` has `.trq-aria-disabled`; the requirement
@@ -142,6 +145,9 @@ Ordered from fastest / most-common to slowest / rarest.
 - **Fingerprint** — Saba `content-player` page with `Remaining Attempts
   Confirmation`, then a welcome page showing `Number of questions 20` and
   `Passing score 80%`. No SCORM API and no `quizJSON`; it is server-scored.
+  The same gate appeared on 2026-10-02 for MyKnowledge App and PrintOS
+  MyKnowledge App quiz (`99 attempts remaining`, buttons Cancel and Proceed).
+  `pw-cert-batch.js` records `attempt-confirmation` and does not click Proceed.
 - **Important answer-bank corrections from 2026-07-09**:
   - Engine speed configuration on E7/E8 is `Late point differentiation
     configuration (LPDC)`.
@@ -206,6 +212,24 @@ Ordered from fastest / most-common to slowest / rarest.
 - **Suggested handling**: run the batch, capture the `no-player-tab`
   screenshot for the user's manual review, do not attempt further
   automation unless the same variant becomes recurring.
+
+### Variant F: Confirmed quiz learner (unknown or document page)
+
+- **Fingerprint** — detection reports `unknown` or `document-wbt` on a content
+  player that is not SCORM, SlickQuiz, a container, or a server-scored
+  assessment. The first live page for this variant has not been recorded yet.
+- **Strategy** — `quiz-learn` / `pw-learn-quiz.js <tabIdx>`. One confirmed plan
+  allows at most 20 steps. The helper sends a page snapshot to the control
+  plane. A local development server calls Cursor when `CURSOR_API_KEY` is set
+  and does not call Gemini for that step. Hosted runs call an OpenAI-compatible
+  model only when `LEARNER_API_KEY` is set. The model may return `click` on a
+  navigation control, `answer-select`,
+  `scroll`, `wait`, `capture`, or `verify`. A pass is recorded only when the
+  page text itself shows it. Submit, finish, exit, and grade are rejected.
+  The plan is refused unless the latest detection is `unknown` or `document-wbt`.
+- **Not this variant** — a timed server assessment stays on Variant B. Detect
+  still offers capture only, and Learn quiz stays disabled on that page.
+- **Script** — `pw-learn-quiz.js`. `--dry` observes the tab and does not click.
 
 ### Variant E: "View this document / scroll to end" WBT
 

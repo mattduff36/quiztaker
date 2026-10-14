@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { getCapability, riskLevels, validateCapabilityInput, type PlanProposal, type PlanTarget } from '@quiztaker/core';
+import { getCapability, learnerConstraints, learnerOfferedFor, riskLevels, validateCapabilityInput, type PlanProposal, type PlanTarget } from '@quiztaker/core';
 import { capabilityNegotiationError } from '@/lib/capability-negotiation';
 import { parityAllows } from '@/lib/parity';
 import { queryOne, queryRows } from '@/lib/db';
@@ -26,17 +26,21 @@ export async function createPlan(userId: string, input: CreatePlanInput): Promis
   if (!capability) throw new Error('Unknown capability');
   if (!parityAllows(capability.id)) throw new Error('This action is disabled');
   await assertHelperSupports(userId, input.helperId, capability.id, capability.version);
+  if (capability.id === 'quiz-learn') await assertLearnerPage(userId, input.helperId);
   const target = input.capabilityInput?.target as { browserSessionId?: string; revision?: number } | undefined;
   const risk = higherRisk(capability.risk, input.risk);
   const attemptId = randomUUID();
   const source = input.source ?? 'manual-capability';
   let args = input.args ?? capability.args ?? [];
   const capabilityInput = input.capabilityInput ?? { capabilityId: capability.id };
-  if (input.capabilityInput || ['cert-batch', 'class-batch', 'open-url', 'fit-tab', 'slickquiz-solve', 'tab-inspect'].includes(capability.id)) {
+  const isLearner = capability.id === 'quiz-learn';
+  if (input.capabilityInput || ['cert-batch', 'class-batch', 'open-url', 'fit-tab', 'slickquiz-solve', 'tab-inspect', 'quiz-learn'].includes(capability.id)) {
     const validated = validateCapabilityInput(capability.id, capabilityInput);
     if (!validated.ok) throw new Error(validated.error);
     args = validated.args;
   }
+  const constraints = isLearner ? learnerConstraints() : input.constraints ?? null;
+  const steps = isLearner ? ['probe', 'answer-select', 'verify'] : input.steps ?? [];
   const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
   const row = await queryOne<Record<string, unknown>>(
     `insert into plans (
@@ -62,8 +66,8 @@ export async function createPlan(userId: string, input: CreatePlanInput): Promis
       risk,
       capability.mutatesCourse,
       capability.verifier,
-      JSON.stringify(input.steps ?? []),
-      input.constraints == null ? null : JSON.stringify(input.constraints),
+      JSON.stringify(steps),
+      constraints == null ? null : JSON.stringify(constraints),
       JSON.stringify(input.targets ?? []),
       Math.min(1, Math.max(0, input.confidence ?? 0)),
       JSON.stringify(input.evidence ?? []),
@@ -137,6 +141,20 @@ export async function assertHelperSupports(
     capabilityVersion,
   });
   if (error) throw new Error(error);
+}
+
+async function assertLearnerPage(userId: string, helperId: string): Promise<void> {
+  const session = await queryOne<{ detection: { detected?: string } | null }>(
+    `select detection
+     from browser_sessions
+     where user_id = $1 and helper_id = $2 and closed_at is null
+     order by updated_at desc
+     limit 1`,
+    [userId, helperId],
+  );
+  if (!learnerOfferedFor(session?.detection?.detected)) {
+    throw new Error('Learn quiz is only available for an unrecognized, unknown, or document page');
+  }
 }
 
 function higherRisk(left: PlanProposal['risk'], right?: PlanProposal['risk']): PlanProposal['risk'] {

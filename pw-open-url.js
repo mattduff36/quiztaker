@@ -19,7 +19,7 @@ async function main() {
   }
   let browser;
   try {
-    browser = await chromium.connectOverCDP(CDP_URL);
+    browser = await chromium.connectOverCDP(CDP_URL, { timeout: 15_000 });
   } catch (e) {
     console.log(JSON.stringify({ ok: false, reason: 'not-connected', error: e.message }));
     return;
@@ -27,18 +27,22 @@ async function main() {
   try {
     const ctx = browser.contexts()[0] || (await browser.newContext());
     const page = await ctx.newPage();
-    await page.goto(url, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await page.goto(url, { waitUntil: 'commit', timeout: 20_000 }).catch(() => {});
     await page.bringToFront().catch(() => {});
     console.log(JSON.stringify({ ok: true, url, title: await page.title().catch(() => '') }));
   } catch (e) {
     console.log(JSON.stringify({ ok: false, error: e.message }));
   } finally {
-    // Detach without closing the browser.
-    await browser.close().catch(() => {});
+    await Promise.race([
+      browser.close().catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ]);
   }
 }
 
-main().catch((e) => {
+main().then(() => {
+  process.exit(0);
+}).catch((e) => {
   console.log(JSON.stringify({ ok: false, error: String(e && e.message ? e.message : e) }));
   process.exit(0);
 });

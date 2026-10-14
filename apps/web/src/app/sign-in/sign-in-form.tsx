@@ -16,11 +16,22 @@ export function SignInForm() {
     event.preventDefault();
     setIsLoading(true);
     setMessage('');
-    const result = isCreating
-      ? await authClient.signUp.email({ email, password, name: `${productName} Operator` })
-      : await authClient.signIn.email({ email, password });
-    if (result.error) {
-      setMessage(result.error.message || 'Authentication failed.');
+    try {
+      const result = isCreating
+        ? await authClient.signUp.email({ email, password, name: `${productName} Operator` })
+        : await authClient.signIn.email({ email, password });
+      if (result.error) {
+        setMessage(result.error.message || 'Authentication failed.');
+        setIsLoading(false);
+        return;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Authentication failed.';
+      setMessage(
+        /invalid origin/i.test(message) && window.location.hostname === '127.0.0.1'
+          ? 'Open this page on localhost instead of 127.0.0.1. Neon Auth rejects that address.'
+          : message,
+      );
       setIsLoading(false);
       return;
     }

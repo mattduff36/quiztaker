@@ -66,6 +66,17 @@ export class ControlPlaneClient {
     throw lastError;
   }
 
+  async proposeLearnerStep(
+    jobId: string,
+    snapshot: unknown,
+  ): Promise<{ action?: unknown; stop?: boolean; error?: string }> {
+    const response = await this.request(`/api/helper/jobs/${encodeURIComponent(jobId)}/proposal`, {
+      method: 'POST',
+      body: JSON.stringify({ snapshot }),
+    }, 150_000);
+    return response.json() as Promise<{ action?: unknown; stop?: boolean; error?: string }>;
+  }
+
   async isCancellationRequested(jobId: string): Promise<boolean> {
     const response = await this.request(`/api/helper/jobs/${encodeURIComponent(jobId)}/status`, {
       method: 'GET',
@@ -109,7 +120,7 @@ export class ControlPlaneClient {
     return value.release ?? null;
   }
 
-  private async request(path: string, init: RequestInit): Promise<Response> {
+  private async request(path: string, init: RequestInit, timeoutMs = 30_000): Promise<Response> {
     const response = await fetch(`${this.config.controlPlaneUrl}${path}`, {
       ...init,
       headers: {
@@ -117,7 +128,7 @@ export class ControlPlaneClient {
         'X-Helper-Id': this.config.helperId,
         ...(typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
       },
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) {
       const detail = await response.text().catch(() => '');

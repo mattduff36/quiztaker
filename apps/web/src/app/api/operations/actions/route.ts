@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { confirmShortcutAllowed } from '@quiztaker/core';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { hasValidRequestOrigin } from '@/lib/security';
 import { createCapabilityPlan, endOperatorSession, forgetRecentUrl } from '@/lib/operations';
@@ -69,6 +70,9 @@ export async function POST(request: Request) {
       confidence: parsed.data.confidence,
     });
     if (parsed.data.confirm) {
+      if (!confirmShortcutAllowed(parsed.data.capabilityId)) {
+        return NextResponse.json({ plan });
+      }
       await queryOne(
         `update plans set confirmed = true, confirmed_at = now()
          where id = $1 and user_id = $2 and consumed = false`,

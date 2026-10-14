@@ -1,4 +1,5 @@
 export * from './capabilities.js';
+export * from './learner.js';
 export * from './diagnosis.js';
 export * from './jobs.js';
 export * from './outcome.js';

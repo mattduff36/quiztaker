@@ -22,11 +22,17 @@ export interface RunningJob {
   cancel: () => void;
 }
 
+export interface JobHooks {
+  proposeLearnerStep?: (snapshot: unknown) => Promise<{ action?: unknown; stop?: boolean; error?: string }>;
+  isCancellationRequested?: () => Promise<boolean>;
+}
+
 export function startJob(
   envelope: JobEnvelope,
   helperId: string,
   deviceSecret: string,
   sendEvent: (event: JobEventInput) => Promise<void>,
+  hooks: JobHooks = {},
 ): RunningJob {
   if (envelope.payload.helperId !== helperId) throw new Error('Job targets another helper.');
   if (!verifyJob(envelope, deviceSecret)) throw new Error('Job signature or capability is invalid.');
@@ -77,6 +83,16 @@ export function startJob(
     };
   }
 
+  if (capability.id === 'quiz-learn' && !hooks.proposeLearnerStep) {
+    void emit('failed', { error: 'Quiz learner bridge is not available' });
+    rememberNonce(envelope.payload.nonce, envelope.payload.jobId, true);
+    return {
+      child: null,
+      completion: Promise.resolve({ code: 1, output: '' }),
+      cancel: () => undefined,
+    };
+  }
+
   const child = spawn(process.env.QUIZTAKER_NODE_PATH || process.execPath, [
     scriptPath,
     ...scriptArgs,
@@ -95,6 +111,10 @@ export function startJob(
       SABA_FINGERPRINT: envelope.payload.fingerprint || '',
     },
   });
+
+  if (capability.id === 'quiz-learn' && hooks.proposeLearnerStep) {
+    attachLearnerBridge(child, hooks.proposeLearnerStep, hooks.isCancellationRequested);
+  }
 
   void emit('accepted', { script: capability.script, args: envelope.payload.args });
   void emit('started', { pid: child.pid });
@@ -134,6 +154,50 @@ export function startJob(
       child.kill();
     },
   };
+}
+
+function attachLearnerBridge(
+  child: ChildProcessWithoutNullStreams,
+  propose: (snapshot: unknown) => Promise<{ action?: unknown; stop?: boolean; error?: string }>,
+  isCancellationRequested?: () => Promise<boolean>,
+): void {
+  let buffer = '';
+  child.stdout.on('data', (value: Buffer) => {
+    buffer += value.toString();
+    let newline = buffer.indexOf('\n');
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).replace(/\r$/, '');
+      buffer = buffer.slice(newline + 1);
+      if (line.startsWith('LEARNER_SNAPSHOT ')) void answerSnapshot(line.slice('LEARNER_SNAPSHOT '.length));
+      newline = buffer.indexOf('\n');
+    }
+  });
+
+  async function answerSnapshot(json: string): Promise<void> {
+    try {
+      if (await isCancellationRequested?.()) {
+        writeLearnerLine(child, 'LEARNER_STOP cancelled');
+        return;
+      }
+      const decision = await propose(JSON.parse(json) as unknown);
+      if (!decision.action || decision.stop) {
+        writeLearnerLine(child, `LEARNER_STOP ${oneLine(decision.error || 'stopped')}`);
+        return;
+      }
+      writeLearnerLine(child, `LEARNER_ACTION ${JSON.stringify(decision.action)}`);
+    } catch (error) {
+      writeLearnerLine(child, `LEARNER_STOP ${oneLine(error instanceof Error ? error.message : 'proposal failed')}`);
+    }
+  }
+}
+
+function writeLearnerLine(child: ChildProcessWithoutNullStreams, line: string): void {
+  if (!child.stdin.writable) return;
+  child.stdin.write(`${line}\n`);
+}
+
+function oneLine(value: string): string {
+  return value.replace(/[\r\n]/g, ' ').slice(0, 300);
 }
 
 function appendOutput(output: string, text: string, isTruncated: boolean) {

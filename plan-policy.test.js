@@ -27,6 +27,29 @@ test('rejects a run that differs from confirmed plan', () => {
   assert.equal(result.status, 400);
 });
 
+test('quiz-learn requires a confirmed plan', () => {
+  const missing = authorizeRun({
+    script: 'pw-learn-quiz.js',
+    args: ['0'],
+    plan: null,
+  });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.status, 403);
+
+  const mismatched = authorizeRun({
+    script: 'pw-learn-quiz.js',
+    args: ['0'],
+    plan: {
+      confirmed: true,
+      consumed: false,
+      script: 'pw-scorm-complete.js',
+      args: ['0'],
+    },
+  });
+  assert.equal(mismatched.ok, false);
+  assert.equal(mismatched.status, 400);
+});
+
 test('accepts exact confirmed mutation and read-only dry run', () => {
   const confirmed = authorizeRun({
     script: 'pw-scorm-complete.js',

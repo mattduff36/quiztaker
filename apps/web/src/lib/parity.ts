@@ -7,6 +7,7 @@ const blockedWhenDisabled = new Set([
   'fit-tab',
   'tab-inspect',
   'cdp-check',
+  'quiz-learn',
 ]);
 
 export function parityEnabled(): boolean {

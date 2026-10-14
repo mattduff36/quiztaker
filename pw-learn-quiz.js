@@ -1,0 +1,243 @@
+#!/usr/bin/env node
+// pw-learn-quiz.js
+//
+// Confirmed quiz learner for a tab the hosted detector does not already solve.
+// The script only reads the page and applies actions the control plane has
+// already allowlisted. It has no API key and does not call the control plane.
+// Submit, finish, exit, and grade controls are refused here even if a later
+// step asks for them.
+//
+// Usage:
+//   node pw-learn-quiz.js <tabIdx> [--dry]
+
+const readline = require('node:readline');
+const { chromium } = require('playwright');
+
+const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
+const MAX_STEPS = 20;
+const SUBMIT_LABEL = /\b(submit|finish|exit|end test|grade)\b/i;
+const NAVIGATION_LABEL = /^(next|continue|back|previous|ok|close|start|begin)$/i;
+const PASS_EVIDENCE = /\byou passed\b|\byour score:\s*100\s*%/i;
+const FAIL_EVIDENCE = /\b(not passed|did not pass|failed|unsuccessful|not successful)\b/i;
+const ALLOWED = new Set(['click', 'answer-select', 'scroll', 'wait', 'capture', 'verify']);
+
+function parseLearnQuizArgs(argv) {
+  const tokens = argv.slice(2);
+  if (tokens.length < 1) throw new Error('Usage: pw-learn-quiz.js <tabIdx> [--dry]');
+  if (!/^\d+$/.test(tokens[0])) throw new Error('Tab index must be a number');
+  if (tokens.length > 2 || (tokens[1] && tokens[1] !== '--dry')) {
+    throw new Error('Only --dry is allowed');
+  }
+  return { tabIdx: Number(tokens[0]), dryRun: tokens[1] === '--dry' };
+}
+
+function pageShowsPass(snapshot) {
+  const text = `${snapshot?.title || ''}\n${snapshot?.text || ''}`;
+  if (FAIL_EVIDENCE.test(text)) return false;
+  return PASS_EVIDENCE.test(text);
+}
+
+function localActionAllowed(action, snapshot) {
+  if (!action || typeof action !== 'object') return false;
+  if (!ALLOWED.has(action.action)) return false;
+  if (action.action === 'click' || action.action === 'answer-select') {
+    const pool = action.action === 'click' ? snapshot.buttons : snapshot.choices;
+    const target = (pool || []).find((item) => item.id === action.targetId);
+    if (!target || SUBMIT_LABEL.test(target.name)) return false;
+    if (action.action === 'click' && !NAVIGATION_LABEL.test(target.name.trim())) return false;
+  }
+  return true;
+}
+
+async function accessibleName(locator) {
+  const aria = await locator.getAttribute('aria-label').catch(() => null);
+  if (aria && aria.trim()) return aria.replace(/\s+/g, ' ').trim().slice(0, 160);
+  const text = await locator.evaluate((el) => {
+    const id = el.getAttribute('id');
+    const explicit = id ? el.ownerDocument.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
+    const wrapping = el.closest('label');
+    return (explicit?.textContent || wrapping?.textContent || el.innerText || el.textContent || '');
+  }).catch(() => '');
+  return String(text).replace(/\s+/g, ' ').trim().slice(0, 160);
+}
+
+async function isSubmitControl(locator) {
+  return locator.evaluate((el) => {
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    if (type === 'submit' || type === 'image') return true;
+    return el.tagName === 'BUTTON' && type !== 'button';
+  }).catch(() => true);
+}
+
+async function readControls(page, role, prefix, navigationOnly) {
+  const listed = [];
+  const handles = new Map();
+  for (const frame of page.frames().slice(0, 4)) {
+    const locator = frame.getByRole(role);
+    const count = Math.min(await locator.count().catch(() => 0), 30);
+    for (let index = 0; index < count; index += 1) {
+      const handle = locator.nth(index);
+      const name = await accessibleName(handle);
+      if (!name || SUBMIT_LABEL.test(name)) continue;
+      if (navigationOnly && !NAVIGATION_LABEL.test(name.trim())) continue;
+      if (await isSubmitControl(handle)) continue;
+      const id = `${prefix}${listed.length + 1}`;
+      handles.set(id, handle);
+      listed.push({ id, name });
+    }
+  }
+  return { listed, handles };
+}
+
+async function readSnapshot(page) {
+  let text = '';
+  for (const frame of page.frames().slice(0, 4)) {
+    try {
+      text += `\n${await frame.locator('body').innerText({ timeout: 2000 })}`;
+    } catch {
+      // A cross-origin frame has no readable body.
+    }
+    if (text.length > 6000) break;
+  }
+  const buttons = await readControls(page, 'button', 'b', true);
+  const radios = await readControls(page, 'radio', 'c', false);
+  const checks = await readControls(page, 'checkbox', 'k', false);
+  const handles = new Map([...buttons.handles, ...radios.handles, ...checks.handles]);
+  return {
+    snapshot: {
+      title: await page.title().catch(() => ''),
+      url: page.url(),
+      text: text.replace(/\s+/g, ' ').trim().slice(0, 6000),
+      buttons: buttons.listed,
+      choices: [...radios.listed, ...checks.listed],
+    },
+    handles,
+  };
+}
+
+function createActionReader() {
+  const rl = readline.createInterface({ input: process.stdin });
+  const pending = [];
+  const failAll = (error) => {
+    while (pending.length) pending.shift().reject(error);
+  };
+  rl.on('line', (line) => {
+    const waiter = pending.shift();
+    if (!waiter) return;
+    if (line.startsWith('LEARNER_STOP ')) {
+      waiter.reject(new Error(line.slice('LEARNER_STOP '.length)));
+      return;
+    }
+    if (!line.startsWith('LEARNER_ACTION ')) {
+      waiter.reject(new Error('Unexpected learner response'));
+      return;
+    }
+    try {
+      waiter.resolve(JSON.parse(line.slice('LEARNER_ACTION '.length)));
+    } catch {
+      waiter.reject(new Error('Learner action was not JSON'));
+    }
+  });
+  rl.on('close', () => failAll(new Error('Learner input closed')));
+  process.stdin.on('error', () => failAll(new Error('Learner input closed')));
+  return {
+    request: (snapshot) => new Promise((resolve, reject) => {
+    const entry = {
+      resolve: (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      reject: (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    };
+    const timer = setTimeout(() => {
+      const index = pending.indexOf(entry);
+      if (index >= 0) pending.splice(index, 1);
+      reject(new Error('Learner input timed out'));
+    }, 45_000);
+    pending.push(entry);
+    process.stdout.write(`LEARNER_SNAPSHOT ${JSON.stringify(snapshot)}\n`);
+    }),
+    close: () => rl.close(),
+  };
+}
+
+async function applyAction(page, action, snapshot, handles) {
+  if (action.action === 'scroll') {
+    await page.mouse.wheel(0, 400);
+    return;
+  }
+  if (action.action === 'wait') {
+    const ms = Math.max(0, Math.min(1000, Number(action.ms) || 500));
+    await page.waitForTimeout(ms);
+    return;
+  }
+  if (action.action === 'capture') {
+    console.log(`Captured quiz view: ${snapshot.title || snapshot.url}`);
+    return;
+  }
+  const handle = handles.get(action.targetId);
+  if (!handle) throw new Error('Learner target is not on the page');
+  if (action.action === 'click') {
+    await handle.click({ timeout: 5000 });
+    return;
+  }
+  await handle.check({ timeout: 5000 });
+}
+
+function finish(completed, reason) {
+  const payload = completed
+    ? { completed: 1, total: 1 }
+    : { completed: 0, total: 1, failures: [{ title: 'quiz-learn', reason: reason || 'learner-stopped' }] };
+  console.log(`AUTOMATION_RESULT ${JSON.stringify(payload)}`);
+  if (!completed) process.exitCode = 1;
+}
+
+async function main() {
+  const options = parseLearnQuizArgs(process.argv);
+  const browser = await chromium.connectOverCDP(CDP_URL);
+  let reader = null;
+  try {
+    const page = browser.contexts()[0]?.pages()?.[options.tabIdx];
+    if (!page) throw new Error('Tab index is not open');
+    if (options.dryRun) {
+      const { snapshot } = await readSnapshot(page);
+      console.log(`Dry run: quiz-learn observed "${snapshot.title || 'untitled'}"`);
+      return;
+    }
+    reader = createActionReader();
+    for (let step = 1; step <= MAX_STEPS; step += 1) {
+      const { snapshot, handles } = await readSnapshot(page);
+      const action = await reader.request(snapshot);
+      if (!localActionAllowed(action, snapshot)) {
+        finish(false, 'rejected-action');
+        return;
+      }
+      if (action.action === 'verify') {
+        if (!pageShowsPass(snapshot)) {
+          console.log(`Learner step ${step}: page does not show a pass`);
+          continue;
+        }
+        finish(true);
+        return;
+      }
+      await applyAction(page, action, snapshot, handles);
+      console.log(`Learner step ${step}: ${action.action}`);
+    }
+    finish(false, 'step-cap');
+  } finally {
+    reader?.close();
+    await browser.close().catch(() => undefined);
+  }
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(String(error?.message || error));
+    finish(false, 'learner-error');
+  });
+}
+
+module.exports = { parseLearnQuizArgs, localActionAllowed, pageShowsPass };

@@ -13,6 +13,7 @@ const capabilityPolicy: Record<string, {
   'scorm-complete': { effect: 'course-state', requiresConfirmation: true },
   'container-batch': { effect: 'course-state', requiresConfirmation: true },
   'slickquiz-solve': { effect: 'course-state', requiresConfirmation: true },
+  'quiz-learn': { effect: 'course-state', requiresConfirmation: true },
 };
 
 export const capabilities: readonly Capability[] = [
@@ -32,6 +33,7 @@ export const capabilities: readonly Capability[] = [
   capability('detect', 2, 'pw-detect.js', 'Detect current learning context', 'Probe the selected tab and build a ranked plan.', 'none', false, 'process-exit'),
   capability('close-browser', 1, 'pw-close-browser.js', 'Close CDP browser', 'Close the attached automation browser.', 'low', false, 'process-exit'),
   capability('open-url', 1, 'pw-open-url.js', 'Open URL', 'Open an allowed URL in a new browser tab.', 'low', false, 'process-exit'),
+  capability('quiz-learn', 1, 'pw-learn-quiz.js', 'Learn this quiz', 'Read the selected quiz and apply confirmed steps that do not submit it.', 'high', true, 'quiz-result-passed', { dryRunArgs: ['--dry'] }),
 ] as const;
 
 export const safeActions = new Set([

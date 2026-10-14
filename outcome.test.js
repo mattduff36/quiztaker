@@ -30,6 +30,25 @@ test('recognizes complete batch and failure signature', () => {
   assert.equal(failure.failureSignature, 'scorm api not found');
 });
 
+test('recognizes a verified quiz-learn pass and rejects a partial result', () => {
+  const passed = classifyOutcome({
+    script: 'pw-learn-quiz.js',
+    code: 0,
+    output: 'AUTOMATION_RESULT {"completed":1,"total":1}',
+  });
+  assert.equal(passed.outcome, 'success');
+  assert.equal(passed.verified, true);
+  assert.equal(passed.status, '1/1 completed');
+
+  const stopped = classifyOutcome({
+    script: 'pw-learn-quiz.js',
+    code: 1,
+    output: 'AUTOMATION_RESULT {"completed":0,"total":1,"failures":[{"title":"quiz-learn","reason":"rejected-action"}]}',
+  });
+  assert.equal(stopped.outcome, 'failure');
+  assert.equal(stopped.verified, false);
+});
+
 test('recognizes partial structured batch and linked artifacts', () => {
   const output = `AUTOMATION_RESULT ${JSON.stringify({
     schemaVersion: 1,

@@ -9,6 +9,7 @@ test('new actions can be disabled without removing legacy cards', () => {
   assert.equal(parityAllows('open-url'), false);
   assert.equal(parityAllows('list-tabs'), true);
   assert.equal(parityAllows('cert-batch'), true);
+  assert.equal(parityAllows('quiz-learn'), false);
   process.env.PARITY_NEW_ACTIONS = previous;
 });
 

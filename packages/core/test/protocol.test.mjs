@@ -43,6 +43,28 @@ test('derives stable signed args and rejects stale targets', () => {
   assert.throws(() => assertFreshTarget({ target }, { ...session, revision: 9 }), /stale/);
 });
 
+test('quiz-learn accepts only a current browser target', () => {
+  const rejected = validateCapabilityInput('quiz-learn', {
+    capabilityId: 'quiz-learn',
+    args: ['https://evil.example/prompt'],
+  });
+  assert.equal(rejected.ok, false);
+
+  const accepted = validateCapabilityInput('quiz-learn', { capabilityId: 'quiz-learn', target, dryRun: true });
+  assert.equal(accepted.ok, true);
+  if (!accepted.ok) return;
+  assert.deepEqual(accepted.args, [
+    '--target', target.targetId,
+    '--session', target.browserSessionId,
+    '--revision', '2',
+    '--fingerprint', target.fingerprint,
+    '--dry',
+  ]);
+  assert.equal(accepted.args.some((arg) => arg.includes('evil.example')), false);
+  assert.equal(capabilities.some((item) => item.script.startsWith('pw-quiz-')), false);
+  assert.equal(capabilities.find((item) => item.id === 'quiz-learn')?.script, 'pw-learn-quiz.js');
+});
+
 test('requires selected roster titles and ignores empty input objects', () => {
   const missing = validateCapabilityInput('cert-batch', { capabilityId: 'cert-batch' });
   assert.equal(missing.ok, false);

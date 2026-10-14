@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { ArrowRight, CircleDot, Laptop } from 'lucide-react';
+import { ArrowRight, Laptop } from 'lucide-react';
 import { requireAuthenticatedUser } from '@/lib/auth';
 import { queryOne } from '@/lib/db';
 import { AppShell } from '@/components/app-shell';
@@ -30,7 +30,6 @@ export default async function Home() {
      limit 1`,
     [user.id],
   );
-  const isOnline = helper?.is_online === true;
 
   return (
     <AppShell email={user.email}>
@@ -38,14 +37,7 @@ export default async function Home() {
         eyebrow="Operations deck"
         title="Local browser operations"
         description="Plans are authorized here and executed by the paired helper against Chrome on your Windows machine."
-        actions={(
-          <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold ${
-            isOnline ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 bg-white text-slate-500'
-          }`}>
-            <CircleDot className="size-3.5" />
-            Helper {isOnline ? 'online' : 'offline'}
-          </div>
-        )}
+
       >
         {!helper ? (
           <Panel className="overflow-hidden">
