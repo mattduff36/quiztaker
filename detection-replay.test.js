@@ -22,3 +22,7 @@ test('Cornerstone curricula and assessments never reuse Saba completion actions'
   assert.deepEqual(classifyProbeSignals({ urlKind: 'csod-curriculum', scorm: '1.2' }), { detected: 'csod-curriculum', capabilityId: 'learn-capture' });
   assert.deepEqual(classifyProbeSignals({ urlKind: 'csod-learning', hasAssessmentShell: true, scorm: '1.2' }), { detected: 'server-assessment', capabilityId: 'learn-capture' });
 });
+
+test('Cornerstone material is offered to the learner even with a SCORM wrapper', () => {
+  assert.deepEqual(classifyProbeSignals({ urlKind: 'csod-learning', scorm: '1.2' }), { detected: 'csod-learning', capabilityId: 'learn-capture' });
+});

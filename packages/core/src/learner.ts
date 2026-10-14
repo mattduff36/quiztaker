@@ -14,7 +14,7 @@ export const learnerActions = new Set([
 
 const deniedLearnerActions = new Set(['exit', 'submit', 'launch', 'scorm-complete']);
 const submitLabel = /\b(submit|finish|exit|end test|grade)\b/i;
-const navigationLabel = /^(next|continue|back|previous|ok|close|start|begin)$/i;
+const navigationLabel = /^(next(?: page| slide)?|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch|resume|menu|contents)$/i;
 
 export interface LearnerControl {
   id: string;

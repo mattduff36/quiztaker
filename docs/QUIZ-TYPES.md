@@ -396,3 +396,12 @@ Choose the course tab in Operations and use **Inspect and start**. Vitriol refre
 Questions pause the job as `awaiting-input`, never as a passed quiz or failed strategy. Answer and continue to inspect the current page again and send the stored answer to the configured AI provider. Missing AI configuration links to Settings. Exhausted provider requests stop with an error. Technical actions and output remain under Advanced tools.
 
 Learning is navigation and control discovery, not model training or a guarantee of passing an arbitrary assessment. Server-scored assessments still require review; final submission remains disabled in the learner. Verified completion requires page evidence. Keep Operations open for automatic follow-up steps; closing it leaves the current helper job visible in Advanced tools.
+
+## Canon Cornerstone Device Features (observed 2026-10-14)
+
+The curriculum launches a SCORM 1.2 wrapper containing a Brightwave course in
+`CourseIframe`. The wrapper body is empty; read the content frames. The welcome
+page has a link-style Start control and a language selector (English selected).
+Classify this as `csod-learning` and use the learner, rather than the Saba SCORM
+completion strategy. Read the actual material; a launch is not completion.
+The separate Device Features Assessment remains unverified.

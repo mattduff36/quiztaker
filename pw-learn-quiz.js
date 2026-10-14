@@ -5,7 +5,8 @@
 // The script only reads the page and applies actions the control plane has
 // already allowlisted. It has no API key and does not call the control plane.
 // Submit, finish, exit, and grade controls are refused here even if a later
-// step asks for them. An ask-user action, or a page with no usable controls,
+// step asks for them. Every page is sent to the provider with saved context;
+// an ask-user action
 // prints LEARNER_QUESTION and stops with needs-user-input. That is incomplete
 // and never a successful completion. Guidance is not a shell argument.
 //
@@ -18,7 +19,7 @@ const { chromium } = require('playwright');
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 const MAX_STEPS = 20;
 const SUBMIT_LABEL = /\b(submit|finish|exit|end test|grade)\b/i;
-const NAVIGATION_LABEL = /^(next|continue|back|previous|ok|close|start|begin)$/i;
+const NAVIGATION_LABEL = /^(next(?: page| slide)?|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch|resume|menu|contents)$/i;
 const PASS_EVIDENCE = /\byou passed\b|\byour score:\s*100\s*%/i;
 const FAIL_EVIDENCE = /\b(not passed|did not pass|failed|unsuccessful|not successful)\b/i;
 const ALLOWED = new Set(['click', 'answer-select', 'scroll', 'wait', 'capture', 'verify', 'ask-user']);
@@ -93,7 +94,7 @@ async function accessibleName(locator) {
     const id = el.getAttribute('id');
     const explicit = id ? el.ownerDocument.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
     const wrapping = el.closest('label');
-    return (explicit?.textContent || wrapping?.textContent || el.innerText || el.textContent || '');
+    return (explicit?.textContent || wrapping?.textContent || el.innerText || el.textContent || el.getAttribute('title') || el.getAttribute('alt') || el.getAttribute('value') || '');
   }).catch(() => '');
   return String(text).replace(/\s+/g, ' ').trim().slice(0, 160);
 }
@@ -102,18 +103,19 @@ async function isSubmitControl(locator) {
   return locator.evaluate((el) => {
     const type = (el.getAttribute('type') || '').toLowerCase();
     if (type === 'submit' || type === 'image') return true;
-    return el.tagName === 'BUTTON' && type !== 'button';
+    return el.tagName === 'BUTTON' && type !== 'button' && Boolean(el.closest('form'));
   }).catch(() => true);
 }
 
 async function readControls(page, role, prefix, navigationOnly) {
   const listed = [];
   const handles = new Map();
-  for (const frame of page.frames().slice(0, 4)) {
-    const locator = frame.getByRole(role);
-    const count = Math.min(await locator.count().catch(() => 0), 30);
+  for (const frame of page.frames().slice(0, 16)) {
+    const locator = navigationOnly ? frame.locator('button, a, [role=button], [onclick], input[type=button]') : frame.getByRole(role);
+    const count = Math.min(await locator.count().catch(() => 0), 120);
     for (let index = 0; index < count; index += 1) {
       const handle = locator.nth(index);
+      if (!await handle.isVisible().catch(() => false) || !await handle.isEnabled().catch(() => false)) continue;
       const name = await accessibleName(handle);
       if (!name || SUBMIT_LABEL.test(name)) continue;
       if (navigationOnly && !NAVIGATION_LABEL.test(name.trim())) continue;
@@ -121,6 +123,7 @@ async function readControls(page, role, prefix, navigationOnly) {
       const id = `${prefix}${listed.length + 1}`;
       handles.set(id, handle);
       listed.push({ id, name });
+      if (listed.length >= 40) return { listed, handles };
     }
   }
   return { listed, handles };
@@ -128,7 +131,7 @@ async function readControls(page, role, prefix, navigationOnly) {
 
 async function readSnapshot(page) {
   let text = '';
-  for (const frame of page.frames().slice(0, 4)) {
+  for (const frame of page.frames().slice(0, 16)) {
     try {
       text += `\n${await frame.locator('body').innerText({ timeout: 2000 })}`;
     } catch {
@@ -255,11 +258,6 @@ async function main() {
     for (let step = 1; step <= MAX_STEPS; step += 1) {
       const { snapshot, handles } = await readSnapshot(page);
       if (pageShowsPass(snapshot)) { finish(true); return; }
-      const blocked = learnerQuestionPayload(snapshot, null);
-      if (blocked) {
-        await emitQuestion(blocked, snapshot, browser);
-        return;
-      }
       const action = await reader.request(snapshot);
       if (!localActionAllowed(action, snapshot)) {
         finish(false, 'rejected-action');
