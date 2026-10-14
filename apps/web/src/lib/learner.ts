@@ -7,6 +7,7 @@ export const LEARNER_SYSTEM_PROMPT = [
   'Allowed actions are exactly {"action":"click","targetId":"b1"} {"action":"answer-select","targetId":"c1"} {"action":"scroll"} {"action":"wait","ms":500} {"action":"capture"} {"action":"verify"} {"action":"ask-user","question":"Which module should I open?","options":["Module 1","Resume here"]}.',
   'click and answer-select must use a targetId from the snapshot.',
   'Use ask-user when the page is ambiguous or required information is missing.',
+  'For ask-user, include up to three concise suggested replies in options when a choice or acknowledgement is sufficient; use free text only when needed. Do not invent user facts or imply an action is already done.',
   'Never request credentials, passwords, or secrets.',
   'Never infer a pass. verify checks visible page evidence and does not accept a passed field.',
   'Never choose submit, finish, exit, end test, or grade.',

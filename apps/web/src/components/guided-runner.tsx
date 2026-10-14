@@ -30,6 +30,7 @@ export function GuidedRunner(props: {
   const [message, setMessage] = useState('Choose the course tab. Vitriol will inspect it and decide how to proceed.');
   const [currentQuestion, setQuestion] = useState<Question | null>(null);
   const [answer, setAnswer] = useState('');
+  const [customReply, setCustomReply] = useState(false);
   const [settingsNeeded, setSettingsNeeded] = useState(false);
   const locked = useRef(false);
   const stopped = useRef(false);
@@ -46,6 +47,9 @@ export function GuidedRunner(props: {
     && (currentQuestion.targetId === props.selectedTarget || currentPauseTab.targetId === props.selectedTarget) ? currentQuestion : null)
     || (restoredQuestion && restoredPauseTab && (savedTarget?.targetId === props.selectedTarget || restoredPauseTab.targetId === props.selectedTarget)
       ? { ...restoredQuestion, model: true, targetId: restoredPauseTab.targetId, sessionId: session?.id } : null);
+  const openModuleRequest = question?.question === 'Open the intended question or module, then resume.';
+  const replies = openModuleRequest ? ['Done, resume now'] : [...new Set(question?.options || [])].filter((option) => option.trim());
+  const showReplyField = Boolean(question?.model && (customReply || replies.length === 0));
   const pauseTab = uniqueQuestionTab(question?.url, session?.tabs || []);
   const pauseTargetId = pauseTab?.targetId;
   const { selectedTarget, onSelect } = props;
@@ -104,12 +108,13 @@ export function GuidedRunner(props: {
     throw new Error('This run is taking longer than expected. Check its status in Advanced tools before starting another.');
   }
 
-  async function start() {
+  async function start(quickReply?: string) {
     if (locked.current || !(pauseTab || selected) || !props.ready || props.active) return;
     locked.current = true; stopped.current = false;
     setBusy(true); props.onBusy(true); setSettingsNeeded(false);
-    const guidance = question?.model && answer.trim() ? `Previous question: ${question.question}\nUser answer: ${answer.trim()}`.slice(0, 2000) : undefined;
-    setQuestion(null); setAnswer('');
+    const reply = quickReply ?? answer.trim();
+    const guidance = question?.model && !(openModuleRequest && quickReply === 'Done, resume now') && reply ? `Previous question: ${question.question}\nUser answer: ${reply}`.slice(0, 2000) : undefined;
+    setQuestion(null); setAnswer(''); setCustomReply(false);
     let targetId = (pauseTab || selected)!.targetId;
     try {
       setStage('Inspecting the page'); setMessage(`Reading ${(pauseTab || selected)!.title || 'the selected course tab'}…`);
@@ -187,17 +192,23 @@ export function GuidedRunner(props: {
   return <section className="space-y-5 rounded-lg border border-slate-300 bg-white p-5 sm:p-6" aria-labelledby="guided-title">
     <div><h2 id="guided-title" className="text-xl font-semibold text-slate-950">Work on a course</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">One action: inspect the page, use a recognised strategy, or start learning its controls with your AI provider.</p></div>
     <label className="grid gap-2 text-sm font-semibold text-slate-800">Course tab
-      <select value={props.selectedTarget} disabled={busy || props.active} onChange={(event) => { props.onSelect(event.target.value); setQuestion(null); setAnswer(''); setStage('Ready when you are'); setMessage('Inspect this tab to choose the next step.'); }} className="min-h-11 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 font-normal">
+      <select value={props.selectedTarget} disabled={busy || props.active} onChange={(event) => { props.onSelect(event.target.value); setQuestion(null); setAnswer(''); setCustomReply(false); setStage('Ready when you are'); setMessage('Inspect this tab to choose the next step.'); }} className="min-h-11 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 font-normal">
         <option value="">Choose the tab to inspect</option>{(session?.tabs || []).map((tab) => <option key={tab.targetId} value={tab.targetId}>{tab.title || tab.url}</option>)}
       </select>
     </label>
-    <div role="status" aria-live="polite"><p className="font-semibold text-slate-950">{stage}</p><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{message}</p></div>
-    {question ? <div className="space-y-3 border-t border-slate-200 pt-4"><p className="font-medium text-slate-900">{question.question}</p>
-      {question.model ? <><div className="flex flex-wrap gap-2">{question.options?.map((option) => <button key={option} type="button" onClick={() => setAnswer(option)} className={`min-h-11 rounded-md border px-3 text-sm ${answer === option ? 'border-cyan-700 bg-cyan-50' : 'border-slate-300'}`}>{option}</button>)}</div>
-        <label className="grid gap-2 text-sm font-medium">Your answer<textarea value={answer} maxLength={1400} onChange={(event) => setAnswer(event.target.value)} className="min-h-24 rounded-md border border-slate-300 p-3" /></label><p className="text-xs text-slate-600">Your answer goes to your chosen AI provider. Keep passwords and API keys in their dedicated sign-in or Settings screens.</p></> : null}
-    </div> : null}
+    {!question ? <div role="status" aria-live="polite"><p className="font-semibold text-slate-950">{stage}</p><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{message}</p></div> : null}
+    {question ? <section className="space-y-4 border-y border-cyan-200 bg-cyan-50 px-4 py-5 sm:px-5" aria-labelledby="assistant-request-title">
+      <h3 id="assistant-request-title" className="text-lg font-semibold text-cyan-950">{openModuleRequest || !question.model ? 'Action needed in the helper browser' : 'Your AI assistant has a question'}</h3>
+      <p className="max-w-2xl text-base font-medium leading-7 text-slate-950">{openModuleRequest ? 'Open the quiz question or module you want to work on in the helper browser. Then return here and resume.' : question.question}</p>
+      <p className="text-sm leading-6 text-cyan-900">{openModuleRequest ? 'Vitriol could not find quiz controls on this page. Learning is paused until you are ready.' : 'Learning is paused. Choose a reply below or write your own to continue.'}</p>
+      {question.model ? <>
+        {replies.length ? <div className="space-y-2"><p className="text-sm font-semibold text-cyan-950">{openModuleRequest ? 'When you are ready' : 'Suggested replies � click to send and continue'}</p><div className="flex flex-wrap gap-3">{replies.map((option) => <button key={option} type="button" disabled={!props.ready || busy || props.active} onClick={() => void start(option)} className="min-h-11 rounded-md bg-slate-950 px-4 py-3 text-left text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:opacity-40">{option}</button>)}</div></div> : null}
+        {!showReplyField ? <button type="button" onClick={() => setCustomReply(true)} className="min-h-11 text-sm font-semibold text-cyan-900 underline underline-offset-4">Write a different reply</button> : null}
+        {showReplyField ? <><label className="grid gap-2 text-sm font-medium text-slate-950">Your reply<textarea autoFocus={customReply} value={answer} maxLength={1400} onChange={(event) => setAnswer(event.target.value)} className="min-h-24 rounded-md border border-slate-400 bg-white p-3" /></label><p className="text-xs text-cyan-900">Replies may be shared with your AI provider. Do not include passwords or API keys.</p></> : null}
+      </> : null}
+    </section> : null}
     <div className="flex flex-wrap items-center gap-3">
-      <button type="button" onClick={() => void start()} disabled={!props.ready || !(pauseTab || selected) || busy || props.active || Boolean(question?.model && !answer.trim())} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}{busy ? 'Working…' : question?.model ? 'Send answer and continue' : question?.next || 'Inspect and start'}</button>
+      {(!question?.model || showReplyField || busy) ? <button type="button" onClick={() => void start()} disabled={!props.ready || !(pauseTab || selected) || busy || props.active || Boolean(question?.model && !answer.trim())} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}{busy ? 'Working…' : question?.model ? 'Send answer and continue' : question?.next || 'Inspect and start'}</button> : null}
       {busy ? <button type="button" onClick={() => void stop()} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold"><Square className="size-4" />Stop</button> : null}
       {settingsNeeded ? <a href="/settings" className="font-semibold text-cyan-800 underline">Connect or test AI in Settings</a> : null}
     </div>
