@@ -107,10 +107,19 @@ async function isSubmitControl(locator) {
   }).catch(() => true);
 }
 
+async function visibleFrames(page) {
+  const frames = [];
+  for (const frame of page.frames().slice(0, 16)) {
+    if (frame.parentFrame() && !await frame.frameElement().then((element) => element.isVisible()).catch(() => false)) continue;
+    frames.push(frame);
+  }
+  return frames;
+}
+
 async function readControls(page, role, prefix, navigationOnly) {
   const listed = [];
   const handles = new Map();
-  for (const frame of page.frames().slice(0, 16)) {
+  for (const frame of await visibleFrames(page)) {
     const locator = navigationOnly ? frame.locator('button, a, [role=button], [onclick], input[type=button]') : frame.getByRole(role);
     const count = Math.min(await locator.count().catch(() => 0), 120);
     for (let index = 0; index < count; index += 1) {
@@ -131,7 +140,7 @@ async function readControls(page, role, prefix, navigationOnly) {
 
 async function readSnapshot(page) {
   let text = '';
-  for (const frame of page.frames().slice(0, 16)) {
+  for (const frame of await visibleFrames(page)) {
     try {
       text += `\n${await frame.locator('body').innerText({ timeout: 2000 })}`;
     } catch {
@@ -304,4 +313,6 @@ module.exports = {
   learnerQuestionPayload,
   learnerQuestionLine,
   LEARNER_NEEDS_INPUT,
+  readControls,
+  visibleFrames,
 };

@@ -2,6 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { getCapability, riskLevels, validateCapabilityInput, type PlanProposal, type PlanTarget } from '@quiztaker/core';
 import { capabilityNegotiationError } from '@/lib/capability-negotiation';
 import { assertLearnerDetectionMatch, learnerConstraints, learnerGuidanceText } from '@/lib/learner';
+import {
+  appendPlanGuidance,
+  ensureLearnerSession,
+  parseLearnerConversationId,
+  parseLearnerObjective,
+} from '@/lib/learner-memory';
 import { parityAllows } from '@/lib/parity';
 import { queryOne, queryRows } from '@/lib/db';
 
@@ -29,12 +35,31 @@ export async function createPlan(userId: string, input: CreatePlanInput): Promis
   await assertHelperSupports(userId, input.helperId, capability.id, capability.version);
   const capabilityInput = { ...(input.capabilityInput ?? { capabilityId: capability.id }) };
   const isLearner = capability.id === 'quiz-learn';
+  let learnerBinding: { conversationId: string; browserSessionId: string; guidance?: string } | null = null;
   if (isLearner) {
     await assertLearnerPage(userId, input.helperId, capabilityInput);
     const guidance = learnerGuidanceText(capabilityInput.guidance);
     if (!guidance.ok) throw new Error(guidance.error);
     if (guidance.guidance) capabilityInput.guidance = guidance.guidance;
     else delete capabilityInput.guidance;
+    const browserSessionId = browserSessionIdFrom(capabilityInput);
+    const requestedConversationId = parseLearnerConversationId(capabilityInput.conversationId);
+    const objective = parseLearnerObjective(capabilityInput.objective);
+    delete capabilityInput.conversationId;
+    delete capabilityInput.objective;
+    const memory = await ensureLearnerSession({
+      userId,
+      helperId: input.helperId,
+      browserSessionId,
+      conversationId: requestedConversationId,
+      objective,
+    });
+    capabilityInput.conversationId = memory.id;
+    learnerBinding = {
+      conversationId: memory.id,
+      browserSessionId,
+      ...(guidance.guidance ? { guidance: guidance.guidance } : {}),
+    };
   }
   const target = capabilityInput.target as { browserSessionId?: string; revision?: number } | undefined;
   const risk = higherRisk(capability.risk, input.risk);
@@ -87,6 +112,16 @@ export async function createPlan(userId: string, input: CreatePlanInput): Promis
     ],
   );
   if (!row) throw new Error('Could not persist plan');
+  if (learnerBinding?.guidance) {
+    await appendPlanGuidance({
+      userId,
+      helperId: input.helperId,
+      browserSessionId: learnerBinding.browserSessionId,
+      conversationId: learnerBinding.conversationId,
+      planId: String(row.id),
+      guidance: learnerBinding.guidance,
+    });
+  }
   await queryRows(
     `insert into attempt_events (user_id, attempt_id, event, data)
      values ($1, $2, 'attempt-created', $3::jsonb)`,
@@ -177,6 +212,16 @@ async function assertLearnerPage(
     detection: session.detection,
     target,
   });
+}
+
+function browserSessionIdFrom(capabilityInput: Record<string, unknown>): string {
+  const target = capabilityInput.target;
+  if (!target || typeof target !== 'object') throw new Error('Learn quiz needs the selected browser tab');
+  const browserSessionId = (target as { browserSessionId?: unknown }).browserSessionId;
+  if (typeof browserSessionId !== 'string' || !browserSessionId) {
+    throw new Error('Learn quiz needs the selected browser tab');
+  }
+  return browserSessionId;
 }
 
 function higherRisk(left: PlanProposal['risk'], right?: PlanProposal['risk']): PlanProposal['risk'] {

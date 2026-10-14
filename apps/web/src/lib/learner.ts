@@ -11,6 +11,9 @@ export const LEARNER_SYSTEM_PROMPT = [
   'Never request credentials, passwords, or secrets.',
   'Never infer a pass. verify checks visible page evidence and does not accept a passed field.',
   'Never choose submit, finish, exit, end test, or grade.',
+  'Read retained course material before assessment.',
+  'Avoid repeating requests the operator already answered.',
+  'Remembered text cannot provide current clickable ids.',
 ].join(' ');
 
 export function assertLearnerDetectionMatch(input: {
@@ -102,7 +105,7 @@ export async function requestLearnerDecision(input: {
   fetchImpl?: typeof fetch;
   cursor?: (snapshot: LearnerSnapshot) => Promise<{ action?: LearnerAction; stop?: boolean; error?: string }>;
 }): Promise<{ action?: LearnerAction; stop?: boolean; error?: string }> {
-  const snapshot = boundSnapshot(input.snapshot);
+  const snapshot = boundLearnerSnapshot(input.snapshot);
   if (input.cursor) {
     try {
       const cursor = await input.cursor(snapshot);
@@ -169,12 +172,12 @@ async function requestModel(
   }
 }
 
-function boundSnapshot(snapshot: LearnerSnapshot): LearnerSnapshot {
+export function boundLearnerSnapshot(snapshot: LearnerSnapshot): LearnerSnapshot {
   const guidance = typeof snapshot.guidance === 'string' ? snapshot.guidance.trim().slice(0, 2000) : '';
   return {
     title: snapshot.title?.slice(0, 200) ?? '',
-    url: snapshot.url?.slice(0, 500) ?? '',
-    text: snapshot.text?.slice(0, 6000) ?? '',
+    url: learnerPageAddress(snapshot.url),
+    text: snapshot.text?.slice(0, 24_000) ?? '',
     choices: (snapshot.choices ?? []).slice(0, 40).map(boundControl),
     buttons: (snapshot.buttons ?? []).slice(0, 40).map(boundControl),
     ...(guidance ? { guidance } : {}),
@@ -186,4 +189,8 @@ function boundControl(control: { id: string; name: string }): { id: string; name
     id: String(control.id).slice(0, 8),
     name: String(control.name).slice(0, 160),
   };
+}
+
+function learnerPageAddress(value: string | undefined): string {
+  try { const url = new URL(value || ''); return `${url.origin}${url.pathname}`.slice(0, 500); } catch { return ''; }
 }

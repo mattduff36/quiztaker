@@ -1,0 +1,323 @@
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import test from 'node:test';
+import type { SqlQuery } from '../src/lib/db.js';
+import { LEARNER_SYSTEM_PROMPT, boundLearnerSnapshot } from '../src/lib/learner.js';
+import {
+  LEARNER_DISPLAY_CHARS,
+  LEARNER_HISTORY_LIMIT,
+  LEARNER_MATERIAL_CHARS,
+  LEARNER_MATERIAL_LIMIT,
+  addLearnerMaterial,
+  appendPlanGuidance,
+  boundLearnerHistory,
+  composeLearnerSnapshot,
+  displayLearnerHistory,
+  ensureLearnerSession,
+  learnerMemorySql,
+  parseLearnerConversationId,
+  parseLearnerObjective,
+  readLearnerSessionForModel,
+  readLearnerSessionForOperator,
+  recordLearnerTurn,
+  utf8Text,
+  type LearnerHistoryEntry,
+  type LearnerMaterial,
+  type LearnerMemoryDeps,
+} from '../src/lib/learner-memory.js';
+
+const userA = 'user-a';
+const userB = 'user-b';
+const helperA = '11111111-1111-4111-8111-111111111111';
+const helperB = '22222222-2222-4222-8222-222222222222';
+const browserA = '33333333-3333-4333-8333-333333333333';
+const browserB = '44444444-4444-4444-8444-444444444444';
+
+interface MemoryRow {
+  id: string;
+  user_id: string;
+  helper_id: string;
+  browser_session_id: string | null;
+  objective: string | null;
+  history: unknown;
+  materials: unknown;
+  created_at: string;
+  updated_at: string;
+}
+
+function createHarness(): LearnerMemoryDeps & { rows: MemoryRow[]; queries: string[] } {
+  const rows: MemoryRow[] = [];
+  const queries: string[] = [];
+  let tick = 0;
+  const stamp = () => {
+    tick += 1;
+    return new Date(Date.UTC(2026, 0, 1, 0, 0, tick)).toISOString();
+  };
+  const query: SqlQuery = async <T = Record<string, unknown>>(sql: string, values: unknown[] = []) => {
+    queries.push(sql);
+    if (sql === learnerMemorySql.lockScope) return [];
+    if (sql === learnerMemorySql.lockById || sql === learnerMemorySql.readModel) {
+      const [id, userId, helperId, browserSessionId] = values;
+      return rows.filter((row) => (
+        row.id === id
+        && row.user_id === userId
+        && row.helper_id === helperId
+        && row.browser_session_id === browserSessionId
+      )).map(cloneRow) as T[];
+    }
+    if (sql === learnerMemorySql.lockLatest) {
+      const [userId, helperId, browserSessionId] = values;
+      return rows
+        .filter((row) => row.user_id === userId && row.helper_id === helperId && row.browser_session_id === browserSessionId)
+        .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+        .slice(0, 1)
+        .map(cloneRow) as T[];
+    }
+    if (sql === learnerMemorySql.insert) {
+      const [userId, helperId, browserSessionId, objective, history, materials] = values;
+      const at = stamp();
+      const row: MemoryRow = {
+        id: randomUUID(),
+        user_id: String(userId),
+        helper_id: String(helperId),
+        browser_session_id: browserSessionId == null ? null : String(browserSessionId),
+        objective: objective == null ? null : String(objective),
+        history: JSON.parse(String(history)),
+        materials: JSON.parse(String(materials)),
+        created_at: at,
+        updated_at: at,
+      };
+      rows.push(row);
+      return [cloneRow(row)] as T[];
+    }
+    if (sql === learnerMemorySql.update) {
+      const [id, objective, history, materials, userId, helperId, browserSessionId] = values;
+      const row = rows.find((item) => (
+        item.id === id
+        && item.user_id === userId
+        && item.helper_id === helperId
+        && item.browser_session_id === browserSessionId
+      ));
+      if (!row) return [] as T[];
+      row.objective = objective == null ? null : String(objective);
+      row.history = JSON.parse(String(history));
+      row.materials = JSON.parse(String(materials));
+      row.updated_at = stamp();
+      return [cloneRow(row)] as T[];
+    }
+    if (sql === learnerMemorySql.readOperator) {
+      const [userId, helperId, browserSessionId] = values;
+      return rows
+        .filter((row) => (
+          row.user_id === userId
+          && row.helper_id === helperId
+          && (browserSessionId == null || row.browser_session_id === browserSessionId)
+        ))
+        .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+        .slice(0, 1)
+        .map((row) => ({ id: row.id, objective: row.objective, history: structuredClone(row.history) })) as T[];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+  return {
+    rows,
+    queries,
+    query,
+    transaction: async (fn) => fn(query),
+  };
+}
+
+function cloneRow(row: MemoryRow): MemoryRow {
+  return structuredClone(row);
+}
+
+test('bounds history and distinct material snapshots', () => {
+  const history: LearnerHistoryEntry[] = Array.from({ length: LEARNER_HISTORY_LIMIT + 5 }, (_, index) => ({
+    role: 'assistant',
+    text: `decision-${index}`,
+    at: '2026-01-01T00:00:00.000Z',
+  }));
+  const bounded = boundLearnerHistory(history);
+  assert.equal(bounded.length, LEARNER_HISTORY_LIMIT);
+  assert.equal(bounded[0]?.text, 'decision-5');
+  assert.equal(bounded.at(-1)?.text, `decision-${LEARNER_HISTORY_LIMIT + 4}`);
+
+  let materials: LearnerMaterial[] = [];
+  for (let index = 0; index < LEARNER_MATERIAL_LIMIT + 1; index += 1) {
+    materials = addLearnerMaterial(materials, { text: `${index}-${'x'.repeat(LEARNER_MATERIAL_CHARS + 50)}` }, `2026-01-01T00:00:${index.toString().padStart(2, '0')}.000Z`);
+  }
+  assert.equal(materials.length, LEARNER_MATERIAL_LIMIT);
+  assert.equal(materials.some((item) => item.text.startsWith('0-')), false);
+  assert.equal(materials[0]?.text.startsWith('1-'), true);
+  assert.equal(materials.every((item) => item.text.length === LEARNER_MATERIAL_CHARS), true);
+  const again = addLearnerMaterial(materials, { text: materials[3]?.text ?? '' });
+  assert.equal(again.length, LEARNER_MATERIAL_LIMIT);
+  assert.equal(again.at(-1)?.text, materials[3]?.text);
+});
+
+test('utf-8 text keeps whole code points', () => {
+  assert.equal(utf8Text('🙂🙂🙂', 2), '🙂🙂');
+  assert.equal(Array.from(utf8Text(`é${'x'.repeat(20)}`, 2)).length, 2);
+});
+
+test('injected database enforces owner, helper, browser session, dedup, and history bounds', async () => {
+  const db = createHarness();
+  const scope = { userId: userA, helperId: helperA, browserSessionId: browserA };
+  const created = await ensureLearnerSession({ ...scope, objective: 'Finish the module' }, db);
+  const reused = await ensureLearnerSession(scope, db);
+  assert.equal(reused.id, created.id);
+  assert.equal(db.rows.length, 1);
+  const otherBrowser = await ensureLearnerSession({ ...scope, browserSessionId: browserB, objective: 'Other tab' }, db);
+  assert.notEqual(otherBrowser.id, created.id);
+
+  await assert.rejects(
+    ensureLearnerSession({ ...scope, userId: userB, conversationId: created.id }, db),
+    /Learner conversation was not found/,
+  );
+  await assert.rejects(
+    ensureLearnerSession({ ...scope, helperId: helperB, conversationId: created.id }, db),
+    /Learner conversation was not found/,
+  );
+  await assert.rejects(
+    ensureLearnerSession({ ...scope, browserSessionId: browserB, conversationId: created.id }, db),
+    /Learner conversation was not found/,
+  );
+  assert.equal(await readLearnerSessionForModel({ ...scope, userId: userB, conversationId: created.id }, db), null);
+  assert.equal(await readLearnerSessionForOperator({ userId: userB, helperId: helperA }, db), null);
+
+  const planId = randomUUID();
+  await appendPlanGuidance({ ...scope, conversationId: created.id, planId, guidance: 'The reservoir answer is 42' }, db);
+  await appendPlanGuidance({ ...scope, conversationId: created.id, planId, guidance: 'The reservoir answer is 42' }, db);
+  for (let index = 0; index < 3; index += 1) {
+    await recordLearnerTurn({
+      ...scope,
+      conversationId: created.id,
+      observed: { title: 'Page', url: 'https://example.test/quiz', text: 'PAGE-BODY-MARKER targetId b1' },
+      decision: { action: { action: 'ask-user', question: 'Which module?', options: ['Module 1'] } },
+    }, db);
+  }
+  const deduped = await readLearnerSessionForModel({ ...scope, conversationId: created.id }, db);
+  assert.equal(deduped?.materials.length, 1);
+  assert.equal(deduped?.history.filter((entry) => entry.role === 'user' && entry.planId === planId).length, 1);
+  for (let index = 0; index < LEARNER_HISTORY_LIMIT; index += 1) {
+    await recordLearnerTurn({
+      ...scope,
+      conversationId: created.id,
+      observed: { text: `distinct-page-${index}` },
+      decision: { stop: true, error: `stop-${index}` },
+    }, db);
+  }
+  const stored = await readLearnerSessionForModel({ ...scope, conversationId: created.id }, db);
+  assert.ok(stored);
+  assert.equal(stored.history.length, LEARNER_HISTORY_LIMIT);
+  assert.equal(stored.history.some((entry) => entry.planId === planId), true);
+  assert.equal(stored.materials.length, LEARNER_MATERIAL_LIMIT);
+  assert.ok(stored.materials.every((item) => item.text.length <= LEARNER_MATERIAL_CHARS));
+  assert.ok(db.queries.includes(learnerMemorySql.lockById));
+  assert.match(learnerMemorySql.lockById, /for update/);
+  assert.match(learnerMemorySql.lockLatest, /for update/);
+  assert.match(learnerMemorySql.readModel, /user_id = \$2 and helper_id = \$3 and browser_session_id = \$4/);
+});
+
+test('a later job keeps the prior answer and only the new clickable controls', async () => {
+  const db = createHarness();
+  const scope = { userId: userA, helperId: helperA, browserSessionId: browserA };
+  const first = await ensureLearnerSession({ ...scope, objective: 'Finish the module' }, db);
+  await appendPlanGuidance({
+    ...scope,
+    conversationId: first.id,
+    planId: randomUUID(),
+    guidance: 'The reservoir answer is 42',
+  }, db);
+  await recordLearnerTurn({
+    ...scope,
+    conversationId: first.id,
+    observed: { text: 'PAGE-BODY-MARKER targetId b1' },
+    decision: { action: { action: 'ask-user', question: 'Which module?', options: ['Module 1'] } },
+  }, db);
+  await appendPlanGuidance({
+    ...scope,
+    conversationId: first.id,
+    planId: randomUUID(),
+    guidance: 'Continue from the answered reservoir question',
+  }, db);
+  const retained = await readLearnerSessionForModel({ ...scope, conversationId: first.id }, db);
+  const model = boundLearnerSnapshot(composeLearnerSnapshot({
+    text: 'Question 2',
+    guidance: ` ${'g'.repeat(2500)}`,
+    buttons: [{ id: 'b9', name: 'Next' }],
+    choices: [{ id: 'c9', name: 'Other' }],
+  }, retained));
+  assert.equal(model.text?.startsWith('Question 2'), true);
+  assert.ok((model.text?.indexOf('Question 2') ?? -1) < (model.text?.indexOf('42') ?? -1));
+  assert.match(model.text ?? '', /Which module\?/);
+  assert.match(model.text ?? '', /Read retained course material before assessment/);
+  assert.equal(model.guidance?.length, 2000);
+  assert.deepEqual(model.buttons, [{ id: 'b9', name: 'Next' }]);
+  assert.deepEqual(model.choices, [{ id: 'c9', name: 'Other' }]);
+  assert.equal(model.buttons?.some((item) => item.id === 'b1'), false);
+
+  const operator = await readLearnerSessionForOperator({
+    userId: userA,
+    helperId: helperA,
+    browserSessionId: browserA,
+  }, db);
+  assert.equal(operator?.id, first.id);
+  assert.equal(operator?.objective, 'Finish the module');
+  assert.equal(JSON.stringify(operator).includes('PAGE-BODY-MARKER'), false);
+  assert.equal(JSON.stringify(operator).includes('planId'), false);
+  const otherTab = await readLearnerSessionForOperator({
+    userId: userA,
+    helperId: helperA,
+    browserSessionId: browserB,
+  }, db);
+  assert.equal(otherTab, null);
+});
+
+test('display history is capped and model text stays within the snapshot cap', () => {
+  const shown = displayLearnerHistory([{ role: 'user', text: 'answered '.repeat(400), at: '2026-01-01T00:00:00.000Z', planId: 'plan-1' }]);
+  assert.equal(shown[0]?.text.length, LEARNER_DISPLAY_CHARS);
+  assert.equal('planId' in (shown[0] ?? {}), false);
+  const bound = boundLearnerSnapshot(composeLearnerSnapshot({
+    text: 'C'.repeat(8000),
+    buttons: [{ id: 'b9', name: 'Next' }],
+  }, {
+    history: [{ role: 'user', text: 'PRIOR-ANSWER', at: '2026-01-01T00:00:00.000Z' }],
+    materials: [
+      { text: 'M'.repeat(8000), title: '', url: '', at: '2026-01-01T00:00:00.000Z' },
+      { text: 'N'.repeat(8000), title: '', url: '', at: '2026-01-01T00:00:01.000Z' },
+    ],
+  }));
+  assert.ok((bound.text?.length ?? 0) <= 24_000);
+  assert.equal(bound.text?.startsWith('C'.repeat(8000)), true);
+  assert.match(bound.text ?? '', /PRIOR-ANSWER/);
+  assert.match(LEARNER_SYSTEM_PROMPT, /Avoid repeating requests the operator already answered/);
+  assert.match(LEARNER_SYSTEM_PROMPT, /Read retained course material before assessment/);
+  assert.match(LEARNER_SYSTEM_PROMPT, /Remembered text cannot provide current clickable ids/);
+});
+
+test('conversation id and objective parsers reject unbounded input', () => {
+  assert.equal(parseLearnerConversationId(null), null);
+  assert.equal(parseLearnerConversationId(helperA), helperA);
+  assert.throws(() => parseLearnerConversationId('not-a-uuid'), /invalid/);
+  assert.equal(parseLearnerObjective('  Finish module  '), 'Finish module');
+  assert.throws(() => parseLearnerObjective('x'.repeat(1001)), /too long/);
+  assert.throws(() => parseLearnerObjective(12), /must be text/);
+});
+
+
+test('navigation cannot evict user requests and pending questions restore with their page', () => {
+  const history: LearnerHistoryEntry[] = [
+    { role: 'user', text: 'Read Device Features then its assessment', at: '2026-01-01' },
+    ...Array.from({ length: 70 }, () => ({ role: 'assistant' as const, text: '{"action":{"action":"click","targetId":"b1"}}', at: '2026-01-01' })),
+    { role: 'assistant', text: JSON.stringify({ action: { action: 'ask-user', question: 'q'.repeat(500), options: ['Done, resume now'] } }), at: '2026-01-01', url: 'https://example.com/course' },
+  ];
+  const bounded = boundLearnerHistory(history);
+  assert.equal(bounded.length, 40);
+  assert.equal(bounded[0].role, 'user');
+  const shown = displayLearnerHistory(bounded).at(-1)!;
+  assert.equal(JSON.parse(shown.text).action.question.length, 500);
+  assert.equal(shown.url, 'https://example.com/course');
+  const composed = composeLearnerSnapshot({ text: 'current page' }, { objective: 'Read Device Features first', history: bounded, materials: [] });
+  assert.match(composed.text!, /Operator goal: Read Device Features first/);
+});

@@ -82,3 +82,19 @@ test('page evidence decides a pass instead of the model', () => {
   assert.equal(pageShowsPass({ title: 'Result', text: 'You passed this quiz' }), true);
   assert.equal(pageShowsPass({ text: 'Your score: 100%' }), true);
 });
+
+
+test('embedded course navigation includes visible link buttons and skips hidden controls', async () => {
+  const { readControls } = require('./pw-learn-quiz');
+  function control(name, visible = true, submit = false) {
+    return { isVisible: async () => visible, isEnabled: async () => true,
+      getAttribute: async () => name, evaluate: async () => submit };
+  }
+  const controls = [control('Start'), control('Next', false), control('Finish'), control('Continue', true, true)];
+  const content = { parentFrame: () => ({}), frameElement: async () => ({ isVisible: async () => true }),
+    locator: (selector) => { assert.match(selector, /a,/); return { count: async () => controls.length, nth: (i) => controls[i] }; } };
+  const hidden = { parentFrame: () => ({}), frameElement: async () => ({ isVisible: async () => false }), locator: () => { throw new Error('Hidden tracking frame must not be read'); } };
+  const result = await readControls({ frames: () => [hidden, content] }, 'button', 'b', true);
+  assert.deepEqual(result.listed, [{ id: 'b1', name: 'Start' }]);
+  assert.equal(result.handles.get('b1'), controls[0]);
+});

@@ -10,6 +10,17 @@ type Session = { id: string; revision: number; tabs: Tab[]; cdp_connected: boole
 type Context = { helper: { id: string; is_online: boolean; version: string } | null; session?: Session | null; learnerEnabled?: boolean; activeJob?: { id: string; status: string } | null };
 type Job = { id: string; status: string; outcome?: { verified?: boolean; status?: string }; result?: { ok?: boolean; result?: { detection?: GuidedDetection } } };
 type Question = { question: string; options?: string[]; next?: string; model?: boolean; targetId?: string; sessionId?: string; url?: string };
+type RememberedTurn = { role: 'user' | 'assistant'; text: string; url?: string };
+type CourseMemory = { browserSessionId?: string; id: string | null; objective: string | null; history: RememberedTurn[] };
+function rememberedQuestion(memory: CourseMemory | null) {
+  const last = memory?.history.at(-1);
+  if (last?.role !== 'assistant' || !last.url) return null;
+  try { const decision = JSON.parse(last.text); return decision.action?.action === 'ask-user' ? learnerQuestion(`LEARNER_QUESTION ${JSON.stringify({ ...decision.action, url: last.url })}`) : null; } catch { return null; }
+}
+function conversationText(turn: RememberedTurn): string | null {
+  if (turn.role === 'user') return turn.text.replace(/^Previous question:[\s\S]*?\nUser answer: /, '');
+  try { const value = JSON.parse(turn.text); return value.action?.action === 'ask-user' ? value.action.question : null; } catch { return null; }
+}
 const running = (status: string) => ['queued', 'dispatched', 'running'].includes(status);
 
 export function GuidedRunner(props: {
@@ -32,15 +43,20 @@ export function GuidedRunner(props: {
   const [answer, setAnswer] = useState('');
   const [customReply, setCustomReply] = useState(false);
   const [settingsNeeded, setSettingsNeeded] = useState(false);
+  const [objective, setObjective] = useState('Read the selected course material, then work through its related quiz.');
+  const [memory, setMemory] = useState<CourseMemory | null>(null);
+  const objectiveEdited = useRef(false);
   const locked = useRef(false);
   const stopped = useRef(false);
   const mounted = useRef(true);
   const ownedJob = useRef<string | null>(null);
   const session = props.session;
+  const currentMemory = memory?.browserSessionId === session?.id ? memory : null;
   const selected = session?.tabs.find((tab) => tab.targetId === props.selectedTarget);
   const savedTarget = props.lastJob?.input?.target;
-  const restoredQuestion = !busy && props.lastJob?.id === props.outputJobId && props.lastJob?.capability_id === 'quiz-learn' && !running(props.lastJob.status)
+  const outputQuestion = !busy && props.lastJob?.id === props.outputJobId && props.lastJob?.capability_id === 'quiz-learn' && !running(props.lastJob.status)
     && savedTarget?.browserSessionId === session?.id ? learnerQuestion(props.lastOutput) : null;
+  const restoredQuestion = outputQuestion || (!busy ? rememberedQuestion(currentMemory) : null);
   const currentPauseTab = uniqueQuestionTab(currentQuestion?.url, session?.tabs || []);
   const restoredPauseTab = uniqueQuestionTab(restoredQuestion?.url, session?.tabs || []);
   const question: Question | null = (currentQuestion && currentPauseTab && currentQuestion.sessionId === session?.id
@@ -58,6 +74,16 @@ export function GuidedRunner(props: {
   }, [busy, pauseTargetId, selectedTarget, onSelect]);
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; stopped.current = true; }; }, []);
+
+  useEffect(() => {
+    if (!session?.id || busy) return;
+    let ignore = false;
+    void fetch(`/api/operations/learning?helperId=${encodeURIComponent(props.helperId)}&sessionId=${encodeURIComponent(session.id)}`, { cache: 'no-store' })
+      .then((response) => readJsonResponse<CourseMemory>(response, 'Could not load course memory'))
+      .then((value) => { if (!ignore) { setMemory({ ...value, browserSessionId: session.id }); if (value.objective && !objectiveEdited.current) setObjective(value.objective); } })
+      .catch(() => { if (!ignore) setMemory(null); });
+    return () => { ignore = true; };
+  }, [props.helperId, session?.id, props.lastJob?.id, props.lastJob?.status, busy]);
 
   async function api<T>(url: string, body?: unknown, method?: string): Promise<T> {
     const response = await fetch(url, { method: method || (body ? 'POST' : 'GET'), cache: 'no-store', signal: AbortSignal.timeout(20_000), ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
@@ -80,7 +106,7 @@ export function GuidedRunner(props: {
     checkStopped();
     const planned = await api<{ plan?: { planId: string }; jobId?: string }>('/api/operations/actions', {
       action: 'plan', helperId: props.helperId, capabilityId,
-      capabilityInput: { capabilityId, ...(target ? { target } : {}), ...(guidance ? { guidance } : {}) },
+      capabilityInput: { capabilityId, ...(target ? { target } : {}), ...(guidance ? { guidance } : {}), ...(capabilityId === 'quiz-learn' ? { objective, ...(currentMemory?.id ? { conversationId: currentMemory.id } : {}) } : {}) },
       confirm: true, source: 'auto-detect',
     });
     let jobId = planned.jobId;
@@ -114,7 +140,7 @@ export function GuidedRunner(props: {
     setBusy(true); props.onBusy(true); setSettingsNeeded(false);
     const reply = quickReply ?? answer.trim();
     const guidance = question?.model && !(openModuleRequest && quickReply === 'Done, resume now') && reply ? `Previous question: ${question.question}\nUser answer: ${reply}`.slice(0, 2000) : undefined;
-    setQuestion(null); setAnswer(''); setCustomReply(false);
+    setQuestion(null);
     let targetId = (pauseTab || selected)!.targetId;
     try {
       setStage('Inspecting the page'); setMessage(`Reading ${(pauseTab || selected)!.title || 'the selected course tab'}…`);
@@ -151,6 +177,7 @@ export function GuidedRunner(props: {
       const launch = await freshContext(targetId);
       if (launch.tab.fingerprint !== fresh.tab.fingerprint) throw new Error('The page changed before the run started. Inspect it again.');
       const result = await waitForJob(await queue(capability, launch.target, guidance));
+      setAnswer(''); setCustomReply(false);
       const asked = learnerQuestion(result.output);
       if (asked) {
         const paused = await api<Context>('/api/operations/context');
@@ -173,7 +200,7 @@ export function GuidedRunner(props: {
         setMessage(providerProblem ? 'The AI connection did not complete a request. Test your provider in Settings, then try again.' : 'The run stopped without verified completion. You can inspect again after opening the intended question or resolving the issue shown in Advanced tools.');
       }
     } catch (error) {
-      if (mounted.current) { setStage(stopped.current ? 'Stopped' : 'Your input is needed'); setMessage(error instanceof Error ? error.message : 'The run could not continue. Inspect again.'); }
+      if (mounted.current) { if (question) setQuestion(question); setStage(stopped.current ? 'Stopped' : 'Your input is needed'); setMessage(error instanceof Error ? error.message : 'The run could not continue. Inspect again.'); }
     } finally {
       locked.current = false;
       if (mounted.current) { setBusy(false); props.onBusy(false); void props.onRefresh(); }
@@ -196,6 +223,7 @@ export function GuidedRunner(props: {
         <option value="">Choose the tab to inspect</option>{(session?.tabs || []).map((tab) => <option key={tab.targetId} value={tab.targetId}>{tab.title || tab.url}</option>)}
       </select>
     </label>
+    <label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol work towards?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setObjective(event.target.value); }} disabled={busy || props.active} maxLength={1000} rows={2} className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6" /><span className="text-xs font-normal text-slate-600">This goal and your replies are remembered as you move through the course.</span></label>
     {!question ? <div role="status" aria-live="polite"><p className="font-semibold text-slate-950">{stage}</p><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{message}</p></div> : null}
     {question ? <section className="space-y-4 border-t border-slate-200 pt-5" aria-labelledby="assistant-request-title">
       <h3 id="assistant-request-title" className="text-base font-semibold text-slate-950">{openModuleRequest || !question.model ? 'Action needed in the helper browser' : 'Your AI assistant has a question'}</h3>
@@ -214,6 +242,7 @@ export function GuidedRunner(props: {
       {busy ? <button type="button" onClick={() => void stop()} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold"><Square className="size-4" />Stop</button> : null}
       {settingsNeeded ? <a href="/settings" className="font-semibold text-cyan-800 underline">Connect or test AI in Settings</a> : null}
     </div>
+    {currentMemory?.history.some((turn) => conversationText(turn)) ? <details className="rounded-md border border-slate-200 bg-slate-50 p-4"><summary className="cursor-pointer text-sm font-semibold text-slate-700">Conversation remembered for this course</summary><ol className="mt-4 space-y-3">{currentMemory.history.map((turn, index) => { const text = conversationText(turn); return text ? <li key={index} className="text-sm leading-6 text-slate-700"><span className="font-semibold">{turn.role === 'user' ? 'You' : 'AI assistant'}: </span>{text}</li> : null; })}</ol></details> : null}
     <p className="max-w-2xl text-xs leading-5 text-slate-600">Starting authorises the supported strategy for this tab. Learning can read page text, select answers and navigate, but will not submit a final assessment. Keep this page open; leaving it stops automatic follow-up steps. Any current helper job remains visible in Advanced tools.</p>
   </section>;
 }

@@ -1,10 +1,16 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { LEARNER_MAX_STEPS, type LearnerSnapshot } from '@/lib/learner';
+import { LEARNER_MAX_STEPS, type LearnerAction, type LearnerSnapshot } from '@/lib/learner';
 import { queryOne, withTransaction } from '@/lib/db';
 import { getServerEnv } from '@/lib/env';
 import { askCursorLearner } from '@/lib/cursor-learner';
-import { learnerGuidanceText, learnerModelChain, learnerPrefersCursor, requestLearnerDecision } from '@/lib/learner';
+import { boundLearnerSnapshot, learnerGuidanceText, learnerModelChain, learnerPrefersCursor, requestLearnerDecision } from '@/lib/learner';
+import {
+  composeLearnerSnapshot,
+  parseLearnerConversationId,
+  readLearnerSessionForModel,
+  recordLearnerTurn,
+} from '@/lib/learner-memory';
 import {
   chooseProposalLearner,
   completeHostedChat,
@@ -41,9 +47,11 @@ export async function POST(
     capability_id: string;
     attempt_id: string;
     constraints: { maxSteps?: number; submissionAuthorized?: boolean } | null;
-    input: { guidance?: unknown } | null;
+    input: { guidance?: unknown; conversationId?: unknown } | null;
+    browser_session_id: string | null;
   }>(
-    `select jobs.status, jobs.capability_id, plans.attempt_id, plans.constraints, plans.input
+    `select jobs.status, jobs.capability_id, plans.attempt_id, plans.constraints, plans.input,
+            plans.browser_session_id
      from jobs
      join plans on plans.id = jobs.plan_id
      where jobs.id = $1 and jobs.helper_id = $2 and jobs.user_id = $3`,
@@ -71,6 +79,23 @@ export async function POST(
     buttons: incoming.buttons,
     ...(storedGuidance.guidance ? { guidance: storedGuidance.guidance } : {}),
   };
+  const conversation = storedConversation(job.input?.conversationId, job.browser_session_id);
+  if (!conversation.ok) return NextResponse.json({ stop: true, error: conversation.error });
+  let retained: Awaited<ReturnType<typeof readLearnerSessionForModel>> = null;
+  if (conversation.id) {
+    try {
+      retained = await readLearnerSessionForModel({
+        userId: helper.userId,
+        helperId: helper.helperId,
+        browserSessionId: conversation.browserSessionId,
+        conversationId: conversation.id,
+      });
+    } catch {
+      return NextResponse.json({ stop: true, error: 'Learner memory could not be read' });
+    }
+    if (!retained) return NextResponse.json({ stop: true, error: 'Learner conversation was not found' });
+  }
+  const modelSnapshot = boundLearnerSnapshot(composeLearnerSnapshot(snapshot, retained));
   const stored = await loadSecretLlmConnection(helper.userId);
   const choice = chooseProposalLearner(stored);
   if (choice.kind === 'disabled') {
@@ -113,10 +138,11 @@ export async function POST(
       provider: choice.provider,
       model: choice.model,
       apiKey,
-      snapshot,
+      snapshot: modelSnapshot,
     });
-    if (!personal.ok) return NextResponse.json({ stop: true, error: personal.error });
-    return NextResponse.json({ action: personal.action });
+    return finishLearnerDecision(conversation, helper.userId, helper.helperId, incoming, personal.ok
+      ? { action: personal.action }
+      : { stop: true, error: personal.error });
   }
   const env = getServerEnv();
   const cursorKey = env.CURSOR_API_KEY;
@@ -134,13 +160,58 @@ export async function POST(
       models: env.LEARNER_MODELS,
       baseUrl: env.LEARNER_BASE_URL,
     }),
-    snapshot,
+    snapshot: modelSnapshot,
     cursor: preferCursor && cursorKey
-      ? (snapshot) => askCursorLearner({ apiKey: cursorKey, model: env.CURSOR_MODEL, snapshot })
+      ? (current) => askCursorLearner({ apiKey: cursorKey, model: env.CURSOR_MODEL, snapshot: current })
       : undefined,
   });
-  if (!decision.action || decision.stop) {
-    return NextResponse.json({ stop: true, error: decision.error || 'Learner stopped' });
+  return finishLearnerDecision(
+    conversation,
+    helper.userId,
+    helper.helperId,
+    incoming,
+    decision.action && !decision.stop
+      ? { action: decision.action }
+      : { stop: true, error: decision.error || 'Learner stopped' },
+  );
+}
+
+function storedConversation(
+  value: unknown,
+  browserSessionId: string | null,
+): { ok: true; id: string | null; browserSessionId: string } | { ok: false; error: string } {
+  if (value == null || value === '') return { ok: true, id: null, browserSessionId: browserSessionId ?? '' };
+  try {
+    const id = parseLearnerConversationId(value);
+    if (!id || !browserSessionId) return { ok: false, error: 'Learner conversation was not found' };
+    return { ok: true, id, browserSessionId };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Learner conversation id is invalid' };
   }
-  return NextResponse.json({ action: decision.action });
+}
+
+async function finishLearnerDecision(
+  conversation: { id: string | null; browserSessionId: string },
+  userId: string,
+  helperId: string,
+  observed: { title?: string; url?: string; text?: string },
+  decision: { action?: LearnerAction; stop?: boolean; error?: string },
+) {
+  if (conversation.id) {
+    try {
+      const saved = await recordLearnerTurn({
+        userId,
+        helperId,
+        browserSessionId: conversation.browserSessionId,
+        conversationId: conversation.id,
+        observed,
+        decision,
+      });
+      if (!saved) return NextResponse.json({ stop: true, error: 'Learner memory could not be saved' });
+    } catch {
+      return NextResponse.json({ stop: true, error: 'Learner memory could not be saved' });
+    }
+  }
+  if (decision.action && !decision.stop) return NextResponse.json({ action: decision.action });
+  return NextResponse.json({ stop: true, error: decision.error || 'Learner stopped' });
 }
