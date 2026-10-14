@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authenticateHelper } from '@/lib/security';
 import { compareVersions, getLatestHelperRelease } from '@/lib/releases';
 import { queryOne, queryRows } from '@/lib/db';
+import { retryDatabaseConflict } from '@/lib/database-retry';
 
 const schema = z.object({
   status: z.enum(['online', 'busy']),
@@ -22,12 +23,21 @@ const RELEASE_VERSION = /^\d+\.\d+\.\d+$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
 
 export async function POST(request: Request) {
+  try {
+    return await handleHeartbeat(request);
+  } catch (error) {
+    console.error('Helper heartbeat failed', error);
+    return NextResponse.json({ error: 'Heartbeat could not be saved. The helper will retry.' }, { status: 503 });
+  }
+}
+
+async function handleHeartbeat(request: Request) {
   const helper = await authenticateHelper(request);
   if (!helper) return NextResponse.json({ error: 'Unauthorized helper' }, { status: 401 });
   const parsed = schema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: 'Invalid heartbeat' }, { status: 400 });
   const reportedVersion = parsed.data.version;
-  const row = await queryOne<{
+  const row = await retryDatabaseConflict(() => queryOne<{
     update_requested_version: string | null;
     update_requested_at: unknown;
     supports_self_update: boolean;
@@ -50,7 +60,7 @@ export async function POST(request: Request) {
       parsed.data.supportsSelfUpdate === true,
       parsed.data.updateError ?? null,
     ],
-  );
+  ));
 
   let requestedVersion = row?.update_requested_version ?? null;
   let requestedAt = row?.update_requested_at ?? null;

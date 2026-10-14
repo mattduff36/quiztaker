@@ -15,6 +15,7 @@ import { getServerEnv } from '@/lib/env';
 import { applyStructuredResult } from '@/lib/parity-state';
 import { nextStrategyState } from '@/lib/strategy-state';
 import { mapPlan } from '@/lib/plans';
+import { TERMINAL_JOB_LOCK_SQL } from '@/lib/job-lock';
 
 interface JobRow extends Record<string, unknown> {
   id: string;
@@ -162,7 +163,9 @@ export async function recordJobEvent(
   const probeOnly = ['list-tabs', 'cdp-check', 'cert-status', 'detect', 'cert-dry-run', 'tab-inspect', 'fit-tab', 'start-browser', 'close-browser', 'open-url', 'learn-capture'].includes(job.capability_id);
   await withTransaction(async (sql) => {
   const locked = await sql<{ status: string }>(
-    'select status from jobs where id = $1 and helper_id = $2 and user_id = $3 for update',
+    // No job key changes here. FOR UPDATE would block heartbeat's FK KEY SHARE
+    // while heartbeat holds helpers, creating a jobs -> helpers -> jobs cycle.
+    TERMINAL_JOB_LOCK_SQL,
     [jobId, helperId, userId],
   );
   if (!locked[0] || ['completed', 'failed', 'cancelled', 'helper-offline'].includes(locked[0].status)) return;
