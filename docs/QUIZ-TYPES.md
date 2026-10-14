@@ -389,3 +389,10 @@ This section is generated from verified attempt evidence in `data/knowledge/stra
 ## Canon / Cornerstone OnDemand curriculum (2026-10-14)
 
 The Canon Development Hub uses `*.csod.com/phnx/driver.aspx?routename=Learning/Curriculum/CurriculumPlayer`, a different platform from the HP Saba integration. The captured Engineer Certification Programme curriculum shows module sections and a Launch Test control. A curriculum is not an assessment question page. Detection recognizes it and offers capture, with instructions to open the intended module then detect again. Do not apply Saba roster selectors or SCORM completion assumptions to this host. Actual assessment controls, attempt limits, and passing verification are not yet inspected or supported by a verified strategy.
+## Guided course workflow
+
+Choose the course tab in Operations and use **Inspect and start**. Vitriol refreshes and inspects that exact tab, then runs a supported SCORM/container/SlickQuiz strategy or captures an unfamiliar page and starts bounded AI learning. Helper 1.0.8 adds learner questions; older helpers must update first.
+
+Questions pause the job as `awaiting-input`, never as a passed quiz or failed strategy. Answer and continue to inspect the current page again and send the stored answer to the configured AI provider. Missing AI configuration links to Settings. Exhausted provider requests stop with an error. Technical actions and output remain under Advanced tools.
+
+Learning is navigation and control discovery, not model training or a guarantee of passing an arbitrary assessment. Server-scored assessments still require review; final submission remains disabled in the learner. Verified completion requires page evidence. Keep Operations open for automatic follow-up steps; closing it leaves the current helper job visible in Advanced tools.

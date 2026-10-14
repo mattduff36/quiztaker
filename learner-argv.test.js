@@ -1,6 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseLearnQuizArgs, localActionAllowed, pageShowsPass } = require('./pw-learn-quiz');
+const {
+  parseLearnQuizArgs,
+  localActionAllowed,
+  pageShowsPass,
+  learnerQuestionPayload,
+  learnerQuestionLine,
+  LEARNER_NEEDS_INPUT,
+} = require('./pw-learn-quiz');
 
 test('learn quiz argv accepts a tab index and dry run only', () => {
   assert.deepEqual(parseLearnQuizArgs(['node', 'pw-learn-quiz.js', '2']), { tabIdx: 2, dryRun: false });
@@ -22,6 +29,49 @@ test('local learner guard refuses submit labels and unknown actions', () => {
     buttons: [{ id: 'b1', name: 'Save progress' }],
     choices: [],
   }), false);
+});
+
+test('no usable controls ask the operator to open the module and resume', () => {
+  const empty = { buttons: [], choices: [] };
+  const payload = learnerQuestionPayload(empty, null);
+  assert.deepEqual(payload, { question: 'Open the intended question or module, then resume.' });
+  const line = learnerQuestionLine(payload);
+  assert.equal(line, 'LEARNER_QUESTION {"question":"Open the intended question or module, then resume."}');
+  assert.equal(JSON.parse(line.slice('LEARNER_QUESTION '.length)).question, payload.question);
+  assert.equal(LEARNER_NEEDS_INPUT, 'needs-user-input');
+  assert.equal(learnerQuestionPayload({
+    buttons: [{ id: 'b1', name: 'Next' }],
+    choices: [],
+  }, null), null);
+});
+
+test('ask-user is a bounded question and never a completion action', () => {
+  const snapshot = {
+    buttons: [{ id: 'b1', name: 'Next' }],
+    choices: [{ id: 'c1', name: 'Answer' }],
+  };
+  const payload = learnerQuestionPayload(snapshot, {
+    action: 'ask-user',
+    question: ' Which question is open? ',
+    options: [' Question 1 ', 'Question 2'],
+  });
+  assert.deepEqual(payload, {
+    question: 'Which question is open?',
+    options: ['Question 1', 'Question 2'],
+  });
+  assert.match(learnerQuestionLine(payload), /^LEARNER_QUESTION \{/);
+  assert.equal(localActionAllowed({ action: 'ask-user', question: 'Which question is open?' }, snapshot), true);
+  assert.equal(localActionAllowed({ action: 'ask-user', question: 'q'.repeat(501) }, snapshot), false);
+  assert.equal(localActionAllowed({
+    action: 'ask-user',
+    question: 'Which?',
+    options: ['a', 'b', 'c', 'd'],
+  }, snapshot), false);
+  assert.equal(localActionAllowed({
+    action: 'ask-user',
+    question: 'Which?',
+    options: ['o'.repeat(121)],
+  }, snapshot), false);
 });
 
 test('page evidence decides a pass instead of the model', () => {

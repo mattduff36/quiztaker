@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth';
-import { queryOne, queryRows } from '@/lib/db';
+import { queryOne, queryRows, withTransaction } from '@/lib/db';
 import { hasValidRequestOrigin } from '@/lib/security';
 
 export async function GET(
@@ -42,32 +42,25 @@ export async function DELETE(
   const user = await getAuthenticatedUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { jobId } = await context.params;
-  const current = await queryOne<{ status: string; attempt_id: string }>(
-    `select status, attempt_id
-     from jobs
-     where id = $1 and user_id = $2 and status in ('queued', 'dispatched', 'running')`,
-    [jobId, user.id],
-  );
+  const current = await withTransaction(async (sql) => {
+    const [updated] = await sql<{ status: string; attempt_id: string }>(
+      `update jobs set cancel_requested = true,
+         status = case when status = 'queued' then 'cancelled' else status end,
+         finished_at = case when status = 'queued' then now() else finished_at end,
+         outcome = case when status = 'queued' then $3::jsonb else outcome end
+       where id = $1 and user_id = $2 and status in ('queued', 'dispatched', 'running')
+       returning status, attempt_id`,
+      [jobId, user.id, JSON.stringify({ outcome: 'cancelled', verified: false, status: 'cancelled-before-dispatch' })],
+    );
+    if (updated?.status === 'cancelled') {
+      await sql(
+        `insert into attempt_events (user_id, attempt_id, event, data)
+         values ($1, $2, 'attempt-finished', $3::jsonb)`,
+        [user.id, updated.attempt_id, JSON.stringify({ outcome: 'cancelled', verified: false, status: 'cancelled-before-dispatch', jobId })],
+      );
+    }
+    return updated;
+  });
   if (!current) return NextResponse.json({ error: 'Active job not found' }, { status: 404 });
-  if (current.status === 'queued') {
-    const outcome = { outcome: 'cancelled', verified: false, status: 'cancelled-before-dispatch' };
-    await queryRows(
-      `update jobs
-       set cancel_requested = true, status = 'cancelled', finished_at = now(), outcome = $3::jsonb
-       where id = $1 and user_id = $2 and status = 'queued'`,
-      [jobId, user.id, JSON.stringify(outcome)],
-    );
-    await queryRows(
-      `insert into attempt_events (user_id, attempt_id, event, data)
-       values ($1, $2, 'attempt-finished', $3::jsonb)`,
-      [user.id, current.attempt_id, JSON.stringify({ ...outcome, jobId })],
-    );
-  } else {
-    await queryRows(
-      `update jobs set cancel_requested = true
-       where id = $1 and user_id = $2 and status = $3`,
-      [jobId, user.id, current.status],
-    );
-  }
   return NextResponse.json({ ok: true });
 }

@@ -11,6 +11,15 @@ export function structuredResult(
     const browserSession = replaceBrowserSession(parsed as Array<{ idx?: number; title?: string; url?: string; hasFocus?: boolean }>);
     return { ...resultEnvelope(capabilityId, code === 0, { browserSession }) };
   }
+  if (capabilityId === 'quiz-learn') {
+    const marker = [...output.matchAll(/^LEARNER_TABS (.+)$/gm)].at(-1)?.[1];
+    try {
+      const tabs: unknown = marker ? JSON.parse(marker) : null;
+      if (Array.isArray(tabs) && tabs.every((tab) => tab && Number.isInteger(tab.idx) && typeof tab.url === 'string' && typeof tab.title === 'string')) {
+        return { ...resultEnvelope(capabilityId, code === 0, { browserSession: replaceBrowserSession(tabs) }) };
+      }
+    } catch { /* Invalid evidence must not change the current browser session. */ }
+  }
   if (capabilityId === 'cdp-check') {
     const connected = Boolean((parsed as { ok?: boolean } | null)?.ok);
     const session = readBrowserSession();

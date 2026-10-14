@@ -38,6 +38,16 @@ export function classifyOutcome(input: {
     ...(structured?.failures ?? []).flatMap((failure) => failure.artifact ? [failure.artifact] : []),
   ];
 
+  if (input.script === 'pw-learn-quiz.js' && structured?.failures?.some((failure) => failure.reason === 'needs-user-input')) {
+    try {
+      const marker = [...text.matchAll(/^LEARNER_QUESTION (.+)$/gm)].at(-1)?.[1];
+      const question = marker ? JSON.parse(marker) : null;
+      if (typeof question?.question === 'string' && question.question.trim() && question.question.length <= 500) {
+        return { outcome: 'partial', verified: false, status: 'needs-user-input', artifacts };
+      }
+    } catch { /* Invalid question evidence remains a failed run. */ }
+  }
+
   if (input.code !== 0) {
     const signature = text.match(/SCORM API not found|no-api|no-player-tab|button-not-found|TimeoutError|ECONNREFUSED/i)?.[0]
       ?? `exit-${input.code}`;

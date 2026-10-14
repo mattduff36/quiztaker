@@ -62,7 +62,7 @@ export async function GET() {
       [user.id],
     ),
     queryOne(
-      `select id, status, capability_id, outcome, diagnosis, result, output_url
+      `select id, status, capability_id, input, outcome, diagnosis, result, output_url
        from jobs
        where user_id = $1 and helper_id = $2
        order by created_at desc limit 1`,

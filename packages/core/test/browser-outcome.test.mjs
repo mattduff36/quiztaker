@@ -27,3 +27,16 @@ test('tab inspection verifies written text evidence without claiming a quiz pass
   assert.equal(classifyOutcome({ script: 'pw-tab-inspect.js', code: 1, output: good }).verified, false);
   assert.equal(classifyOutcome({ script: 'pw-scorm-complete.js', code: 0, output: good }).verified, false);
 });
+
+test('learner questions pause without claiming completion or failure', () => {
+  const result = 'AUTOMATION_RESULT ' + JSON.stringify({completed:0,total:1,failures:[{title:'Learning',reason:'needs-user-input'}]});
+  const output = 'LEARNER_QUESTION {"question":"Which module?"}\n' + result;
+  const outcome = classifyOutcome({script:'pw-learn-quiz.js',code:1,output});
+  assert.equal(outcome.status, 'needs-user-input');
+  assert.equal(outcome.outcome, 'partial');
+  assert.equal(outcome.verified, false);
+  for (const invalid of [result, 'LEARNER_QUESTION {"question":""}\n' + result]) {
+    assert.equal(classifyOutcome({script:'pw-learn-quiz.js',code:1,output:invalid}).outcome, 'failure');
+  }
+  assert.equal(classifyOutcome({script:'pw-scorm-complete.js',code:1,output}).outcome, 'failure');
+});

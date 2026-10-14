@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { LEARNER_MAX_STEPS, type LearnerSnapshot } from '@quiztaker/core';
+import { LEARNER_MAX_STEPS, type LearnerSnapshot } from '@/lib/learner';
 import { queryOne, withTransaction } from '@/lib/db';
 import { getServerEnv } from '@/lib/env';
 import { askCursorLearner } from '@/lib/cursor-learner';
-import { learnerModelChain, learnerPrefersCursor, requestLearnerDecision } from '@/lib/learner';
+import { learnerGuidanceText, learnerModelChain, learnerPrefersCursor, requestLearnerDecision } from '@/lib/learner';
 import {
   chooseProposalLearner,
   completeHostedChat,
@@ -41,8 +41,9 @@ export async function POST(
     capability_id: string;
     attempt_id: string;
     constraints: { maxSteps?: number; submissionAuthorized?: boolean } | null;
+    input: { guidance?: unknown } | null;
   }>(
-    `select jobs.status, jobs.capability_id, plans.attempt_id, plans.constraints
+    `select jobs.status, jobs.capability_id, plans.attempt_id, plans.constraints, plans.input
      from jobs
      join plans on plans.id = jobs.plan_id
      where jobs.id = $1 and jobs.helper_id = $2 and jobs.user_id = $3`,
@@ -59,7 +60,17 @@ export async function POST(
   }
   const parsed = schema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ stop: true, error: 'Learner snapshot is invalid' });
-  const snapshot = parsed.data.snapshot as LearnerSnapshot;
+  const storedGuidance = learnerGuidanceText(job.input?.guidance);
+  if (!storedGuidance.ok) return NextResponse.json({ stop: true, error: storedGuidance.error });
+  const incoming = parsed.data.snapshot;
+  const snapshot: LearnerSnapshot = {
+    title: incoming.title,
+    url: incoming.url,
+    text: incoming.text,
+    choices: incoming.choices,
+    buttons: incoming.buttons,
+    ...(storedGuidance.guidance ? { guidance: storedGuidance.guidance } : {}),
+  };
   const stored = await loadSecretLlmConnection(helper.userId);
   const choice = chooseProposalLearner(stored);
   if (choice.kind === 'disabled') {

@@ -1,14 +1,56 @@
-import type { LearnerAction, LearnerSnapshot } from '@quiztaker/core';
+export { LEARNER_MAX_STEPS, decideLearnerStep, learnerConstraints, learnerOfferedFor, type LearnerAction, type LearnerSnapshot } from '@quiztaker/core';
+import { decideLearnerStep, learnerOfferedFor, type LearnerAction, type LearnerSnapshot } from '@quiztaker/core';
 
 export const LEARNER_SYSTEM_PROMPT = [
   'You navigate one quiz page for the operator.',
   'Reply with one JSON object and no other text.',
-  'Allowed actions are click, answer-select, scroll, wait, capture, and verify.',
+  'Allowed actions are exactly {"action":"click","targetId":"b1"} {"action":"answer-select","targetId":"c1"} {"action":"scroll"} {"action":"wait","ms":500} {"action":"capture"} {"action":"verify"} {"action":"ask-user","question":"Which module should I open?","options":["Module 1","Resume here"]}.',
   'click and answer-select must use a targetId from the snapshot.',
+  'Use ask-user when the page is ambiguous or required information is missing.',
+  'Never request credentials, passwords, or secrets.',
+  'Never infer a pass. verify checks visible page evidence and does not accept a passed field.',
   'Never choose submit, finish, exit, end test, or grade.',
-  'Use verify with passed true only when the page already shows the quiz is passed.',
-  'Use verify with passed false when the quiz is still in progress.',
 ].join(' ');
+
+export function assertLearnerDetectionMatch(input: {
+  sessionId: string;
+  revision: number;
+  tabs: Array<{ targetId?: string; index?: number; url?: string }>;
+  detection: { detected?: string | null; tabIdx?: number | null; url?: string | null } | null;
+  target?: { targetId?: string; browserSessionId?: string; revision?: number } | null;
+}): void {
+  const target = input.target;
+  if (!target?.targetId) throw new Error('Learn quiz needs the selected browser tab');
+  if (target.browserSessionId !== input.sessionId || target.revision !== input.revision) {
+    throw new Error('Learn quiz target does not match the latest browser session');
+  }
+  const matches = (Array.isArray(input.tabs) ? input.tabs : []).filter((tab) => tab.targetId === target.targetId);
+  const tab = matches.length === 1 ? matches[0] : null;
+  const detection = input.detection;
+  if (
+    !tab
+    || !detection
+    || !Number.isInteger(tab.index)
+    || !Number.isInteger(detection.tabIdx)
+    || tab.index !== detection.tabIdx
+    || typeof tab.url !== 'string'
+    || detection.url !== tab.url
+  ) {
+    throw new Error('Learn quiz detection does not match the selected tab');
+  }
+  if (!learnerOfferedFor(detection.detected)) {
+    throw new Error('Learn quiz is only available for an unrecognized, unknown, document, or Cornerstone navigation page');
+  }
+}
+
+export function learnerGuidanceText(value: unknown): { ok: true; guidance?: string } | { ok: false; error: string } {
+  if (value == null) return { ok: true };
+  if (typeof value !== 'string') return { ok: false, error: 'Learner guidance must be text' };
+  if (value.length > 2000) return { ok: false, error: 'Learner guidance is too long' };
+  const guidance = value.trim();
+  if (!guidance) return { ok: true };
+  return { ok: true, guidance };
+}
 
 const GEMINI_FALLBACKS = [
   'gemini-3.7-flash',
@@ -95,7 +137,6 @@ export async function requestLearnerDecision(input: {
         choices?: Array<{ message?: { content?: string } }>;
       } | null;
       const content = body?.choices?.[0]?.message?.content ?? '';
-      const { decideLearnerStep } = await import('@quiztaker/core');
       const decided = decideLearnerStep(content, snapshot);
       if (!decided.ok) return { stop: true, error: decided.error };
       return { action: decided.action };
@@ -107,10 +148,12 @@ export async function requestLearnerDecision(input: {
     }
   }
   const status = last?.status ?? 0;
-  if (!last || status === 404 || status === 408 || status === 429 || status >= 500) {
-    return { action: { action: 'capture' } };
-  }
-  return { stop: true, error: `Learner model request failed (${status})` };
+  return { stop: true, error: providerExhausted(status) };
+}
+
+function providerExhausted(status: number): string {
+  const detail = status ? `HTTP ${status}` : 'no response';
+  return `Learner provider is unavailable (${detail}). Stop and retry; the page was not captured as progress.`;
 }
 
 async function requestModel(
@@ -126,12 +169,14 @@ async function requestModel(
 }
 
 function boundSnapshot(snapshot: LearnerSnapshot): LearnerSnapshot {
+  const guidance = typeof snapshot.guidance === 'string' ? snapshot.guidance.trim().slice(0, 2000) : '';
   return {
     title: snapshot.title?.slice(0, 200) ?? '',
     url: snapshot.url?.slice(0, 500) ?? '',
     text: snapshot.text?.slice(0, 6000) ?? '',
     choices: (snapshot.choices ?? []).slice(0, 40).map(boundControl),
     buttons: (snapshot.buttons ?? []).slice(0, 40).map(boundControl),
+    ...(guidance ? { guidance } : {}),
   };
 }
 

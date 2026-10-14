@@ -85,6 +85,39 @@ test('learner is not offered for a server assessment', () => {
   assert.equal(learnerOfferedFor('unknown'), true);
   assert.equal(learnerOfferedFor('document-wbt'), true);
   assert.equal(learnerOfferedFor('none'), true);
+  assert.equal(learnerOfferedFor('csod-curriculum'), true);
+  assert.equal(learnerOfferedFor('csod-learning'), true);
+});
+
+test('learner accepts a bounded ask-user question and rejects an invalid one', () => {
+  const accepted = parseLearnerAction({
+    action: 'ask-user',
+    question: '  Which module should I open?  ',
+    options: [' Module 1 ', 'Resume here', 'x'.repeat(120)],
+  }, snapshot);
+  assert.deepEqual(accepted, {
+    ok: true,
+    action: {
+      action: 'ask-user',
+      question: 'Which module should I open?',
+      options: ['Module 1', 'Resume here', 'x'.repeat(120)],
+    },
+  });
+  assert.equal(parseLearnerAction({ action: 'ask-user', question: 'y'.repeat(500) }, snapshot).ok, true);
+  assert.equal(parseLearnerAction({ action: 'ask-user', question: 'y'.repeat(501) }, snapshot).ok, false);
+  assert.equal(parseLearnerAction({ action: 'ask-user', question: '   ' }, snapshot).ok, false);
+  assert.equal(parseLearnerAction({
+    action: 'ask-user',
+    question: 'Which module?',
+    options: ['a', 'b', 'c', 'd'],
+  }, snapshot).ok, false);
+  assert.equal(parseLearnerAction({
+    action: 'ask-user',
+    question: 'Which module?',
+    options: ['z'.repeat(121)],
+  }, snapshot).ok, false);
+  const decided = decideLearnerStep('{"action":"ask-user","question":"Open which question?"}', snapshot);
+  assert.deepEqual(decided, { ok: true, action: { action: 'ask-user', question: 'Open which question?' } });
 });
 
 test('decideLearnerStep rejects a model submit and accepts a bounded wait', () => {

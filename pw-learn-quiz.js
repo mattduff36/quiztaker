@@ -5,7 +5,9 @@
 // The script only reads the page and applies actions the control plane has
 // already allowlisted. It has no API key and does not call the control plane.
 // Submit, finish, exit, and grade controls are refused here even if a later
-// step asks for them.
+// step asks for them. An ask-user action, or a page with no usable controls,
+// prints LEARNER_QUESTION and stops with needs-user-input. That is incomplete
+// and never a successful completion. Guidance is not a shell argument.
 //
 // Usage:
 //   node pw-learn-quiz.js <tabIdx> [--dry]
@@ -19,7 +21,9 @@ const SUBMIT_LABEL = /\b(submit|finish|exit|end test|grade)\b/i;
 const NAVIGATION_LABEL = /^(next|continue|back|previous|ok|close|start|begin)$/i;
 const PASS_EVIDENCE = /\byou passed\b|\byour score:\s*100\s*%/i;
 const FAIL_EVIDENCE = /\b(not passed|did not pass|failed|unsuccessful|not successful)\b/i;
-const ALLOWED = new Set(['click', 'answer-select', 'scroll', 'wait', 'capture', 'verify']);
+const ALLOWED = new Set(['click', 'answer-select', 'scroll', 'wait', 'capture', 'verify', 'ask-user']);
+const LEARNER_NEEDS_INPUT = 'needs-user-input';
+const NO_CONTROLS_QUESTION = 'Open the intended question or module, then resume.';
 
 function parseLearnQuizArgs(argv) {
   const tokens = argv.slice(2);
@@ -37,9 +41,42 @@ function pageShowsPass(snapshot) {
   return PASS_EVIDENCE.test(text);
 }
 
+function parseAskUser(action) {
+  if (!action || action.action !== 'ask-user') return { error: 'Learner question is invalid' };
+  if (typeof action.question !== 'string') return { error: 'Learner question is invalid' };
+  const question = action.question.trim();
+  if (!question || question.length > 500) return { error: 'Learner question is invalid' };
+  if (action.options == null) return { question };
+  if (!Array.isArray(action.options) || action.options.length > 3) {
+    return { error: 'Learner question options are invalid' };
+  }
+  const options = [];
+  for (const option of action.options) {
+    if (typeof option !== 'string') return { error: 'Learner question options are invalid' };
+    const text = option.trim();
+    if (!text || text.length > 120) return { error: 'Learner question options are invalid' };
+    options.push(text);
+  }
+  return options.length ? { question, options } : { question };
+}
+
+function learnerQuestionPayload(snapshot, action) {
+  const buttons = Array.isArray(snapshot?.buttons) ? snapshot.buttons.length : 0;
+  const choices = Array.isArray(snapshot?.choices) ? snapshot.choices.length : 0;
+  if (!action && buttons + choices === 0) return { question: NO_CONTROLS_QUESTION };
+  const parsed = parseAskUser(action);
+  if (parsed.error) return null;
+  return parsed.options ? { question: parsed.question, options: parsed.options } : { question: parsed.question };
+}
+
+function learnerQuestionLine(payload) {
+  return `LEARNER_QUESTION ${JSON.stringify(payload)}`;
+}
+
 function localActionAllowed(action, snapshot) {
   if (!action || typeof action !== 'object') return false;
   if (!ALLOWED.has(action.action)) return false;
+  if (action.action === 'ask-user') return learnerQuestionPayload(snapshot, action) != null;
   if (action.action === 'click' || action.action === 'answer-select') {
     const pool = action.action === 'click' ? snapshot.buttons : snapshot.choices;
     const target = (pool || []).find((item) => item.id === action.targetId);
@@ -187,6 +224,13 @@ async function applyAction(page, action, snapshot, handles) {
   await handle.check({ timeout: 5000 });
 }
 
+async function emitQuestion(payload, snapshot, browser) {
+  const tabs = await Promise.all(browser.contexts()[0].pages().map(async (page, idx) => ({ idx, url: page.url(), title: await page.title().catch(() => "") })));
+  console.log(`LEARNER_TABS ${JSON.stringify(tabs)}`);
+  console.log(learnerQuestionLine({ ...payload, url: snapshot.url }));
+  finish(false, LEARNER_NEEDS_INPUT);
+}
+
 function finish(completed, reason) {
   const payload = completed
     ? { completed: 1, total: 1 }
@@ -210,9 +254,24 @@ async function main() {
     reader = createActionReader();
     for (let step = 1; step <= MAX_STEPS; step += 1) {
       const { snapshot, handles } = await readSnapshot(page);
+      if (pageShowsPass(snapshot)) { finish(true); return; }
+      const blocked = learnerQuestionPayload(snapshot, null);
+      if (blocked) {
+        await emitQuestion(blocked, snapshot, browser);
+        return;
+      }
       const action = await reader.request(snapshot);
       if (!localActionAllowed(action, snapshot)) {
         finish(false, 'rejected-action');
+        return;
+      }
+      if (action.action === 'ask-user') {
+        const question = learnerQuestionPayload(snapshot, action);
+        if (!question) {
+          finish(false, 'rejected-action');
+          return;
+        }
+        await emitQuestion(question, snapshot, browser);
         return;
       }
       if (action.action === 'verify') {
@@ -240,4 +299,11 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseLearnQuizArgs, localActionAllowed, pageShowsPass };
+module.exports = {
+  parseLearnQuizArgs,
+  localActionAllowed,
+  pageShowsPass,
+  learnerQuestionPayload,
+  learnerQuestionLine,
+  LEARNER_NEEDS_INPUT,
+};

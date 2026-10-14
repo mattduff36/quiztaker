@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { learnerIsEnabled, learnerModelChain, learnerPrefersCursor, requestLearnerDecision } from '../src/lib/learner.js';
+import { assertLearnerDetectionMatch, LEARNER_SYSTEM_PROMPT, learnerGuidanceText, learnerIsEnabled, learnerModelChain, learnerPrefersCursor, requestLearnerDecision } from '../src/lib/learner.js';
 
 const snapshot = {
   buttons: [{ id: 'b1', name: 'Next' }],
@@ -46,7 +46,7 @@ test('gemini uses later flash models when no backup list is configured', () => {
   }), ['gpt-4o-mini']);
 });
 
-test('learner captures the page when every model stays busy', async () => {
+test('learner stops with an error when every model stays busy', async () => {
   let calls = 0;
   const result = await requestLearnerDecision({
     apiKey: 'test-key',
@@ -58,7 +58,24 @@ test('learner captures the page when every model stays busy', async () => {
     },
   });
   assert.equal(calls, 2);
-  assert.deepEqual(result.action, { action: 'capture' });
+  assert.equal(result.action, undefined);
+  assert.equal(result.stop, true);
+  assert.match(result.error || '', /unavailable \(HTTP 503\)/);
+  assert.match(result.error || '', /not captured as progress/);
+});
+
+test('learner stops when the provider does not respond', async () => {
+  const result = await requestLearnerDecision({
+    apiKey: 'test-key',
+    models: ['gpt-4o-mini'],
+    snapshot,
+    fetchImpl: async () => {
+      throw new Error('socket hang up');
+    },
+  });
+  assert.equal(result.stop, true);
+  assert.equal(result.action, undefined);
+  assert.match(result.error || '', /no response/);
 });
 
 test('learner tries the next model when the first is busy', async () => {
@@ -128,6 +145,62 @@ test('learner stops when Cursor fails instead of spending Gemini', async () => {
   assert.equal(calls, 0);
   assert.equal(result.stop, true);
   assert.match(result.error || '', /did not start/);
+});
+
+test('learner sends bounded guidance and an ask-user example', async () => {
+  let body = '';
+  const result = await requestLearnerDecision({
+    apiKey: 'test-key',
+    snapshot: { ...snapshot, guidance: `  ${'g'.repeat(2500)}` },
+    fetchImpl: async (_url, init) => {
+      body = String(init?.body);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '{"action":"ask-user","question":"Which module?"}' } }],
+      }));
+    },
+  });
+  const sent = JSON.parse(JSON.parse(body).messages[1].content) as { guidance?: string };
+  assert.equal(sent.guidance?.length, 2000);
+  assert.match(LEARNER_SYSTEM_PROMPT, /\{"action":"ask-user","question":"Which module should I open\?"/);
+  assert.match(LEARNER_SYSTEM_PROMPT, /Never request credentials/);
+  assert.match(LEARNER_SYSTEM_PROMPT, /Never infer a pass/);
+  assert.deepEqual(result.action, { action: 'ask-user', question: 'Which module?' });
+});
+
+test('learner guidance is text of at most 2000 characters', () => {
+  assert.deepEqual(learnerGuidanceText(' Open question 2 '), { ok: true, guidance: 'Open question 2' });
+  assert.deepEqual(learnerGuidanceText(''), { ok: true });
+  assert.deepEqual(learnerGuidanceText(null), { ok: true });
+  assert.equal(learnerGuidanceText('x'.repeat(2000)).ok, true);
+  assert.equal(learnerGuidanceText('x'.repeat(2001)).ok, false);
+  assert.equal(learnerGuidanceText(12).ok, false);
+  assert.equal(learnerGuidanceText({ text: 'Open question 2' }).ok, false);
+});
+
+test('learner detection must match the selected tab', () => {
+  const tab = { targetId: 'tab-1', index: 2, url: 'https://example.test/module' };
+  const target = { targetId: 'tab-1', browserSessionId: 'session-1', revision: 4 };
+  assert.doesNotThrow(() => assertLearnerDetectionMatch({
+    sessionId: 'session-1',
+    revision: 4,
+    tabs: [tab],
+    detection: { detected: 'csod-curriculum', tabIdx: 2, url: tab.url },
+    target,
+  }));
+  assert.throws(() => assertLearnerDetectionMatch({
+    sessionId: 'session-1',
+    revision: 4,
+    tabs: [tab, { targetId: 'tab-2', index: 0, url: 'https://example.test/other' }],
+    detection: { detected: 'unknown', tabIdx: 0, url: 'https://example.test/other' },
+    target,
+  }), /does not match the selected tab/);
+  assert.throws(() => assertLearnerDetectionMatch({
+    sessionId: 'session-1',
+    revision: 4,
+    tabs: [tab],
+    detection: { detected: 'server-assessment', tabIdx: 2, url: tab.url },
+    target,
+  }), /Cornerstone navigation page|server|unrecognized/);
 });
 
 test('learner returns an allowlisted answer selection', async () => {

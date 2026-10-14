@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Check, Download, LoaderCircle, Play, X } from 'lucide-react';
 import { Panel } from '@/components/page-frame';
+import { GuidedRunner } from '@/components/guided-runner';
 import { connectionState, isWebUrl, operationNeedsBrowser, readJsonResponse } from '@/lib/operations-readiness';
 
 interface TabRow {
@@ -51,7 +52,7 @@ interface ContextResponse {
   } | null;
   recentUrls?: Array<{ url: string; title: string; seen_count: number }>;
   captures?: Array<{ id: string; title: string; fingerprint: string | null }>;
-  activeJob?: { id: string; status: string; capability_id?: string; outcome?: { status?: string }; diagnosis?: Diagnosis | null; output_url?: string; result?: unknown } | null;
+  activeJob?: { id: string; status: string; capability_id?: string; input?: { target?: { targetId?: string; browserSessionId?: string; fingerprint?: string } }; outcome?: { status?: string }; diagnosis?: Diagnosis | null; output_url?: string; result?: unknown } | null;
   parityEnabled?: boolean;
   learnerEnabled?: boolean;
   helperUpdate?: {
@@ -98,8 +99,11 @@ export function OperationsClient(props: { helperId: string }) {
   const [error, setError] = useState('');
   const [pendingPlan, setPendingPlan] = useState<PlanResponse | null>(null);
   const [output, setOutput] = useState('');
+  const [outputJobId, setOutputJobId] = useState('');
   const [job, setJob] = useState<ContextResponse['activeJob']>(null);
-  const [busy, setBusy] = useState(false);
+  const [operationBusy, setBusy] = useState(false);
+  const [guidedBusy, setGuidedBusy] = useState(false);
+  const busy = operationBusy || guidedBusy;
   const [forceCloseOffer, setForceCloseOffer] = useState(false);
   const [updateNote, setUpdateNote] = useState('');
   const [updateBusy, setUpdateBusy] = useState(false);
@@ -151,6 +155,7 @@ export function OperationsClient(props: { helperId: string }) {
       if (disposed) return;
       setPollError('');
       setJob(value.job);
+      setOutputJobId(value.job.id);
       setOutput(value.events.map((event) => event.data?.text ?? '').join('')
         || (value.job.result ? JSON.stringify(value.job.result, null, 2) : ''));
       if (isActive && !['queued', 'dispatched', 'running'].includes(value.job.status)) void load();
@@ -360,7 +365,12 @@ export function OperationsClient(props: { helperId: string }) {
           : readiness === 'browser-unknown' ? <Action primary disabled={!helperReady || busy || Boolean(active)} onClick={() => run('start-browser', { capabilityId: 'start-browser' }, false)}>Start browser</Action>
           : null}
       </section>
+      {update?.needed ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-950"><span>A helper update is available{update.latestVersion ? `: v${update.latestVersion}` : ''}. Keep the helper running while it installs.</span><button type="button" disabled={busy || Boolean(active) || updateBusy} onClick={() => void requestHelperUpdate()} className="min-h-11 rounded-md bg-amber-900 px-4 py-2 font-semibold text-white disabled:opacity-40">{updateBusy ? 'Requesting update…' : 'Update helper'}</button>{updateNote ? <p className="w-full">{updateNote}</p> : null}</div> : null}
+      <GuidedRunner helperId={props.helperId} session={session} selectedTarget={selectedTarget} onSelect={setSelectedTarget}
+        ready={browserReady && protocolReady && !operationBusy} active={Boolean(active)} onBusy={setGuidedBusy} onRefresh={load}
+        lastJob={job} lastOutput={output} outputJobId={outputJobId} />
       {error ? <div role="alert" className="flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><AlertTriangle className="size-4" />{error}</div> : null}
+      <details className="rounded-lg border border-slate-300 bg-slate-50"><summary className="cursor-pointer px-5 py-4 font-semibold text-slate-700">Advanced tools and run details{active ? ' · job running' : ''}</summary><div className="space-y-6 p-4 sm:p-5">
       {job ? (
         <section className="overflow-hidden rounded-lg border border-slate-800 bg-slate-950 text-slate-200">
           <header className="flex items-center justify-between px-5 py-3">
@@ -398,7 +408,7 @@ export function OperationsClient(props: { helperId: string }) {
           <div className="max-h-80 space-y-2 overflow-auto p-4">
             <p className="text-xs text-slate-500">Browser connection {session?.cdp_connected === true ? 'connected' : session?.cdp_connected === false ? 'offline' : 'not checked'} · revision {session?.revision ?? 'none'}</p>
             {(session?.tabs ?? []).map((tab) => (
-              <button key={tab.targetId} type="button" onClick={() => setSelectedTarget(tab.targetId)} className={`block w-full min-w-0 rounded-md border px-3 py-2 text-left ${selectedTarget === tab.targetId ? 'border-cyan-600 bg-cyan-50' : 'border-slate-200'}`}>
+              <button key={tab.targetId} type="button" disabled={busy || Boolean(active)} onClick={() => setSelectedTarget(tab.targetId)} className={`block w-full min-w-0 rounded-md border px-3 py-2 text-left ${selectedTarget === tab.targetId ? 'border-cyan-600 bg-cyan-50' : 'border-slate-200'}`}>
                 <span className="block font-medium text-slate-950">{tab.title || 'Untitled tab'}</span>
                 <span className="block truncate text-xs text-slate-500">{tab.url}</span>
               </button>
@@ -489,6 +499,7 @@ export function OperationsClient(props: { helperId: string }) {
       </div>
 
 
+      </div></details>
       {pendingPlan ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/70 p-4">
           <div className="w-full max-w-xl rounded-lg bg-white p-6">
@@ -546,11 +557,13 @@ function DetectionPanel(props: {
 }) {
   const detected = props.detection?.detected;
   const manualOnly = detected === 'server-assessment';
-  const learnOffered = detected === 'unknown' || detected === 'document-wbt' || detected === 'none';
+  const learnOffered = ['unknown', 'document-wbt', 'none', 'csod-curriculum', 'csod-learning'].includes(detected || '');
   const actionFor: Record<string, string> = {
-    scorm: 'scorm-complete',
+    'scorm-player': 'scorm-complete',
     container: 'container-batch',
-    slickquiz: 'slickquiz-solve',
+    'slickquiz-exam': 'slickquiz-solve',
+    'csod-curriculum': 'learn-capture',
+    'csod-learning': 'learn-capture',
   };
   const recommended = manualOnly ? 'learn-capture' : actionFor[detected || ''];
   return (

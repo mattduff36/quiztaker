@@ -34,9 +34,8 @@ export default async function Home() {
   return (
     <AppShell email={user.email}>
       <PageFrame
-        eyebrow="Operations deck"
-        title="Local browser operations"
-        description="Plans are authorized here and executed by the paired helper against Chrome on your Windows machine."
+        title="Your learning assistant"
+        description="Choose a course tab and start. Vitriol inspects the page, chooses a supported approach, and asks for your help when it needs it."
 
       >
         {!helper ? (

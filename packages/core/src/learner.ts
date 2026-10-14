@@ -9,6 +9,7 @@ export const learnerActions = new Set([
   'wait',
   'capture',
   'verify',
+  'ask-user',
 ]);
 
 const deniedLearnerActions = new Set(['exit', 'submit', 'launch', 'scorm-complete']);
@@ -26,6 +27,8 @@ export interface LearnerSnapshot {
   text?: string;
   choices?: LearnerControl[];
   buttons?: LearnerControl[];
+  /** Operator resume note. At most 2000 characters. */
+  guidance?: string;
 }
 
 export type LearnerAction =
@@ -34,7 +37,8 @@ export type LearnerAction =
   | { action: 'scroll' }
   | { action: 'wait'; ms: number }
   | { action: 'capture' }
-  | { action: 'verify' };
+  | { action: 'verify' }
+  | { action: 'ask-user'; question: string; options?: string[] };
 
 export function learnerConstraints(): {
   maxSteps: number;
@@ -54,7 +58,11 @@ export function confirmShortcutAllowed(capabilityId: string): boolean {
 }
 
 export function learnerOfferedFor(detected: string | null | undefined): boolean {
-  return detected === 'unknown' || detected === 'document-wbt' || detected === 'none';
+  return detected === 'unknown'
+    || detected === 'document-wbt'
+    || detected === 'none'
+    || detected === 'csod-curriculum'
+    || detected === 'csod-learning';
 }
 
 export function parseLearnerAction(
@@ -79,6 +87,7 @@ export function parseLearnerAction(
     }
     return { ok: true, action: { action: name, targetId } };
   }
+  if (name === 'ask-user') return parseAskUser(record);
   if (name === 'wait') {
     const requested = typeof record.ms === 'number' && Number.isFinite(record.ms) ? record.ms : 500;
     return { ok: true, action: { action: 'wait', ms: Math.max(0, Math.min(1000, Math.floor(requested))) } };
@@ -99,6 +108,27 @@ export function decideLearnerStep(
     return { ok: false, error: 'Learner response was not JSON' };
   }
   return parseLearnerAction(parsed, snapshot);
+}
+
+function parseAskUser(
+  record: Record<string, unknown>,
+): { ok: true; action: LearnerAction } | { ok: false; error: string } {
+  const question = typeof record.question === 'string' ? record.question.trim() : '';
+  if (!question || question.length > 500) return { ok: false, error: 'Learner question is invalid' };
+  const action: Extract<LearnerAction, { action: 'ask-user' }> = { action: 'ask-user', question };
+  if (record.options == null) return { ok: true, action };
+  if (!Array.isArray(record.options) || record.options.length > 3) {
+    return { ok: false, error: 'Learner question options are invalid' };
+  }
+  const options: string[] = [];
+  for (const option of record.options) {
+    if (typeof option !== 'string') return { ok: false, error: 'Learner question options are invalid' };
+    const text = option.trim();
+    if (!text || text.length > 120) return { ok: false, error: 'Learner question options are invalid' };
+    options.push(text);
+  }
+  if (options.length) action.options = options;
+  return { ok: true, action };
 }
 
 function extractJson(text: string): string {

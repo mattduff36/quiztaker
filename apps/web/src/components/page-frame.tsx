@@ -1,5 +1,5 @@
 export function PageFrame(props: {
-  eyebrow: string;
+  eyebrow?: string;
   title: string;
   description: string;
   actions?: React.ReactNode;
@@ -9,8 +9,8 @@ export function PageFrame(props: {
     <div className="mx-auto w-full max-w-[1500px] px-5 py-8 sm:px-8 lg:px-12 lg:py-11">
       <header className="flex flex-col gap-6 border-b border-slate-300 pb-8 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.22em] text-cyan-700">{props.eyebrow}</p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-[-0.045em] text-slate-950 sm:text-5xl">{props.title}</h1>
+          {props.eyebrow ? <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.22em] text-cyan-700">{props.eyebrow}</p> : null}
+          <h1 className={`${props.eyebrow ? 'mt-3 ' : ''}text-4xl font-semibold tracking-[-0.03em] text-slate-950 sm:text-5xl`}>{props.title}</h1>
           <p className="mt-3 max-w-2xl text-base leading-7 text-slate-600">{props.description}</p>
         </div>
         {props.actions ? <div className="shrink-0">{props.actions}</div> : null}

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { getCapability, learnerConstraints, learnerOfferedFor, riskLevels, validateCapabilityInput, type PlanProposal, type PlanTarget } from '@quiztaker/core';
+import { getCapability, riskLevels, validateCapabilityInput, type PlanProposal, type PlanTarget } from '@quiztaker/core';
 import { capabilityNegotiationError } from '@/lib/capability-negotiation';
+import { assertLearnerDetectionMatch, learnerConstraints, learnerGuidanceText } from '@/lib/learner';
 import { parityAllows } from '@/lib/parity';
 import { queryOne, queryRows } from '@/lib/db';
 
@@ -26,14 +27,20 @@ export async function createPlan(userId: string, input: CreatePlanInput): Promis
   if (!capability) throw new Error('Unknown capability');
   if (!parityAllows(capability.id)) throw new Error('This action is disabled');
   await assertHelperSupports(userId, input.helperId, capability.id, capability.version);
-  if (capability.id === 'quiz-learn') await assertLearnerPage(userId, input.helperId);
-  const target = input.capabilityInput?.target as { browserSessionId?: string; revision?: number } | undefined;
+  const capabilityInput = { ...(input.capabilityInput ?? { capabilityId: capability.id }) };
+  const isLearner = capability.id === 'quiz-learn';
+  if (isLearner) {
+    await assertLearnerPage(userId, input.helperId, capabilityInput);
+    const guidance = learnerGuidanceText(capabilityInput.guidance);
+    if (!guidance.ok) throw new Error(guidance.error);
+    if (guidance.guidance) capabilityInput.guidance = guidance.guidance;
+    else delete capabilityInput.guidance;
+  }
+  const target = capabilityInput.target as { browserSessionId?: string; revision?: number } | undefined;
   const risk = higherRisk(capability.risk, input.risk);
   const attemptId = randomUUID();
   const source = input.source ?? 'manual-capability';
   let args = input.args ?? capability.args ?? [];
-  const capabilityInput = input.capabilityInput ?? { capabilityId: capability.id };
-  const isLearner = capability.id === 'quiz-learn';
   if (input.capabilityInput || ['cert-batch', 'class-batch', 'open-url', 'fit-tab', 'slickquiz-solve', 'tab-inspect', 'quiz-learn'].includes(capability.id)) {
     const validated = validateCapabilityInput(capability.id, capabilityInput);
     if (!validated.ok) throw new Error(validated.error);
@@ -143,18 +150,33 @@ export async function assertHelperSupports(
   if (error) throw new Error(error);
 }
 
-async function assertLearnerPage(userId: string, helperId: string): Promise<void> {
-  const session = await queryOne<{ detection: { detected?: string } | null }>(
-    `select detection
+async function assertLearnerPage(
+  userId: string,
+  helperId: string,
+  capabilityInput: Record<string, unknown>,
+): Promise<void> {
+  const session = await queryOne<{
+    id: string;
+    revision: number;
+    tabs: Array<{ targetId?: string; index?: number; url?: string }>;
+    detection: { detected?: string | null; tabIdx?: number | null; url?: string | null } | null;
+  }>(
+    `select id, revision, tabs, detection
      from browser_sessions
      where user_id = $1 and helper_id = $2 and closed_at is null
      order by updated_at desc
      limit 1`,
     [userId, helperId],
   );
-  if (!learnerOfferedFor(session?.detection?.detected)) {
-    throw new Error('Learn quiz is only available for an unrecognized, unknown, or document page');
-  }
+  if (!session) throw new Error('Learn quiz needs the selected browser tab');
+  const target = capabilityInput.target as { targetId?: string; browserSessionId?: string; revision?: number } | undefined;
+  assertLearnerDetectionMatch({
+    sessionId: session.id,
+    revision: Number(session.revision),
+    tabs: session.tabs ?? [],
+    detection: session.detection,
+    target,
+  });
 }
 
 function higherRisk(left: PlanProposal['risk'], right?: PlanProposal['risk']): PlanProposal['risk'] {

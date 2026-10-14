@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { put } from '@vercel/blob';
 import {
   authorizeRun,
+  assertFreshTarget,
   classifyOutcome,
   deriveHelperSecret,
   diagnoseRun,
@@ -9,6 +10,7 @@ import {
   signJob,
   type JobEnvelope,
   type JobEventInput,
+  type BrowserSessionSnapshot,
 } from '@quiztaker/core';
 import { queryOne, queryRows, withTransaction, type SqlQuery } from '@/lib/db';
 import { getServerEnv } from '@/lib/env';
@@ -56,10 +58,23 @@ export async function createJob(userId: string, planId: string): Promise<{ jobId
   if (!authorization.ok) throw new Error(authorization.error || 'Run is not authorized');
 
   const jobId = randomUUID();
-  await queryOne<JobRow>(
-    'select * from consume_plan_and_create_job($1::uuid, $2::text, $3::uuid)',
-    [planId, userId, jobId],
-  );
+  await withTransaction(async (sql) => {
+    // Serialize all queue requests for this helper, including separate browser tabs.
+    const [helper] = await sql('select id from helpers where id = $1 and user_id = $2 and revoked_at is null for update', [plan.helperId, userId]);
+    if (!helper) throw new Error('Helper is unavailable');
+    const [active] = await sql("select id from jobs where helper_id = $1 and user_id = $2 and status in ('queued', 'dispatched', 'running') limit 1", [plan.helperId, userId]);
+    if (active && plan.capabilityId !== 'close-browser') throw new Error('A job is already active. Wait for it to finish or cancel it first.');
+    const capabilityInput = rawPlan!.input as Record<string, unknown> | undefined;
+    if (capabilityInput?.target) {
+      const [session] = await sql<BrowserSessionSnapshot>(
+        'select id, revision, tabs from browser_sessions where user_id = $1 and helper_id = $2 and closed_at is null order by updated_at desc limit 1 for share',
+        [userId, plan.helperId],
+      );
+      if (!session) throw new Error('Browser target is stale');
+      assertFreshTarget(capabilityInput, session);
+    }
+    await sql('select * from consume_plan_and_create_job($1::uuid, $2::text, $3::uuid)', [planId, userId, jobId]);
+  });
   await queryRows(
     `insert into attempt_events (user_id, attempt_id, event, data)
      values ($1, $2, 'step', $3::jsonb)`,
@@ -104,7 +119,7 @@ export async function recordJobEvent(
     [jobId, helperId, userId],
   );
   if (!job) throw new Error('Job not found');
-  if (['completed', 'failed', 'cancelled', 'helper-offline'].includes(job.status)) return;
+  if (['completed', 'failed', 'cancelled', 'helper-offline', 'awaiting-input'].includes(job.status)) return;
 
   const eventData = { ...input.data };
   let output = typeof eventData.output === 'string' ? eventData.output : '';
@@ -152,10 +167,11 @@ export async function recordJobEvent(
   const outcome = input.event === 'cancelled'
     ? { outcome: 'cancelled' as const, verified: false, status: 'cancelled' }
     : classifyOutcome({ script: job.script, code, output });
-  const diagnosis = diagnoseRun({ script: job.script, code, output, outcome });
+  const waitingForUser = outcome.status === 'needs-user-input';
+  const diagnosis = waitingForUser ? null : diagnoseRun({ script: job.script, code, output, outcome });
   const status = input.event === 'completed' && outcome.outcome === 'success' && outcome.verified
     ? 'completed'
-    : input.event === 'cancelled' ? 'cancelled' : 'failed';
+    : input.event === 'cancelled' ? 'cancelled' : waitingForUser ? 'awaiting-input' : 'failed';
   const plan = await queryOne<{ label: string; targets: Array<{ id?: string; title: string }> }>(
     'select label, targets from plans where id = $1',
     [job.plan_id],
@@ -168,7 +184,7 @@ export async function recordJobEvent(
     TERMINAL_JOB_LOCK_SQL,
     [jobId, helperId, userId],
   );
-  if (!locked[0] || ['completed', 'failed', 'cancelled', 'helper-offline'].includes(locked[0].status)) return;
+  if (!locked[0] || ['completed', 'failed', 'cancelled', 'helper-offline', 'awaiting-input'].includes(locked[0].status)) return;
   const artifact = await storeJobOutput(userId, jobId, output);
   await sql(
     `insert into job_events (user_id, job_id, sequence, event, data, occurred_at)
@@ -180,7 +196,7 @@ export async function recordJobEvent(
     `update jobs
      set status = $2, exit_code = $3, outcome = $4::jsonb, diagnosis = $5::jsonb,
          output_url = $6, finished_at = $7
-     where id = $1 and status not in ('completed', 'failed', 'cancelled', 'helper-offline')`,
+     where id = $1 and status not in ('completed', 'failed', 'cancelled', 'helper-offline', 'awaiting-input')`,
     [
       jobId,
       status,
@@ -219,7 +235,7 @@ export async function recordJobEvent(
       `job:${jobId}`,
       plan?.label || job.script,
       outcome.status,
-      outcome.verified ? 'Verified by the configured completion signal.' : 'Completion was not verified.',
+      waitingForUser ? 'Learning is paused for an answer from the user.' : outcome.verified ? 'Verified by the configured completion signal.' : 'Completion was not verified.',
       input.occurredAt,
       JSON.stringify({ jobId, outcome, diagnosis }),
     ],
@@ -256,7 +272,7 @@ export async function recordJobEvent(
       [jobId, status === 'completed' ? 'ended' : 'close_failed', input.occurredAt],
     );
   }
-  if (!probeOnly) {
+  if (!probeOnly && !waitingForUser) {
     await queueStrategyEvidence(sql, {
       userId,
       attemptId: job.attempt_id,

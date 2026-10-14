@@ -10,7 +10,7 @@ const path = require('path');
 const { chromium } = require('playwright');
 const { probePage } = require('./lib/page-probe');
 const { queueReview, suggestNextAction } = require('./lib/learning-engine');
-const { dataPath } = require('./lib/paths');
+const { dataPath, APP_ROOT } = require('./lib/paths');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 
@@ -95,7 +95,7 @@ async function main() {
       };
     });
 
-    const relativeDir = path.relative(ROOT, dir).replace(/\\/g, '/');
+    const relativeDir = path.relative(APP_ROOT, dir).replace(/\\/g, '/');
     const meta = {
       schemaVersion: 2,
       tabIdx,
