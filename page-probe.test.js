@@ -31,3 +31,10 @@ test('fingerprint is stable and changes with relevant signals', () => {
   assert.equal(fingerprintFor(base), fingerprintFor({ ...base, capturedAt: 'ignored' }));
   assert.notEqual(fingerprintFor(base), fingerprintFor({ ...base, hasAssessmentShell: false }));
 });
+
+test('recognizes Cornerstone curricula without treating them as Saba or trusting lookalike hosts', () => {
+  assert.equal(classifyUrl('https://canon-europe.csod.com/phnx/driver.aspx?routename=Learning%2FCurriculum%2FCurriculumPlayer&curriculumLoId=example'), 'csod-curriculum');
+  assert.equal(classifyUrl('https://canon-europe.csod.com/ui/lms-learner-home/home'), 'csod-learning');
+  assert.equal(classifyUrl('https://csod.com.evil.test/phnx/driver.aspx?routename=Learning/Curriculum/CurriculumPlayer'), 'other');
+  assert.equal(classifyUrl('http://canon-europe.csod.com/phnx/driver.aspx?routename=Learning/Curriculum/CurriculumPlayer'), 'other');
+});

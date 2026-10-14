@@ -17,3 +17,8 @@ test('replays sanitized probe classifications for every documented variant', asy
     });
   }
 });
+
+test('Cornerstone curricula and assessments never reuse Saba completion actions', () => {
+  assert.deepEqual(classifyProbeSignals({ urlKind: 'csod-curriculum', scorm: '1.2' }), { detected: 'csod-curriculum', capabilityId: 'learn-capture' });
+  assert.deepEqual(classifyProbeSignals({ urlKind: 'csod-learning', hasAssessmentShell: true, scorm: '1.2' }), { detected: 'server-assessment', capabilityId: 'learn-capture' });
+});

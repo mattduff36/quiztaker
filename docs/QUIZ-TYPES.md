@@ -385,3 +385,7 @@ This section is generated from verified attempt evidence in `data/knowledge/stra
 - **start-browser** `unfingerprinted` — candidate; 0 verified success(es), 0 failure(s), 1 distinct target(s).
 
 <!-- AUTO-EVIDENCE:END -->
+
+## Canon / Cornerstone OnDemand curriculum (2026-10-14)
+
+The Canon Development Hub uses `*.csod.com/phnx/driver.aspx?routename=Learning/Curriculum/CurriculumPlayer`, a different platform from the HP Saba integration. The captured Engineer Certification Programme curriculum shows module sections and a Launch Test control. A curriculum is not an assessment question page. Detection recognizes it and offers capture, with instructions to open the intended module then detect again. Do not apply Saba roster selectors or SCORM completion assumptions to this host. Actual assessment controls, attempt limits, and passing verification are not yet inspected or supported by a verified strategy.

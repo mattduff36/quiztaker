@@ -16,3 +16,14 @@ test('browser start requires a positive boolean connection result and successful
   assert.equal(classifyOutcome({ script: 'start-cdp-browser.js', code: 1, output: '{"connected":true}' }).verified, false);
   assert.equal(classifyOutcome({ script: 'pw-scorm-complete.js', code: 0, output: '{"connected":true}' }).verified, false);
 });
+
+test('tab inspection verifies written text evidence without claiming a quiz passed', () => {
+  const good = JSON.stringify({ ok: true, text: 'data/prep/tab2.txt', bytes: 1593 });
+  assert.equal(classifyOutcome({ script: 'pw-tab-inspect.js', code: 0, output: good }).status, 'inspection-written');
+  assert.equal(classifyOutcome({ script: 'pw-tab-inspect.js', code: 0, output: good }).verified, true);
+  for (const output of ['{}', 'not JSON', '{"ok":true}', '{"ok":true,"text":"x","bytes":0}']) {
+    assert.equal(classifyOutcome({ script: 'pw-tab-inspect.js', code: 0, output }).verified, false);
+  }
+  assert.equal(classifyOutcome({ script: 'pw-tab-inspect.js', code: 1, output: good }).verified, false);
+  assert.equal(classifyOutcome({ script: 'pw-scorm-complete.js', code: 0, output: good }).verified, false);
+});

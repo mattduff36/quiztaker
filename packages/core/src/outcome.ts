@@ -60,6 +60,18 @@ export function classifyOutcome(input: {
       : { outcome: 'failure', verified: false, status: 'browser-not-connected', failureSignature: 'cdp-not-connected', artifacts };
   }
 
+  if (input.script === 'pw-tab-inspect.js') {
+    let captured = false;
+    try {
+      const result = JSON.parse(text);
+      captured = result?.ok === true && typeof result.text === 'string' && result.text.length > 0
+        && Number.isInteger(result.bytes) && result.bytes > 0;
+    } catch { /* Missing inspection evidence. */ }
+    return captured
+      ? { outcome: 'success', verified: true, status: 'inspection-written', artifacts }
+      : { outcome: 'failure', verified: false, status: 'inspection-missing', failureSignature: 'inspection-missing', artifacts };
+  }
+
   if (structured) {
     const isComplete = structured.total > 0 && structured.completed === structured.total;
     const result: RunOutcome = {
