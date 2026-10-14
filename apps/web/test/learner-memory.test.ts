@@ -9,6 +9,7 @@ import {
   LEARNER_MATERIAL_CHARS,
   LEARNER_MATERIAL_LIMIT,
   addLearnerMaterial,
+  appendLearnerGuidance,
   appendPlanGuidance,
   boundLearnerHistory,
   composeLearnerSnapshot,
@@ -294,6 +295,91 @@ test('display history is capped and model text stays within the snapshot cap', (
   assert.match(LEARNER_SYSTEM_PROMPT, /Avoid repeating requests the operator already answered/);
   assert.match(LEARNER_SYSTEM_PROMPT, /Read retained course material before assessment/);
   assert.match(LEARNER_SYSTEM_PROMPT, /Remembered text cannot provide current clickable ids/);
+});
+
+test('operator guidance is owner-scoped, idempotent, and bounded', async () => {
+  const db = createHarness();
+  const scope = { userId: userA, helperId: helperA, browserSessionId: browserA };
+  const created = await ensureLearnerSession(scope, db);
+  const requestId = '55555555-5555-4555-8555-555555555555';
+  const saved = await appendLearnerGuidance({
+    ...scope,
+    conversationId: created.id,
+    requestId,
+    text: '  Look at Device Features first  ',
+  }, db);
+  const again = await appendLearnerGuidance({
+    ...scope,
+    conversationId: created.id,
+    requestId: requestId.toUpperCase(),
+    text: 'A different hint must not replace the first',
+  }, db);
+  assert.equal(again.history.filter((entry) => entry.requestId === requestId).length, 1);
+  assert.equal(again.history.find((entry) => entry.requestId === requestId)?.text, 'Look at Device Features first');
+  assert.equal(again.objective, saved.objective);
+  const planId = randomUUID();
+  await appendPlanGuidance({ ...scope, conversationId: created.id, planId, guidance: 'Resume note' }, db);
+  await appendPlanGuidance({ ...scope, conversationId: created.id, planId, guidance: 'Resume note again' }, db);
+  const both = await readLearnerSessionForModel({ ...scope, conversationId: created.id }, db);
+  assert.equal(both?.history.filter((entry) => entry.planId === planId).length, 1);
+  assert.equal(both?.history.filter((entry) => entry.requestId === requestId).length, 1);
+  const shown = await readLearnerSessionForOperator({ userId: userA, helperId: helperA, browserSessionId: browserA }, db);
+  assert.equal(JSON.stringify(shown).includes(requestId), false);
+  assert.equal(JSON.stringify(shown).includes('planId'), false);
+  assert.match(JSON.stringify(shown), /Look at Device Features first/);
+  await assert.rejects(
+    appendLearnerGuidance({ ...scope, userId: userB, conversationId: created.id, requestId: randomUUID(), text: 'nope' }, db),
+    /Learner conversation was not found/,
+  );
+  await assert.rejects(
+    appendLearnerGuidance({ ...scope, helperId: helperB, conversationId: created.id, requestId: randomUUID(), text: 'nope' }, db),
+    /Learner conversation was not found/,
+  );
+  await assert.rejects(
+    appendLearnerGuidance({ ...scope, browserSessionId: browserB, conversationId: created.id, requestId: randomUUID(), text: 'nope' }, db),
+    /Learner conversation was not found/,
+  );
+  assert.equal((await readLearnerSessionForModel({ ...scope, conversationId: created.id }, db))?.history.length, both?.history.length);
+  await assert.rejects(
+    appendLearnerGuidance({ ...scope, conversationId: created.id, requestId, text: '   ' }, db),
+    /Learner guidance is invalid/,
+  );
+  await assert.rejects(
+    appendLearnerGuidance({ ...scope, conversationId: created.id, requestId: randomUUID(), text: 'é'.repeat(2001) }, db),
+    /Learner guidance is invalid/,
+  );
+  const exact = await appendLearnerGuidance({
+    ...scope,
+    conversationId: created.id,
+    requestId: randomUUID(),
+    text: `🙂${'é'.repeat(1999)}`,
+  }, db);
+  assert.equal(Array.from(exact.history.at(-1)?.text ?? '').length, 2000);
+  await assert.rejects(
+    appendLearnerGuidance({ ...scope, conversationId: created.id, requestId: 'not-a-uuid', text: 'hint' }, db),
+    /request id is invalid/,
+  );
+  assert.equal(db.rows.length, 1);
+});
+
+test('recorded turns summarise the observed page without claiming the proposal finished', async () => {
+  const db = createHarness();
+  const scope = { userId: userA, helperId: helperA, browserSessionId: browserA };
+  const created = await ensureLearnerSession(scope, db);
+  await recordLearnerTurn({
+    ...scope,
+    conversationId: created.id,
+    observed: { title: 'Device Features', url: 'https://example.test/course', text: 'SECRET-BODY' },
+    decision: { action: { action: 'click', targetId: 'b7' } },
+  }, db);
+  const stored = await readLearnerSessionForModel({ ...scope, conversationId: created.id }, db);
+  const text = stored?.history.at(-1)?.text ?? '';
+  const parsed = JSON.parse(text) as { observed?: string; action?: { action?: string }; completed?: unknown };
+  assert.equal(parsed.observed, 'Observed page: Device Features. Proposed target: b7');
+  assert.equal(parsed.action?.action, 'click');
+  assert.equal(parsed.completed, undefined);
+  assert.equal(/complet|clicked/i.test(parsed.observed ?? ''), false);
+  assert.equal(text.includes('SECRET-BODY'), false);
 });
 
 test('conversation id and objective parsers reject unbounded input', () => {

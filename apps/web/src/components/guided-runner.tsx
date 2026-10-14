@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { LoaderCircle, Play, Square } from 'lucide-react';
 import { decideGuidedFlow, learnerQuestion, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab, type GuidedDetection } from '@/lib/guided-flow';
+import { learnerActivityUpdates } from '@/lib/learner-activity';
 import { readJsonResponse } from '@/lib/operations-readiness';
 
 type Tab = { targetId: string; index: number; title: string; url: string; fingerprint: string };
@@ -10,10 +11,10 @@ type Session = { id: string; revision: number; tabs: Tab[]; cdp_connected: boole
 type Context = { helper: { id: string; is_online: boolean; version: string } | null; session?: Session | null; learnerEnabled?: boolean; activeJob?: { id: string; status: string } | null };
 type Job = { id: string; status: string; outcome?: { verified?: boolean; status?: string }; result?: { ok?: boolean; result?: { detection?: GuidedDetection } } };
 type Question = { question: string; options?: string[]; next?: string; model?: boolean; targetId?: string; sessionId?: string; url?: string };
-type RememberedTurn = { role: 'user' | 'assistant'; text: string; url?: string };
+type RememberedTurn = { role: 'user' | 'assistant'; text: string; url?: string; guidance?: boolean };
 type CourseMemory = { browserSessionId?: string; id: string | null; objective: string | null; history: RememberedTurn[] };
 function rememberedQuestion(memory: CourseMemory | null) {
-  const last = memory?.history.at(-1);
+  const last = memory?.history.findLast((turn) => !turn.guidance);
   if (last?.role !== 'assistant' || !last.url) return null;
   try { const decision = JSON.parse(last.text); return decision.action?.action === 'ask-user' ? learnerQuestion(`LEARNER_QUESTION ${JSON.stringify({ ...decision.action, url: last.url })}`) : null; } catch { return null; }
 }
@@ -46,13 +47,27 @@ export function GuidedRunner(props: {
   const [replyError, setReplyError] = useState<string | null>(null);
   const [objective, setObjective] = useState('Read the selected course material, then work through its related quiz.');
   const [memory, setMemory] = useState<CourseMemory | null>(null);
+  const [runOutput, setRunOutput] = useState('');
+  const [guidance, setGuidance] = useState('');
+  const [guidanceSending, setGuidanceSending] = useState(false);
+  const [guidanceNotice, setGuidanceNotice] = useState<string | null>(null);
+  const [guidanceError, setGuidanceError] = useState<string | null>(null);
   const objectiveEdited = useRef(false);
   const locked = useRef(false);
   const stopped = useRef(false);
   const mounted = useRef(true);
   const ownedJob = useRef<string | null>(null);
+  const memoryRequest = useRef(0);
+  const guidanceAttempt = useRef<{ text: string; requestId: string } | null>(null);
+  const guidanceLock = useRef(false);
   const session = props.session;
+  const scopeRef = useRef('');
+  scopeRef.current = `${props.helperId}:${session?.id || ""}`;
   const currentMemory = memory?.browserSessionId === session?.id ? memory : null;
+  const jobRunning = Boolean(props.lastJob && running(props.lastJob.status) && props.lastJob.id === props.outputJobId);
+  const activityOutput = (busy && runOutput) || (jobRunning ? props.lastOutput : '');
+  const progress = learnerActivityUpdates(activityOutput);
+  const currentProgress = progress.at(-1) ?? '';
   const selected = session?.tabs.find((tab) => tab.targetId === props.selectedTarget);
   const savedTarget = props.lastJob?.input?.target;
   const outputQuestion = !busy && props.lastJob?.id === props.outputJobId && props.lastJob?.capability_id === 'quiz-learn' && !running(props.lastJob.status)
@@ -77,14 +92,33 @@ export function GuidedRunner(props: {
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; stopped.current = true; }; }, []);
 
   useEffect(() => {
-    if (!session?.id || busy) return;
+    setGuidance('');
+    setGuidanceNotice(null);
+    setGuidanceError(null);
+    guidanceAttempt.current = null;
+  }, [props.helperId, session?.id]);
+
+  useEffect(() => {
+    if (!session?.id) return;
+    const sessionId = session.id;
     let ignore = false;
-    void fetch(`/api/operations/learning?helperId=${encodeURIComponent(props.helperId)}&sessionId=${encodeURIComponent(session.id)}`, { cache: 'no-store' })
-      .then((response) => readJsonResponse<CourseMemory>(response, 'Could not load course memory'))
-      .then((value) => { if (!ignore) { setMemory({ ...value, browserSessionId: session.id }); if (value.objective && !objectiveEdited.current) setObjective(value.objective); } })
-      .catch(() => { if (!ignore) setMemory(null); });
-    return () => { ignore = true; };
-  }, [props.helperId, session?.id, props.lastJob?.id, props.lastJob?.status, busy]);
+    async function loadMemory() {
+      const token = ++memoryRequest.current;
+      try {
+        const response = await fetch(`/api/operations/learning?helperId=${encodeURIComponent(props.helperId)}&sessionId=${encodeURIComponent(sessionId)}`, { cache: 'no-store' });
+        const value = await readJsonResponse<CourseMemory>(response, 'Could not load course memory');
+        if (ignore || token !== memoryRequest.current) return;
+        setMemory({ ...value, browserSessionId: sessionId });
+        if (value.objective && !objectiveEdited.current) setObjective(value.objective);
+      } catch {
+        if (ignore || token !== memoryRequest.current) return;
+        setMemory((current) => current?.browserSessionId === sessionId ? current : null);
+      }
+    }
+    void loadMemory();
+    const timer = busy || props.active ? window.setInterval(() => void loadMemory(), 3000) : undefined;
+    return () => { ignore = true; if (timer) window.clearInterval(timer); };
+  }, [props.helperId, session?.id, props.lastJob?.id, props.lastJob?.status, busy, props.active]);
 
   async function api<T>(url: string, body?: unknown, method?: string): Promise<T> {
     const response = await fetch(url, { method: method || (body ? 'POST' : 'GET'), cache: 'no-store', signal: AbortSignal.timeout(20_000), ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
@@ -129,7 +163,9 @@ export function GuidedRunner(props: {
       checkStopped();
       const value = await api<{ job: Job; events: Array<{ data?: { text?: string } }> }>(`/api/jobs/${id}`);
       checkStopped();
-      if (!running(value.job.status)) { ownedJob.current = null; return { job: value.job, output: value.events.map((event) => event.data?.text || '').join('') }; }
+      const output = value.events.map((event) => event.data?.text || '').join('');
+      if (mounted.current) setRunOutput(output);
+      if (!running(value.job.status)) { ownedJob.current = null; return { job: value.job, output }; }
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
     throw new Error('This run is taking longer than expected. Check its status in Advanced tools before starting another.');
@@ -138,7 +174,7 @@ export function GuidedRunner(props: {
   async function start(quickReply?: string) {
     if (locked.current || !(pauseTab || selected) || !props.ready || props.active) return;
     locked.current = true; stopped.current = false;
-    setBusy(true); props.onBusy(true); setSettingsNeeded(false); setReplyError(null);
+    setBusy(true); props.onBusy(true); setSettingsNeeded(false); setReplyError(null); setRunOutput('');
     const reply = quickReply ?? answer.trim();
     const guidance = question?.model && !(openModuleRequest && quickReply === 'Done, resume now') && reply ? `Previous question: ${question.question}\nUser answer: ${reply}`.slice(0, 2000) : undefined;
     setQuestion(null);
@@ -210,6 +246,46 @@ export function GuidedRunner(props: {
     }
   }
 
+  async function sendGuidance() {
+    if (guidanceLock.current || !session?.id || !currentMemory?.id) return;
+    const text = guidance.trim();
+    if (!text) return;
+    if (!guidanceAttempt.current || guidanceAttempt.current.text !== text) {
+      guidanceAttempt.current = { text, requestId: crypto.randomUUID() };
+    }
+    const requestId = guidanceAttempt.current.requestId;
+    const requestScope = scopeRef.current;
+    guidanceLock.current = true;
+    setGuidanceSending(true);
+    setGuidanceError(null);
+    try {
+      const saved = await api<CourseMemory>('/api/operations/learning', {
+        helperId: props.helperId,
+        sessionId: session.id,
+        conversationId: currentMemory.id,
+        requestId,
+        text,
+      });
+      if (!mounted.current || requestScope !== scopeRef.current) return;
+      memoryRequest.current += 1;
+      setMemory({ ...saved, browserSessionId: session.id });
+      setGuidance((current) => {
+        if (current.trim() === text) {
+          guidanceAttempt.current = null;
+          return '';
+        }
+        guidanceAttempt.current = null;
+        return current;
+      });
+      setGuidanceNotice(question ? 'Saved — applies at the next step. Resume when you are ready.' : 'Saved — applies at the next step.');
+    } catch (error) {
+      if (mounted.current) setGuidanceError(error instanceof Error ? error.message : 'The hint could not be saved. Your text is still here.');
+    } finally {
+      guidanceLock.current = false;
+      if (mounted.current) setGuidanceSending(false);
+    }
+  }
+
   async function stop() {
     stopped.current = true;
     setStage('Stopping'); setMessage('No further steps will be queued. Waiting for the helper to stop the current job.');
@@ -228,6 +304,11 @@ export function GuidedRunner(props: {
     </label>
     <label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol work towards?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setObjective(event.target.value); }} disabled={busy || props.active} maxLength={1000} rows={2} className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6" /><span className="text-xs font-normal text-slate-600">This goal and your replies are remembered as you move through the course.</span></label>
     {!question ? <div role="status" aria-live="polite"><p className="font-semibold text-slate-950">{stage}</p><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{message}</p></div> : null}
+    {progress.length > 0 && (busy || jobRunning) ? <section className="rounded-md border border-slate-200 bg-slate-50 p-4" aria-labelledby="live-activity-title">
+      <h3 id="live-activity-title" className="text-sm font-semibold text-slate-950">Live activity</h3>
+      {progress.length > 1 ? <ol className="mt-3 space-y-1 text-sm leading-6 text-slate-600">{progress.slice(0, -1).map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ol> : null}
+      <p role="status" aria-live="polite" className="mt-2 text-sm font-medium leading-6 text-slate-800">{currentProgress}</p>
+    </section> : null}
     {replyError ? <p role="alert" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">{replyError}</p> : null}
     {question ? <section className="space-y-4 border-t border-slate-200 pt-5" aria-labelledby="assistant-request-title">
       <h3 id="assistant-request-title" className="text-base font-semibold text-slate-950">{openModuleRequest || !question.model ? 'Action needed in the helper browser' : 'Your AI assistant has a question'}</h3>
@@ -246,6 +327,16 @@ export function GuidedRunner(props: {
       {busy ? <button type="button" onClick={() => void stop()} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold"><Square className="size-4" />Stop</button> : null}
       {settingsNeeded ? <a href="/settings" className="font-semibold text-cyan-800 underline">Connect or test AI in Settings</a> : null}
     </div>
+    {currentMemory?.id ? <div className="space-y-3 border-t border-slate-200 pt-5">
+      <label className="grid gap-2 text-sm font-semibold text-slate-800">Hint or change of direction
+        <textarea value={guidance} onChange={(event) => { setGuidance(event.target.value); setGuidanceNotice(null); setGuidanceError(null); }} disabled={guidanceSending} maxLength={2000} rows={2} placeholder="Give the assistant a hint or change direction." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6" />
+      </label>
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" onClick={() => void sendGuidance()} disabled={guidanceSending || !guidance.trim()} className="inline-flex min-h-11 items-center rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-900 hover:border-cyan-700 hover:text-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{guidanceSending ? 'Saving…' : 'Send guidance'}</button>
+        {guidanceNotice ? <p role="status" className="text-sm text-slate-700">{guidanceNotice}</p> : null}
+      </div>
+      {guidanceError ? <p role="alert" className="text-sm text-amber-950">{guidanceError}</p> : null}
+    </div> : null}
     {currentMemory?.history.some((turn) => conversationText(turn)) ? <details className="rounded-md border border-slate-200 bg-slate-50 p-4"><summary className="cursor-pointer text-sm font-semibold text-slate-700">Conversation remembered for this course</summary><ol className="mt-4 space-y-3">{currentMemory.history.map((turn, index) => { const text = conversationText(turn); return text ? <li key={index} className="text-sm leading-6 text-slate-700"><span className="font-semibold">{turn.role === 'user' ? 'You' : 'AI assistant'}: </span>{text}</li> : null; })}</ol></details> : null}
     <p className="max-w-2xl text-xs leading-5 text-slate-600">Starting authorises the supported strategy for this tab. Learning can read page text, select answers and navigate, but will not submit a final assessment. Keep this page open; leaving it stops automatic follow-up steps. Any current helper job remains visible in Advanced tools.</p>
   </section>;

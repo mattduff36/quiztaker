@@ -54,6 +54,7 @@ export interface LearnerHistoryEntry {
   text: string;
   at: string;
   planId?: string;
+  requestId?: string;
   url?: string;
 }
 
@@ -145,6 +146,7 @@ export function boundLearnerHistory(entries: LearnerHistoryEntry[]): LearnerHist
     at: entry.at,
     ...(entry.url ? { url: entry.url } : {}),
     ...(entry.planId ? { planId: entry.planId } : {}),
+    ...(entry.requestId ? { requestId: entry.requestId } : {}),
   }));
 }
 
@@ -170,11 +172,12 @@ export function addLearnerMaterial(
 
 export function displayLearnerHistory(
   history: LearnerHistoryEntry[],
-): Array<{ role: 'user' | 'assistant'; text: string; url?: string }> {
+): Array<{ role: 'user' | 'assistant'; text: string; url?: string; guidance?: boolean }> {
   return boundLearnerHistory(history).map((entry) => ({
     role: entry.role,
     text: utf8Text(entry.text, LEARNER_HISTORY_CHARS),
     ...(entry.url ? { url: entry.url } : {}),
+    ...(entry.requestId ? { guidance: true } : {}),
   }));
 }
 
@@ -244,6 +247,32 @@ export async function ensureLearnerSession(
   });
 }
 
+export async function appendLearnerGuidance(
+  input: LearnerMemoryScope & { conversationId: string; requestId: string; text: string },
+  deps?: LearnerMemoryDeps,
+): Promise<LearnerMemorySession> {
+  const db = deps ?? defaultDeps();
+  const text = input.text.normalize('NFC').trim();
+  if (!text || Array.from(text).length > LEARNER_HISTORY_CHARS) {
+    throw new Error('Learner guidance is invalid');
+  }
+  if (!UUID_RE.test(input.requestId)) throw new Error('Learner guidance request id is invalid');
+  const requestId = input.requestId.toLowerCase();
+  return db.transaction(async (sql) => {
+    const existing = await lockById(sql, input, input.conversationId);
+    if (!existing) throw new Error('Learner conversation was not found');
+    if (existing.history.some((entry) => entry.role === 'user' && entry.requestId === requestId)) {
+      return existing;
+    }
+    return updateSession(sql, existing, {
+      history: boundLearnerHistory([
+        ...existing.history,
+        { role: 'user', text, at: new Date().toISOString(), requestId },
+      ]),
+    });
+  });
+}
+
 export async function appendPlanGuidance(
   input: LearnerMemoryScope & { conversationId: string; planId: string; guidance: string },
   deps?: LearnerMemoryDeps,
@@ -282,7 +311,7 @@ export async function readLearnerSessionForModel(
 export async function readLearnerSessionForOperator(
   input: { userId: string; helperId: string; browserSessionId?: string | null },
   deps?: LearnerMemoryDeps,
-): Promise<{ id: string; objective: string | null; history: Array<{ role: 'user' | 'assistant'; text: string; url?: string }> } | null> {
+): Promise<{ id: string; objective: string | null; history: Array<{ role: 'user' | 'assistant'; text: string; url?: string; guidance?: boolean }> } | null> {
   const db = deps ?? defaultDeps();
   const rows = await db.query<{ id: string; objective: string | null; history: unknown }>(
     learnerMemorySql.readOperator,
@@ -309,11 +338,18 @@ export async function recordLearnerTurn(
   return db.transaction(async (sql) => {
     const existing = await lockById(sql, input, input.conversationId);
     if (!existing) return false;
-    const decision = utf8Text(JSON.stringify({
+    const summary = observedSummary(input.observed, input.decision);
+    const payload = {
       action: input.decision.action ?? null,
       stop: Boolean(input.decision.stop && !input.decision.action),
       error: input.decision.error ?? null,
-    }), LEARNER_HISTORY_CHARS);
+      ...(summary ? { observed: summary } : {}),
+    };
+    let encoded = JSON.stringify(payload);
+    if (summary && Array.from(encoded).length > LEARNER_HISTORY_CHARS) {
+      encoded = JSON.stringify({ action: payload.action, stop: payload.stop, error: payload.error });
+    }
+    const decision = utf8Text(encoded, LEARNER_HISTORY_CHARS);
     await updateSession(sql, existing, {
       history: boundLearnerHistory([
         ...existing.history,
@@ -323,6 +359,23 @@ export async function recordLearnerTurn(
     });
     return true;
   });
+}
+
+function observedSummary(
+  observed: { title?: string; url?: string; text?: string },
+  decision: { action?: unknown },
+): string | null {
+  const title = utf8Text(observed.title ?? '', 120).trim();
+  const action = decision.action && typeof decision.action === 'object'
+    ? decision.action as { action?: unknown; targetId?: unknown }
+    : null;
+  const targetId = typeof action?.targetId === 'string' ? utf8Text(action.targetId, 80).trim() : '';
+  const parts: string[] = [];
+  if (title) parts.push(`Observed page: ${title}`);
+  else if (utf8Text(observed.url ?? '', 500).trim()) parts.push('Observed the current course page');
+  if (targetId && action?.action !== 'ask-user') parts.push(`Proposed target: ${targetId}`);
+  const summary = parts.join('. ');
+  return summary ? utf8Text(summary, 240) : null;
 }
 
 function conversationLines(history: LearnerHistoryEntry[]): string[] {
@@ -429,6 +482,7 @@ function parseHistory(value: unknown): LearnerHistoryEntry[] {
       text: record.text,
       at: record.at,
       ...(typeof record.planId === 'string' ? { planId: record.planId } : {}),
+      ...(typeof record.requestId === 'string' ? { requestId: record.requestId } : {}),
       ...(typeof record.url === 'string' ? { url: record.url.slice(0, 500) } : {}),
     });
   }
