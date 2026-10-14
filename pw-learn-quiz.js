@@ -23,7 +23,7 @@ const MAX_STEPS = 80;
 const SUBMIT_LABEL = /\b(submit|finish|exit|end test|grade)\b/i;
 const NAVIGATION_LABEL = /^(next(?: page| slide)?|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch|resume|menu|home|contents)$/i;
 const OPEN_TOPIC_LABEL = /^Open topic: .{1,140}$/;
-const COURSE_INTERACTION_LABEL = /^Course interaction: \d+_\d+_click\d+$/;
+const COURSE_INTERACTION_LABEL = /^Course interaction: \d+_\d+_click_?\d+$/;
 const REPEATED_VIEW_LIMIT = 3;
 const REPEATED_VIEW_OPTION = 'Done, resume now';
 const PASS_EVIDENCE = /\byou passed\b|\byour score:\s*100\s*%/i;
@@ -90,7 +90,7 @@ function screenElementControlName(id, className) {
   if (!classes.has('screenElement')) return '';
   if (classes.has('backbtn')) return 'Previous';
   if (classes.has('nextbtn')) return 'Next';
-  if (classes.has('box') && /^\d+_\d+_click\d+$/.test(String(id || ''))) {
+  if (classes.has('box') && /^\d+_\d+_click_?\d+$/.test(String(id || ''))) {
     return `Course interaction: ${id}`;
   }
   return '';
@@ -385,7 +385,7 @@ async function main() {
         console.log('Following the course window opened by the selected control');
       }
       const target = [...(view.buttons || []), ...(view.choices || [])].find((item) => item.id === action.targetId);
-      const activity = action.action === 'click' ? `Opened ${target?.name || 'the selected control'}.` : action.action === 'answer-select' ? `Selected ${target?.name || 'an answer'}.` : action.action === 'scroll' ? 'Scrolled to look for more course content.' : 'Checking the current page.';
+      const activity = action.action === 'click' ? (target?.name?.startsWith('Course interaction:') ? 'Opened an interactive part of the course.' : `Opened ${target?.name || 'the selected control'}.`) : action.action === 'answer-select' ? `Selected ${target?.name || 'an answer'}.` : action.action === 'scroll' ? 'Scrolled to look for more course content.' : 'Checking the current page.';
       console.log(`LEARNER_PROGRESS ${JSON.stringify({ message: activity })}`);
       console.log(`Learner step ${step}: ${action.action}`);
     }

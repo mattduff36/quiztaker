@@ -120,6 +120,7 @@ test('course interaction names allow only the exact hotspot id', () => {
   assert.equal(screenElementControlName('1_110_backbtn', 'screenElement box backbtn'), 'Previous');
   assert.equal(screenElementControlName('1_110_nextbtn', 'screenElement box nextbtn'), 'Next');
   assert.equal(screenElementControlName('1_110_click1', 'screenElement box'), 'Course interaction: 1_110_click1');
+  assert.equal(screenElementControlName('1_120_click_1', 'screenElement box'), 'Course interaction: 1_120_click_1');
   assert.equal(screenElementControlName('1_110_slide', 'screenElement image'), '');
   assert.equal(screenElementControlName('1_110_clickhint1', 'screenElement box'), '');
 });

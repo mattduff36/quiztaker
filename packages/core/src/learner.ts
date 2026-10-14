@@ -16,7 +16,7 @@ const deniedLearnerActions = new Set(['exit', 'submit', 'launch', 'scorm-complet
 const submitLabel = /\b(submit|finish|exit|end test|grade)\b/i;
 const navigationLabel = /^(next(?: page| slide)?|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch|resume|menu|home|contents)$/i;
 const openTopicLabel = /^Open topic: .{1,140}$/;
-const courseInteractionLabel = /^Course interaction: \d+_\d+_click\d+$/;
+const courseInteractionLabel = /^Course interaction: \d+_\d+_click_?\d+$/;
 
 export interface LearnerControl {
   id: string;
