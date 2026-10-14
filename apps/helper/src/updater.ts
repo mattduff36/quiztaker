@@ -116,11 +116,15 @@ export function createApplyScript(): string {
     'set "LAUNCHER=%~3"',
     'set "CONTROL=%~4"',
     'set "RESULT=%~dp0installer-exit.txt"',
+    'set "PROCESS_CHECK=%~dp0process-check.txt"',
     'set /a TRIES=0',
     ':wait',
     'set /a TRIES+=1',
     'if %TRIES% GTR 30 goto install',
-    'tasklist /FI "PID eq %PID%" 2>nul | findstr /C:"%PID%" >nul',
+    // A pipeline can hang in a detached cmd.exe with ignored stdio. Give findstr
+    // a real file instead of a pipe before waiting for the helper to exit.
+    'tasklist /FI "PID eq %PID%" >"%PROCESS_CHECK%" 2>nul',
+    'findstr /C:"%PID%" "%PROCESS_CHECK%" >nul',
     'if not errorlevel 1 (',
     '  ping -n 2 127.0.0.1 >nul',
     '  goto wait',

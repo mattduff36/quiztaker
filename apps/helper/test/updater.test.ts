@@ -56,6 +56,8 @@ test('the installer script waits for this process and does not embed a download 
   assert.match(script, /\/qn \/norestart/);
   assert.match(script, /--control-plane-url="%CONTROL%"/);
   assert.doesNotMatch(script, /github\.com/);
+  assert.doesNotMatch(script, /tasklist[^\r\n]*\|/);
+  assert.match(script, /findstr \/C:"%PID%" "%PROCESS_CHECK%"/);
 });
 
 test('downloads a verified MSI and launches the installer once', async () => {
