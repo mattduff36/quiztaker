@@ -3,21 +3,23 @@ import { capabilityManifest } from '@quiztaker/core';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { queryOne, queryRows } from '@/lib/db';
 import { describeHelperUpdate } from '@/lib/helper-update';
-import { getServerEnv } from '@/lib/env';
-import { learnerIsEnabled } from '@/lib/learner';
+import { readPublicLlmConnection } from '@/lib/llm-provider';
 import { parityEnabled } from '@/lib/parity';
 import { getLatestHelperRelease } from '@/lib/releases';
 
 export const dynamic = 'force-dynamic';
 
-function learnerReady(): boolean {
-  const env = getServerEnv();
-  return learnerIsEnabled({
-    learnerApiKey: env.LEARNER_API_KEY,
-    cursorApiKey: env.CURSOR_API_KEY,
-    nodeEnv: process.env.NODE_ENV,
-    vercel: process.env.VERCEL,
-  });
+async function learnerStatus(userId: string) {
+  const connection = await readPublicLlmConnection(userId);
+  return {
+    learnerEnabled: connection.ready,
+    llmConnection: {
+      source: connection.source,
+      ready: connection.ready,
+      provider: connection.provider,
+      model: connection.model,
+    },
+  };
 }
 
 export async function GET() {
@@ -34,11 +36,12 @@ export async function GET() {
      limit 1`,
     [user.id],
   );
+  const llm = await learnerStatus(user.id);
   if (!helper) {
     return NextResponse.json({
       helper: null,
       parityEnabled: parityEnabled(),
-      learnerEnabled: learnerReady(),
+      ...llm,
       capabilities: capabilityManifest(),
     });
   }
@@ -90,7 +93,7 @@ export async function GET() {
     activeJob,
     captures,
     parityEnabled: parityEnabled(),
-    learnerEnabled: learnerReady(),
+    ...llm,
     capabilities: capabilityManifest(),
   });
 }

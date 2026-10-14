@@ -1,19 +1,22 @@
 import type { Metadata } from 'next';
 import { AppShell } from '@/components/app-shell';
+import { LlmSettings } from '@/components/llm-settings';
 import { PageFrame, Panel } from '@/components/page-frame';
 import { RevokeHelperButton } from '@/components/revoke-helper-button';
 import { requireAuthenticatedUser } from '@/lib/auth';
 import { queryRows } from '@/lib/db';
+import { LLM_PROVIDER_OPTIONS, readPublicLlmConnection } from '@/lib/llm-provider';
 
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
   title: 'Settings',
-  description: 'Manage the operator account and paired automation helpers.',
+  description: 'Manage the operator account, hosted AI connection, and paired automation helpers.',
 };
 
 export default async function SettingsPage() {
   const user = await requireAuthenticatedUser();
+  const llm = await readPublicLlmConnection(user.id);
   const helpers = await queryRows<{
     id: string;
     device_name: string;
@@ -29,7 +32,7 @@ export default async function SettingsPage() {
   );
   return (
     <AppShell email={user.email}>
-      <PageFrame eyebrow="Control plane" title="Settings" description="Manage the private operator account and paired execution devices.">
+      <PageFrame eyebrow="Control plane" title="Settings" description="Manage the private operator account, hosted AI connection, and paired execution devices.">
         <div className="grid gap-6 lg:grid-cols-2">
           <Panel title="Authorized account">
             <div className="p-6">
@@ -48,6 +51,13 @@ export default async function SettingsPage() {
               </div>
             )) : <p className="p-6 text-sm text-slate-500">No active helper is paired.</p>}
           </Panel>
+        </div>
+        <div className="mt-6">
+          <LlmSettings
+            key={`${llm.source}:${llm.provider ?? ''}:${llm.model ?? ''}:${llm.hasKey}`}
+            status={llm}
+            providers={LLM_PROVIDER_OPTIONS}
+          />
         </div>
       </PageFrame>
     </AppShell>

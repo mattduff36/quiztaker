@@ -570,7 +570,7 @@ function DetectionPanel(props: {
       >
         Learn quiz
       </Action>
-      {!props.learnerEnabled ? <p>Add LEARNER_API_KEY to enable Learn quiz. A local run uses CURSOR_API_KEY first.</p> : null}
+      {!props.learnerEnabled ? <p><a href="/settings" className="font-semibold text-cyan-800 underline">Connect your AI provider in Settings</a> to enable guided learning.</p> : null}
       {manualOnly ? <p>Learn quiz does not run on a server-scored assessment.</p> : null}
     </div>
   );

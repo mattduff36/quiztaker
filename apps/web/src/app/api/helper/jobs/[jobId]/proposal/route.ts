@@ -5,6 +5,13 @@ import { queryOne, withTransaction } from '@/lib/db';
 import { getServerEnv } from '@/lib/env';
 import { askCursorLearner } from '@/lib/cursor-learner';
 import { learnerModelChain, learnerPrefersCursor, requestLearnerDecision } from '@/lib/learner';
+import {
+  chooseProposalLearner,
+  completeHostedChat,
+  decryptLlmKey,
+  llmCredentialKey,
+  loadSecretLlmConnection,
+} from '@/lib/llm-provider';
 import { authenticateHelper } from '@/lib/security';
 
 const control = z.object({
@@ -52,6 +59,15 @@ export async function POST(
   }
   const parsed = schema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ stop: true, error: 'Learner snapshot is invalid' });
+  const snapshot = parsed.data.snapshot as LearnerSnapshot;
+  const stored = await loadSecretLlmConnection(helper.userId);
+  const choice = chooseProposalLearner(stored);
+  if (choice.kind === 'disabled') {
+    return NextResponse.json({ stop: true, error: 'Hosted learner is disconnected' });
+  }
+  if (choice.kind === 'blocked') {
+    return NextResponse.json({ stop: true, error: 'Hosted learner connection is not ready' });
+  }
   const maxSteps = Math.min(LEARNER_MAX_STEPS, Number(job.constraints.maxSteps ?? LEARNER_MAX_STEPS));
   const reserved = await withTransaction(async (sql) => {
     await sql(
@@ -75,6 +91,22 @@ export async function POST(
     return true;
   });
   if (!reserved) return NextResponse.json({ stop: true, error: 'Learner step cap reached' });
+  if (choice.kind === 'personal') {
+    let apiKey: string;
+    try {
+      apiKey = decryptLlmKey(helper.userId, choice, llmCredentialKey(process.env.LLM_CREDENTIAL_KEY), choice.provider);
+    } catch {
+      return NextResponse.json({ stop: true, error: 'Hosted learner connection is not ready' });
+    }
+    const personal = await completeHostedChat({
+      provider: choice.provider,
+      model: choice.model,
+      apiKey,
+      snapshot,
+    });
+    if (!personal.ok) return NextResponse.json({ stop: true, error: personal.error });
+    return NextResponse.json({ action: personal.action });
+  }
   const env = getServerEnv();
   const cursorKey = env.CURSOR_API_KEY;
   const preferCursor = learnerPrefersCursor({
@@ -91,7 +123,7 @@ export async function POST(
       models: env.LEARNER_MODELS,
       baseUrl: env.LEARNER_BASE_URL,
     }),
-    snapshot: parsed.data.snapshot as LearnerSnapshot,
+    snapshot,
     cursor: preferCursor && cursorKey
       ? (snapshot) => askCursorLearner({ apiKey: cursorKey, model: env.CURSOR_MODEL, snapshot })
       : undefined,
