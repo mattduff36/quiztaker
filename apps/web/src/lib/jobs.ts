@@ -17,6 +17,7 @@ import { getServerEnv } from '@/lib/env';
 import { applyStructuredResult } from '@/lib/parity-state';
 import { nextStrategyState } from '@/lib/strategy-state';
 import { mapPlan } from '@/lib/plans';
+import { recordLocalPausedQuestion, storedLearnerPauseScope } from '@/lib/learner-memory';
 import { TERMINAL_JOB_LOCK_SQL } from '@/lib/job-lock';
 
 interface JobRow extends Record<string, unknown> {
@@ -172,9 +173,14 @@ export async function recordJobEvent(
   const status = input.event === 'completed' && outcome.outcome === 'success' && outcome.verified
     ? 'completed'
     : input.event === 'cancelled' ? 'cancelled' : waitingForUser ? 'awaiting-input' : 'failed';
-  const plan = await queryOne<{ label: string; targets: Array<{ id?: string; title: string }> }>(
-    'select label, targets from plans where id = $1',
-    [job.plan_id],
+  const plan = await queryOne<{
+    label: string;
+    targets: Array<{ id?: string; title: string }>;
+    input: unknown;
+    browser_session_id: string | null;
+  }>(
+    'select label, targets, input, browser_session_id from plans where id = $1 and user_id = $2',
+    [job.plan_id, job.user_id],
   );
   const probeOnly = ['list-tabs', 'cdp-check', 'cert-status', 'detect', 'cert-dry-run', 'tab-inspect', 'fit-tab', 'start-browser', 'close-browser', 'open-url', 'learn-capture'].includes(job.capability_id);
   await withTransaction(async (sql) => {
@@ -211,6 +217,23 @@ export async function recordJobEvent(
     `update helpers set status = 'online', active_job_id = null where id = $1`,
     [helperId],
   );
+  // Job row is locked before this helper update (KEY SHARE deadlock documented above).
+  // Learner identity is the stored job/plan input, never the helper event payload.
+  const pauseScope = waitingForUser
+    ? storedLearnerPauseScope({
+      userId: job.user_id,
+      helperId: job.helper_id,
+      jobInput: job.input,
+      planInput: plan?.input,
+      planBrowserSessionId: plan?.browser_session_id,
+    })
+    : null;
+  if (pauseScope) {
+    await recordLocalPausedQuestion({ ...pauseScope, output }, {
+      query: sql,
+      transaction: async (fn) => fn(sql),
+    });
+  }
   await sql(
     `insert into attempt_events (user_id, attempt_id, event, data, occurred_at)
      select $1, $2, 'attempt-finished', $3::jsonb, $4

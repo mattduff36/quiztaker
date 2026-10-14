@@ -1,5 +1,6 @@
-import type { LearnerSnapshot } from '@quiztaker/core';
+import { parseLearnerAction, type LearnerSnapshot } from '@quiztaker/core';
 import { queryRows, withTransaction, type SqlQuery } from '@/lib/db';
+import { learnerQuestion } from '@/lib/guided-flow';
 
 export const LEARNER_HISTORY_LIMIT = 40;
 export const LEARNER_MATERIAL_LIMIT = 64;
@@ -359,6 +360,139 @@ export async function recordLearnerTurn(
     });
     return true;
   });
+}
+
+export interface StoredLearnerPauseScope {
+  userId: string;
+  helperId: string;
+  browserSessionId: string;
+  conversationId: string;
+}
+
+/** Binding for a paused question. Only the stored job and plan inputs are read. */
+export function storedLearnerPauseScope(stored: {
+  userId: string;
+  helperId: string;
+  jobInput: unknown;
+  planInput: unknown;
+  planBrowserSessionId?: string | null;
+}): StoredLearnerPauseScope | null {
+  if (!stored.userId || !stored.helperId) return null;
+  const fromJob = pauseBinding(stored.jobInput);
+  const fromPlan = pauseBinding(stored.planInput);
+  if (fromJob && fromPlan && (
+    fromJob.conversationId !== fromPlan.conversationId
+    || fromJob.browserSessionId !== fromPlan.browserSessionId
+  )) return null;
+  const binding = fromJob ?? fromPlan;
+  if (!binding) return null;
+  const planBrowser = typeof stored.planBrowserSessionId === 'string'
+    ? stored.planBrowserSessionId.toLowerCase()
+    : '';
+  if (planBrowser && planBrowser !== binding.browserSessionId) return null;
+  return { userId: stored.userId, helperId: stored.helperId, ...binding };
+}
+
+/**
+ * Persist a helper-emitted LEARNER_QUESTION inside the caller's transaction.
+ * The same deps are passed through to recordLearnerTurn so this does not open
+ * a second database transaction. An identical trailing provider question is
+ * kept, and its page URL is filled from the emitted line when missing.
+ */
+export async function recordLocalPausedQuestion(
+  input: LearnerMemoryScope & { conversationId: string; output: string },
+  deps?: LearnerMemoryDeps,
+): Promise<boolean> {
+  const paused = validatedPausedQuestion(input.output);
+  const conversationId = safeConversationId(input.conversationId);
+  if (!paused || !conversationId || !UUID_RE.test(input.browserSessionId)) return false;
+  const db = deps ?? defaultDeps();
+  const scope = { ...input, conversationId, browserSessionId: input.browserSessionId.toLowerCase() };
+  return db.transaction(async (sql) => {
+    const existing = await lockById(sql, scope, conversationId);
+    if (!existing) return false;
+    const last = existing.history.at(-1);
+    const previous = last ? askUserFromHistory(last) : null;
+    if (last && previous && sameAskUser(previous, paused)) {
+      if (paused.url && last.url !== paused.url) {
+        const history = existing.history.slice(0, -1).concat({ ...last, url: paused.url });
+        await updateSession(sql, existing, { history: boundLearnerHistory(history) });
+      }
+      return true;
+    }
+    return recordLearnerTurn({
+      ...scope,
+      observed: { ...(paused.url ? { url: paused.url } : {}) },
+      decision: {
+        action: {
+          action: 'ask-user',
+          question: paused.question,
+          ...(paused.options ? { options: paused.options } : {}),
+        },
+      },
+    }, { query: sql, transaction: async (fn) => fn(sql) });
+  });
+}
+
+function pauseBinding(value: unknown): { conversationId: string; browserSessionId: string } | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const conversationId = safeConversationId(record.conversationId);
+  const target = record.target;
+  const browserSessionId = target && typeof target === 'object'
+    ? (target as { browserSessionId?: unknown }).browserSessionId
+    : null;
+  if (!conversationId || typeof browserSessionId !== 'string' || !UUID_RE.test(browserSessionId)) return null;
+  return { conversationId, browserSessionId: browserSessionId.toLowerCase() };
+}
+
+function safeConversationId(value: unknown): string | null {
+  try {
+    return parseLearnerConversationId(value);
+  } catch {
+    return null;
+  }
+}
+
+function validatedPausedQuestion(output: string): { question: string; options?: string[]; url?: string } | null {
+  const parsed = learnerQuestion(output);
+  if (!parsed) return null;
+  const decision = parseLearnerAction({
+    action: 'ask-user',
+    question: parsed.question,
+    ...(parsed.options.length ? { options: parsed.options } : {}),
+  }, { url: parsed.url } satisfies LearnerSnapshot);
+  if (!decision.ok || decision.action.action !== 'ask-user') return null;
+  return {
+    question: decision.action.question,
+    ...(decision.action.options?.length ? { options: decision.action.options } : {}),
+    ...(parsed.url ? { url: parsed.url } : {}),
+  };
+}
+
+function askUserFromHistory(entry: LearnerHistoryEntry): { question: string; options?: string[] } | null {
+  if (entry.role !== 'assistant') return null;
+  try {
+    const action = JSON.parse(entry.text)?.action;
+    if (!action || action.action !== 'ask-user' || typeof action.question !== 'string') return null;
+    const options = Array.isArray(action.options)
+      ? action.options.filter((option: unknown): option is string => typeof option === 'string')
+      : [];
+    return { question: action.question, ...(options.length ? { options } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+function sameAskUser(
+  left: { question: string; options?: string[] },
+  right: { question: string; options?: string[] },
+): boolean {
+  const leftOptions = left.options ?? [];
+  const rightOptions = right.options ?? [];
+  return left.question === right.question
+    && leftOptions.length === rightOptions.length
+    && leftOptions.every((option, index) => option === rightOptions[index]);
 }
 
 function observedSummary(

@@ -21,6 +21,8 @@ import {
   readLearnerSessionForModel,
   readLearnerSessionForOperator,
   recordLearnerTurn,
+  recordLocalPausedQuestion,
+  storedLearnerPauseScope,
   utf8Text,
   type LearnerHistoryEntry,
   type LearnerMaterial,
@@ -425,4 +427,84 @@ test('quiz context retrieves relevant earlier material rather than only the last
   });
   assert.match(snapshot.text!, /EARLIER-FACT/);
   assert.ok(snapshot.text!.length <= 24000);
+});
+
+test('local pause questions persist for the stored job scope and do not duplicate the provider question', async () => {
+  const db = createHarness();
+  const scope = { userId: userA, helperId: helperA, browserSessionId: browserA };
+  const created = await ensureLearnerSession(scope, db);
+  const pausedUrl = 'https://content.example/module';
+  const question = 'Open the intended question or module, then resume.';
+  const line = `progress\nLEARNER_QUESTION ${JSON.stringify({ question, url: pausedUrl })}\n`;
+  const storedInput = {
+    capabilityId: 'quiz-learn',
+    conversationId: created.id,
+    target: { browserSessionId: browserA },
+    data: { conversationId: '55555555-5555-4555-8555-555555555555', browserSessionId: browserB },
+  };
+  assert.deepEqual(storedLearnerPauseScope({
+    userId: userA,
+    helperId: helperA,
+    jobInput: storedInput,
+    planInput: storedInput,
+    planBrowserSessionId: browserA,
+  }), { userId: userA, helperId: helperA, browserSessionId: browserA, conversationId: created.id });
+  assert.deepEqual(storedLearnerPauseScope({
+    userId: userA,
+    helperId: helperA,
+    jobInput: {},
+    planInput: { conversationId: created.id, target: { browserSessionId: browserA.toUpperCase() } },
+    planBrowserSessionId: null,
+  }), { userId: userA, helperId: helperA, browserSessionId: browserA, conversationId: created.id });
+  assert.equal(storedLearnerPauseScope({
+    userId: userA,
+    helperId: helperA,
+    jobInput: { conversationId: created.id, target: { browserSessionId: browserA } },
+    planInput: { conversationId: created.id, target: { browserSessionId: browserB } },
+    planBrowserSessionId: browserA,
+  }), null);
+  assert.equal(storedLearnerPauseScope({
+    userId: userA,
+    helperId: helperA,
+    jobInput: { conversationId: created.id, target: { browserSessionId: browserA } },
+    planInput: { conversationId: created.id, target: { browserSessionId: browserA } },
+    planBrowserSessionId: browserB,
+  }), null);
+  assert.equal(storedLearnerPauseScope({
+    userId: userA,
+    helperId: helperA,
+    jobInput: { conversationId: 'client-supplied', browserSessionId: browserB },
+    planInput: null,
+  }), null);
+
+  await recordLearnerTurn({
+    ...scope,
+    conversationId: created.id,
+    observed: { title: 'Module' },
+    decision: { action: { action: 'ask-user', question } },
+  }, db);
+  assert.equal(await recordLocalPausedQuestion({ ...scope, conversationId: created.id, output: line }, db), true);
+  const paused = await readLearnerSessionForModel({ ...scope, conversationId: created.id }, db);
+  assert.equal(paused?.history.filter((entry) => entry.role === 'assistant').length, 1);
+  assert.equal(paused?.history.at(-1)?.url, pausedUrl);
+  const savedAt = db.rows.find((row) => row.id === created.id)?.updated_at;
+  assert.equal(await recordLocalPausedQuestion({ ...scope, conversationId: created.id, output: line }, db), true);
+  assert.equal(db.rows.find((row) => row.id === created.id)?.updated_at, savedAt);
+  assert.equal(await recordLocalPausedQuestion({ ...scope, userId: userB, conversationId: created.id, output: line }, db), false);
+  assert.equal(await recordLocalPausedQuestion({ ...scope, helperId: helperB, conversationId: created.id, output: line }, db), false);
+  assert.equal(await recordLocalPausedQuestion({ ...scope, browserSessionId: browserB, conversationId: created.id, output: line }, db), false);
+  assert.equal(await recordLocalPausedQuestion({ ...scope, conversationId: created.id, output: 'LEARNER_QUESTION {"question":""}' }, db), false);
+  const other = `LEARNER_QUESTION ${JSON.stringify({ question: 'Which module?', options: ['Module 1'], url: 'http://content.example/other' })}`;
+  assert.equal(await recordLocalPausedQuestion({ ...scope, conversationId: created.id, output: other }, db), true);
+  const stored = await readLearnerSessionForModel({ ...scope, conversationId: created.id }, db);
+  assert.equal(stored?.history.filter((entry) => entry.role === 'assistant').length, 2);
+  assert.deepEqual(JSON.parse(stored!.history.at(-1)!.text).action, {
+    action: 'ask-user',
+    question: 'Which module?',
+    options: ['Module 1'],
+  });
+  assert.equal(stored?.history.at(-1)?.url, 'http://content.example/other');
+  assert.equal(stored?.userId, userA);
+  assert.equal(stored?.helperId, helperA);
+  assert.equal(stored?.browserSessionId, browserA);
 });
