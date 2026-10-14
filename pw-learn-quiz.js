@@ -17,9 +17,9 @@ const readline = require('node:readline');
 const { chromium } = require('playwright');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
-const MAX_STEPS = 20;
+const MAX_STEPS = 80;
 const SUBMIT_LABEL = /\b(submit|finish|exit|end test|grade)\b/i;
-const NAVIGATION_LABEL = /^(next(?: page| slide)?|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch|resume|menu|contents)$/i;
+const NAVIGATION_LABEL = /^(next(?: page| slide)?|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch|resume|menu|home|contents)$/i;
 const PASS_EVIDENCE = /\byou passed\b|\byour score:\s*100\s*%/i;
 const FAIL_EVIDENCE = /\b(not passed|did not pass|failed|unsuccessful|not successful)\b/i;
 const ALLOWED = new Set(['click', 'answer-select', 'scroll', 'wait', 'capture', 'verify', 'ask-user']);
@@ -82,7 +82,7 @@ function localActionAllowed(action, snapshot) {
     const pool = action.action === 'click' ? snapshot.buttons : snapshot.choices;
     const target = (pool || []).find((item) => item.id === action.targetId);
     if (!target || SUBMIT_LABEL.test(target.name)) return false;
-    if (action.action === 'click' && !NAVIGATION_LABEL.test(target.name.trim())) return false;
+    if (action.action === 'click' && !NAVIGATION_LABEL.test(target.name.trim()) && !/^Open topic: .{1,140}$/.test(target.name)) return false;
   }
   return true;
 }
@@ -91,6 +91,17 @@ async function accessibleName(locator) {
   const aria = await locator.getAttribute('aria-label').catch(() => null);
   if (aria && aria.trim()) return aria.replace(/\s+/g, ' ').trim().slice(0, 160);
   const text = await locator.evaluate((el) => {
+    if (el.matches('button.invisibutton')) {
+      const parent = el.parentElement;
+      const navigation = { navBtn_next: 'Next', navBtn_back: 'Previous', navBtn_menu: 'Home', navBtn_exit: 'Exit', navBtn_help: 'Help' };
+      if (navigation[parent?.id]) return navigation[parent.id];
+      if (/^menuscreen_panel_\d+$/.test(parent?.id || '')) {
+        const title = parent.querySelector('[class^=menuTopicButtonClosed]')?.textContent?.trim();
+        const status = parent.querySelector('.topicStatus')?.className?.replace('topicStatus', '').trim();
+        if (title) return `Open topic: ${title}${status ? ` (${status})` : ''}`;
+      }
+      if (parent?.matches('.menuStartBtn')) return 'Start';
+    }
     const id = el.getAttribute('id');
     const explicit = id ? el.ownerDocument.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
     const wrapping = el.closest('label');
@@ -127,7 +138,7 @@ async function readControls(page, role, prefix, navigationOnly) {
       if (!await handle.isVisible().catch(() => false) || !await handle.isEnabled().catch(() => false)) continue;
       const name = await accessibleName(handle);
       if (!name || SUBMIT_LABEL.test(name)) continue;
-      if (navigationOnly && !NAVIGATION_LABEL.test(name.trim())) continue;
+      if (navigationOnly && !NAVIGATION_LABEL.test(name.trim()) && !/^Open topic: .{1,140}$/.test(name)) continue;
       if (await isSubmitControl(handle)) continue;
       const id = `${prefix}${listed.length + 1}`;
       handles.set(id, handle);
@@ -162,6 +173,10 @@ async function readSnapshot(page) {
     },
     handles,
   };
+}
+
+function sameLearnerView(before, after) {
+  return JSON.stringify(before) === JSON.stringify(after);
 }
 
 function createActionReader() {
@@ -256,7 +271,7 @@ async function main() {
   const browser = await chromium.connectOverCDP(CDP_URL);
   let reader = null;
   try {
-    const page = browser.contexts()[0]?.pages()?.[options.tabIdx];
+    let page = browser.contexts()[0]?.pages()?.[options.tabIdx];
     if (!page) throw new Error('Tab index is not open');
     if (options.dryRun) {
       const { snapshot } = await readSnapshot(page);
@@ -289,7 +304,19 @@ async function main() {
         finish(true);
         return;
       }
-      await applyAction(page, action, snapshot, handles);
+      const current = await readSnapshot(page);
+      if (!sameLearnerView(snapshot, current.snapshot)) {
+        console.log(`Learner step ${step}: page changed while deciding; inspecting again`);
+        continue;
+      }
+      const popup = action.action === 'click' ? page.waitForEvent('popup', { timeout: 2500 }).catch(() => null) : null;
+      await applyAction(page, action, current.snapshot, current.handles);
+      const opened = popup ? await popup : null;
+      if (opened) {
+        await opened.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => undefined);
+        page = opened;
+        console.log('Following the course window opened by the selected control');
+      }
       console.log(`Learner step ${step}: ${action.action}`);
     }
     finish(false, 'step-cap');
@@ -315,4 +342,5 @@ module.exports = {
   LEARNER_NEEDS_INPUT,
   readControls,
   visibleFrames,
+  sameLearnerView,
 };

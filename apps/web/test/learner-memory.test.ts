@@ -199,7 +199,7 @@ test('injected database enforces owner, helper, browser session, dedup, and hist
   const deduped = await readLearnerSessionForModel({ ...scope, conversationId: created.id }, db);
   assert.equal(deduped?.materials.length, 1);
   assert.equal(deduped?.history.filter((entry) => entry.role === 'user' && entry.planId === planId).length, 1);
-  for (let index = 0; index < LEARNER_HISTORY_LIMIT; index += 1) {
+  for (let index = 0; index < Math.max(LEARNER_HISTORY_LIMIT, LEARNER_MATERIAL_LIMIT); index += 1) {
     await recordLearnerTurn({
       ...scope,
       conversationId: created.id,
@@ -329,4 +329,14 @@ test('forty conversation entries leave no room for navigation history', () => {
     ...Array.from({ length: 100 }, () => ({ role: 'assistant' as const, text: '{"action":{"action":"click","targetId":"b1"}}', at: '2026-01-01' })),
   ];
   assert.equal(boundLearnerHistory(history).length, 40);
+});
+
+
+test('quiz context retrieves relevant earlier material rather than only the last pages', () => {
+  const material = (text: string) => ({ text, title: 'Device Features', url: 'https://example.com/course', at: '2026-01-01' });
+  const snapshot = composeLearnerSnapshot({ text: 'Which searchable PDF feature uses OCR?', choices: [{ id: 'c1', name: 'OCR' }] }, {
+    history: [], materials: [material('EARLIER-FACT: Searchable PDF uses OCR to make scanned text searchable.'), ...Array.from({ length: 12 }, (_, i) => material(`Unrelated fax material ${i} ` + 'x'.repeat(7000)))],
+  });
+  assert.match(snapshot.text!, /EARLIER-FACT/);
+  assert.ok(snapshot.text!.length <= 24000);
 });

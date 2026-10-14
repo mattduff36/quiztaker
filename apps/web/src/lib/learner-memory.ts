@@ -2,7 +2,7 @@ import type { LearnerSnapshot } from '@quiztaker/core';
 import { queryRows, withTransaction, type SqlQuery } from '@/lib/db';
 
 export const LEARNER_HISTORY_LIMIT = 40;
-export const LEARNER_MATERIAL_LIMIT = 12;
+export const LEARNER_MATERIAL_LIMIT = 64;
 export const LEARNER_MATERIAL_CHARS = 8000;
 export const LEARNER_CONTEXT_MATERIAL_CHARS = 16_000;
 export const LEARNER_CONTEXT_CONVERSATION_CHARS = 4000;
@@ -201,7 +201,7 @@ export function composeLearnerSnapshot(
   if (conversation) parts.push(`Prior conversation:\n${conversation}`);
   parts.push(MEMORY_NOTE);
   const materialBudget = Math.max(0, Math.min(LEARNER_CONTEXT_MATERIAL_CHARS, 24_000 - parts.join('\n\n').length - 40));
-  const material = fitLines(materialLines(memory.materials).filter((text) => text !== currentText), materialBudget);
+  const material = fitLines(materialLines(memory.materials, current.choices?.length ? currentText : undefined).filter((text) => text !== currentText), materialBudget);
   if (material) parts.push(`Retained course material:\n${material}`);
   snapshot.text = parts.filter((part) => part.length > 0).join('\n\n');
   return snapshot;
@@ -329,8 +329,13 @@ function conversationLines(history: LearnerHistoryEntry[]): string[] {
   return history.map((entry) => `${entry.role}: ${entry.text}`);
 }
 
-function materialLines(materials: LearnerMaterial[]): string[] {
-  return materials.map((item) => item.text);
+function materialLines(materials: LearnerMaterial[], question?: string): string[] {
+  if (!question) return materials.map((item) => item.text);
+  const words = [...new Set(question.toLowerCase().match(/[a-z]{4,}/g) || [])].filter((word) => !['which', 'following', 'select', 'question', 'answer', 'device', 'features', 'this', 'that', 'with', 'from', 'have', 'does'].includes(word));
+  const documents = materials.map((item) => new Set(item.text.toLowerCase().match(/[a-z]{4,}/g) || []));
+  const frequency = new Map(words.map((word) => [word, documents.filter((document) => document.has(word)).length || 1]));
+  return materials.map((item, index) => ({ text: item.text, index, score: words.reduce((score, word) => score + (documents[index].has(word) ? 1 / frequency.get(word)! : 0), 0) }))
+    .sort((a, b) => a.score - b.score || a.index - b.index).map((item) => item.text);
 }
 
 function fitLines(lines: string[], maxChars: number): string {

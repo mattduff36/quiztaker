@@ -405,3 +405,10 @@ page has a link-style Start control and a language selector (English selected).
 Classify this as `csod-learning` and use the learner, rather than the Saba SCORM
 completion strategy. Read the actual material; a launch is not completion.
 The separate Device Features Assessment remains unverified.
+
+The welcome Start opens a separate `master.htm` course window. Follow the
+selected page's popup, and re-read the page before acting if it changed while
+the provider was deciding. Brightwave tiles use empty `button.invisibutton`
+overlays: their visible topic labels are in `menuTopicButtonClosed*` children
+of `menuscreen_panel_N`. Next/Back/Home names come from visible navBtn parents.
+Do not treat the welcome wrapper saying "course is in progress" as material.

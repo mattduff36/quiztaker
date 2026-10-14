@@ -1,6 +1,6 @@
 import { getCapability } from './capabilities.js';
 
-export const LEARNER_MAX_STEPS = 20;
+export const LEARNER_MAX_STEPS = 80;
 
 export const learnerActions = new Set([
   'click',
@@ -14,7 +14,7 @@ export const learnerActions = new Set([
 
 const deniedLearnerActions = new Set(['exit', 'submit', 'launch', 'scorm-complete']);
 const submitLabel = /\b(submit|finish|exit|end test|grade)\b/i;
-const navigationLabel = /^(next(?: page| slide)?|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch|resume|menu|contents)$/i;
+const navigationLabel = /^(next(?: page| slide)?|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch|resume|menu|home|contents)$/i;
 
 export interface LearnerControl {
   id: string;
@@ -82,7 +82,7 @@ export function parseLearnerAction(
     const target = (pool ?? []).find((item) => item.id === targetId);
     if (!target) return { ok: false, error: 'Learner target is not on the page' };
     if (submitLabel.test(target.name)) return { ok: false, error: 'Learner cannot submit the quiz' };
-    if (name === 'click' && !navigationLabel.test(target.name.trim())) {
+    if (name === 'click' && !navigationLabel.test(target.name.trim()) && !/^Open topic: .{1,140}$/.test(target.name)) {
       return { ok: false, error: 'Learner click is limited to navigation controls' };
     }
     return { ok: true, action: { action: name, targetId } };
