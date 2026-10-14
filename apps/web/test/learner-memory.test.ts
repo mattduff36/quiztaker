@@ -321,3 +321,12 @@ test('navigation cannot evict user requests and pending questions restore with t
   const composed = composeLearnerSnapshot({ text: 'current page' }, { objective: 'Read Device Features first', history: bounded, materials: [] });
   assert.match(composed.text!, /Operator goal: Read Device Features first/);
 });
+
+
+test('forty conversation entries leave no room for navigation history', () => {
+  const history: LearnerHistoryEntry[] = [
+    ...Array.from({ length: 40 }, (_, i) => ({ role: 'user' as const, text: `request ${i}`, at: '2026-01-01' })),
+    ...Array.from({ length: 100 }, () => ({ role: 'assistant' as const, text: '{"action":{"action":"click","targetId":"b1"}}', at: '2026-01-01' })),
+  ];
+  assert.equal(boundLearnerHistory(history).length, 40);
+});

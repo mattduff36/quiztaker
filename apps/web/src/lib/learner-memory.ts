@@ -136,7 +136,8 @@ export function parseLearnerObjective(value: unknown): string | null {
 export function boundLearnerHistory(entries: LearnerHistoryEntry[]): LearnerHistoryEntry[] {
   const conversational = (entry: LearnerHistoryEntry) => entry.role === 'user' || /"action":"ask-user"/.test(entry.text);
   const important = entries.filter(conversational).slice(-LEARNER_HISTORY_LIMIT);
-  const recent = entries.filter((entry) => !conversational(entry)).slice(-(LEARNER_HISTORY_LIMIT - important.length));
+  const slots = LEARNER_HISTORY_LIMIT - important.length;
+  const recent = slots > 0 ? entries.filter((entry) => !conversational(entry)).slice(-slots) : [];
   const retained = new Set([...important, ...recent]);
   return entries.filter((entry) => retained.has(entry)).map((entry) => ({
     role: entry.role,
