@@ -264,7 +264,7 @@ test('learner asks using current controls when the model target is not on the pa
   assert.deepEqual(result.action, {
     action: 'ask-user',
     question: 'I need a safe control on this page. Which of these should I use?',
-    options: ['Course interaction: 3_100_click1', 'Next', 'Home'],
+    options: ['Next', 'Home', 'Ask me to identify the control'],
   });
   assert.equal(result.stop, undefined);
   assert.equal(JSON.stringify(result).includes('RAW_PROVIDER_TEXT'), false);

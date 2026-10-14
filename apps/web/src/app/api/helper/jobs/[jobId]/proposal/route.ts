@@ -1,16 +1,25 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { LEARNER_MAX_STEPS, type LearnerAction, type LearnerSnapshot } from '@/lib/learner';
 import { queryOne, withTransaction } from '@/lib/db';
 import { getServerEnv } from '@/lib/env';
 import { askCursorLearner } from '@/lib/cursor-learner';
-import { boundLearnerSnapshot, learnerGuidanceText, learnerModelChain, learnerPrefersCursor, requestLearnerDecision } from '@/lib/learner';
+import {
+  LEARNER_MAX_STEPS,
+  learnerGuidanceText,
+  learnerModelChain,
+  learnerPrefersCursor,
+  requestLearnerDecision,
+  withStandingInstructions,
+  type LearnerAction,
+  type LearnerSnapshot,
+} from '@/lib/learner';
 import {
   composeLearnerSnapshot,
   parseLearnerConversationId,
   readLearnerSessionForModel,
   recordLearnerTurn,
 } from '@/lib/learner-memory';
+import { readLearnerInstructions } from '@/lib/learner-preferences';
 import {
   chooseProposalLearner,
   completeHostedChat,
@@ -95,7 +104,13 @@ export async function POST(
     }
     if (!retained) return NextResponse.json({ stop: true, error: 'Learner conversation was not found' });
   }
-  const modelSnapshot = boundLearnerSnapshot(composeLearnerSnapshot(snapshot, retained));
+  let instructions: string;
+  try {
+    instructions = (await readLearnerInstructions(helper.userId)).instructions;
+  } catch {
+    return NextResponse.json({ stop: true, error: 'Learner instructions could not be read' });
+  }
+  const modelSnapshot = withStandingInstructions(composeLearnerSnapshot(snapshot, retained), instructions);
   const stored = await loadSecretLlmConnection(helper.userId);
   const choice = chooseProposalLearner(stored);
   if (choice.kind === 'disabled') {

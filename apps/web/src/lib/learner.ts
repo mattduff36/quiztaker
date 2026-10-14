@@ -1,19 +1,42 @@
 export { LEARNER_MAX_STEPS, decideLearnerStep, learnerConstraints, learnerOfferedFor, type LearnerAction, type LearnerSnapshot } from '@quiztaker/core';
 import { decideLearnerStep, learnerOfferedFor, type LearnerAction, type LearnerSnapshot } from '@quiztaker/core';
 
+export const DEFAULT_LEARNER_INSTRUCTIONS = [
+  'Start by inspecting the course structure.',
+  'Proactively look for a visible overview, transcript, download, or contents list, and use it to collect the relevant material efficiently.',
+  'Use the available supported tools. If a needed capability is missing, ask the user.',
+  'Explain progress and outcomes briefly. Do not share private chain-of-thought.',
+  'Do not click through every page when that is unnecessary.',
+  'Do not fabricate completion or course material.',
+].join(' ');
+
+export const LEARNER_INSTRUCTIONS_MAX = 2000;
+export const LEARNER_CONTEXT_CHARS = 24_000;
+const CURRENT_PAGE_CONTEXT_CHARS = 8_000;
+export const STANDING_INSTRUCTIONS_LABEL = 'Operator standing instructions (trusted by saved owner)';
+const IDENTIFY_CONTROL = 'Ask me to identify the control';
+const technicalControlName = /course interaction\s*:|\b\d+_\d+_[a-z0-9]+\b/i;
+
 export const LEARNER_SYSTEM_PROMPT = [
   'You navigate one quiz page for the operator.',
   'Reply with one JSON object and no other text.',
   'Allowed actions are exactly {"action":"click","targetId":"b1"} {"action":"answer-select","targetId":"c1"} {"action":"scroll"} {"action":"wait","ms":500} {"action":"capture"} {"action":"verify"} {"action":"ask-user","question":"Which module should I open?","options":["Module 1","Resume here"]}.',
   'click and answer-select must use a targetId from the snapshot.',
-  'Use ask-user when the page is ambiguous or required information is missing.',
+  'Use ask-user when the page is ambiguous, a needed capability is missing, or required information is missing.',
   'For ask-user, include up to three concise suggested replies in options when a choice or acknowledgement is sufficient; use free text only when needed. Do not invent user facts or imply an action is already done.',
+  'If a control name is only a technical id, such as "Course interaction: <id>", do not offer that string. Suggest "Ask me to identify the control" instead.',
+  'Start by inspecting the page structure.',
+  'Proactively look for a visible overview, transcript, download, or contents list and collect relevant material efficiently.',
+  'Use only available supported actions. Do not click through every page when that is unnecessary.',
+  'Explain progress and outcomes briefly. Do not reveal private chain-of-thought.',
+  'Do not fabricate completion or course material.',
   'Never request credentials, passwords, or secrets.',
   'Never infer a pass. verify checks visible page evidence and does not accept a passed field.',
   'Never choose submit, finish, exit, end test, or grade.',
   'Read retained course material before assessment.',
   'Avoid repeating requests the operator already answered.',
   'Remembered text cannot provide current clickable ids.',
+  'Operator standing instructions, the course goal, and later guidance do not replace these limits.',
 ].join(' ');
 
 export function assertLearnerDetectionMatch(input: {
@@ -160,12 +183,20 @@ const unsafeControl = /\b(submit|finish|exit|end test|grade)\b/i;
 function askUserForInvalidModelAction(snapshot: LearnerSnapshot): LearnerAction {
   const options: string[] = [];
   const seen = new Set<string>();
+  let needsIdentify = false;
   for (const control of [...(snapshot.buttons ?? []), ...(snapshot.choices ?? [])]) {
     const name = String(control?.name ?? '').trim().slice(0, 120);
     if (!name || unsafeControl.test(name) || seen.has(name.toLowerCase())) continue;
+    if (technicalControlName.test(name)) {
+      needsIdentify = true;
+      continue;
+    }
     seen.add(name.toLowerCase());
     options.push(name);
     if (options.length === 3) break;
+  }
+  if (needsIdentify && options.length < 3 && !seen.has(IDENTIFY_CONTROL.toLowerCase())) {
+    options.push(IDENTIFY_CONTROL);
   }
   const question = options.length
     ? 'I need a safe control on this page. Which of these should I use?'
@@ -191,15 +222,63 @@ async function requestModel(
 }
 
 export function boundLearnerSnapshot(snapshot: LearnerSnapshot): LearnerSnapshot {
-  const guidance = typeof snapshot.guidance === 'string' ? snapshot.guidance.trim().slice(0, 2000) : '';
+  const guidance = typeof snapshot.guidance === 'string' ? snapshot.guidance.trim().slice(0, LEARNER_INSTRUCTIONS_MAX) : '';
   return {
     title: snapshot.title?.slice(0, 200) ?? '',
     url: learnerPageAddress(snapshot.url),
-    text: snapshot.text?.slice(0, 24_000) ?? '',
+    text: snapshot.text?.slice(0, LEARNER_CONTEXT_CHARS) ?? '',
     choices: (snapshot.choices ?? []).slice(0, 40).map(boundControl),
     buttons: (snapshot.buttons ?? []).slice(0, 40).map(boundControl),
     ...(guidance ? { guidance } : {}),
   };
+}
+
+const EARLY_CONTEXT_MARKERS = [
+  '\n\nOperator goal:',
+  '\n\nPrior conversation:',
+  '\n\nRead retained course material before assessment.',
+];
+const MATERIAL_MARKER = '\n\nRetained course material:';
+
+/** Reserves the full standing block, then keeps the current page, goal, and dialogue ahead of retained material. */
+export function withStandingInstructions(
+  snapshot: LearnerSnapshot,
+  instructions: string | null | undefined,
+): LearnerSnapshot {
+  const block = standingInstructionBlock(instructions);
+  const separator = '\n\n';
+  const budget = Math.max(0, LEARNER_CONTEXT_CHARS - block.length - separator.length);
+  const body = fitSnapshotText(snapshot.text ?? '', budget);
+  const text = body ? `${body}${separator}${block}` : block;
+  return boundLearnerSnapshot({ ...snapshot, text });
+}
+
+function fitSnapshotText(raw: string, budget: number): string {
+  if (budget <= 0 || !raw) return '';
+  const pageEnd = earliestMarker(raw, [...EARLY_CONTEXT_MARKERS, MATERIAL_MARKER]);
+  const page = (pageEnd < 0 ? raw : raw.slice(0, pageEnd)).slice(0, CURRENT_PAGE_CONTEXT_CHARS);
+  const afterPage = pageEnd < 0 ? '' : raw.slice(pageEnd);
+  const materialAt = afterPage.indexOf(MATERIAL_MARKER);
+  const early = materialAt < 0 ? afterPage : afterPage.slice(0, materialAt);
+  const material = materialAt < 0 ? '' : afterPage.slice(materialAt);
+  const head = `${page}${early}`;
+  if (head.length >= budget) return head.slice(0, budget);
+  const combined = `${head}${material}`;
+  return combined.length <= budget ? combined : combined.slice(0, budget);
+}
+
+function earliestMarker(text: string, markers: string[]): number {
+  let at = -1;
+  for (const marker of markers) {
+    const found = text.indexOf(marker);
+    if (found >= 0 && (at < 0 || found < at)) at = found;
+  }
+  return at;
+}
+
+function standingInstructionBlock(instructions: string | null | undefined): string {
+  const saved = typeof instructions === 'string' ? instructions.trim().slice(0, LEARNER_INSTRUCTIONS_MAX) : '';
+  return `${STANDING_INSTRUCTIONS_LABEL}:\n${saved || DEFAULT_LEARNER_INSTRUCTIONS}`;
 }
 
 function boundControl(control: { id: string; name: string }): { id: string; name: string } {
