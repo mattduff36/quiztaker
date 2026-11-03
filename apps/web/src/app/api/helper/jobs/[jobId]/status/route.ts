@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateHelper } from '@/lib/security';
 import { queryOne } from '@/lib/db';
+import { isTerminalJobStatus } from '@/lib/job-recovery';
 
 export async function GET(
   request: Request,
@@ -17,7 +18,7 @@ export async function GET(
   );
   if (!data) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
   return NextResponse.json({
-    cancelRequested: data.cancel_requested,
+    cancelRequested: data.cancel_requested || isTerminalJobStatus(data.status),
     status: data.status,
   });
 }

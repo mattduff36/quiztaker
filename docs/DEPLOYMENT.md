@@ -1,5 +1,25 @@
 # Hosted deployment and helper operations
 
+## Automatic job recovery
+
+Heartbeats, Operations refreshes, job creation/polling and session ending reconcile
+unfinished jobs. A claimed job has a 30-second grace period; a newer heartbeat
+that no longer reports it as active recovers it as failed (or cancelled when
+cancellation was requested). Claims from helpers offline for two minutes are
+marked helper-offline. A healthy active job has no elapsed-runtime expiry.
+Queued work is retained unless cancelled. Recovered work is never replayed;
+attempt/history records and original output remain available.
+
+Operations prioritises actual active jobs over newer completed jobs. Ending a
+session cancels queued work and requests cancellation of active work before
+queuing browser close; genuinely active course work retains the force-close
+confirmation. Recovered close jobs mark the session close_failed so it can be
+retried. Late reports cannot revive a terminal job.
+
+Local SQL regressions can run against a disposable migrated database by setting
+VITRIOL_RECOVERY_TEST_DATABASE_URL to a localhost database whose name begins
+with vitriol_regression, then running the web tests. Production URLs are rejected.
+
 ## Control plane
 
 1. Create a dedicated Neon project. Enable Neon Managed Auth with email and

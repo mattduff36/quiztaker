@@ -19,6 +19,7 @@ import { nextStrategyState } from '@/lib/strategy-state';
 import { mapPlan } from '@/lib/plans';
 import { recordLocalPausedQuestion, storedLearnerPauseScope } from '@/lib/learner-memory';
 import { TERMINAL_JOB_LOCK_SQL } from '@/lib/job-lock';
+import { recoverHelperJobs } from '@/lib/job-recovery';
 
 interface JobRow extends Record<string, unknown> {
   id: string;
@@ -58,6 +59,7 @@ export async function createJob(userId: string, planId: string): Promise<{ jobId
   const authorization = authorizeRun({ script: plan.script, args: plan.args, plan });
   if (!authorization.ok) throw new Error(authorization.error || 'Run is not authorized');
 
+  await recoverHelperJobs(userId, plan.helperId);
   const jobId = randomUUID();
   await withTransaction(async (sql) => {
     // Serialize all queue requests for this helper, including separate browser tabs.
@@ -85,6 +87,7 @@ export async function createJob(userId: string, planId: string): Promise<{ jobId
 }
 
 export async function claimNextJob(helperId: string, userId: string): Promise<JobEnvelope | null> {
+  await recoverHelperJobs(userId, helperId);
   const claimed = await queryOne<JobRow>(
     'select * from claim_next_helper_job($1::uuid, $2::text)',
     [helperId, userId],
@@ -214,8 +217,9 @@ export async function recordJobEvent(
     ],
   );
   await sql(
-    `update helpers set status = 'online', active_job_id = null where id = $1`,
-    [helperId],
+    `update helpers set status = 'online', active_job_id = null
+     where id = $1 and (active_job_id = $2 or active_job_id is null)`,
+    [helperId, jobId],
   );
   // Job row is locked before this helper update (KEY SHARE deadlock documented above).
   // Learner identity is the stored job/plan input, never the helper event payload.

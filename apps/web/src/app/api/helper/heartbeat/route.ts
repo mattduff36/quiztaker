@@ -4,6 +4,7 @@ import { authenticateHelper } from '@/lib/security';
 import { compareVersions, getLatestHelperRelease } from '@/lib/releases';
 import { queryOne, queryRows } from '@/lib/db';
 import { retryDatabaseConflict } from '@/lib/database-retry';
+import { recoverHelperJobs } from '@/lib/job-recovery';
 
 const schema = z.object({
   status: z.enum(['online', 'busy']),
@@ -61,6 +62,8 @@ async function handleHeartbeat(request: Request) {
       parsed.data.updateError ?? null,
     ],
   ));
+  // Commit heartbeat first; recovery must acquire jobs before helpers, never the reverse.
+  await recoverHelperJobs(helper.userId, helper.helperId);
 
   let requestedVersion = row?.update_requested_version ?? null;
   let requestedAt = row?.update_requested_at ?? null;

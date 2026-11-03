@@ -6,6 +6,7 @@ import { describeHelperUpdate } from '@/lib/helper-update';
 import { readPublicLlmConnection } from '@/lib/llm-provider';
 import { parityEnabled } from '@/lib/parity';
 import { getLatestHelperRelease } from '@/lib/releases';
+import { readRelevantJob, recoverHelperJobs } from '@/lib/job-recovery';
 
 export const dynamic = 'force-dynamic';
 
@@ -46,6 +47,7 @@ export async function GET() {
     });
   }
   const helperId = String(helper.id);
+  await recoverHelperJobs(user.id, helperId);
   const [session, recentUrls, activeJob, captures] = await Promise.all([
     queryOne(
       `select id, revision, cdp_connected, tabs, roster, detection
@@ -61,13 +63,7 @@ export async function GET() {
        order by last_seen_at desc limit 40`,
       [user.id],
     ),
-    queryOne(
-      `select id, status, capability_id, input, outcome, diagnosis, result, output_url
-       from jobs
-       where user_id = $1 and helper_id = $2
-       order by created_at desc limit 1`,
-      [user.id, helperId],
-    ),
+    readRelevantJob(user.id, helperId),
     queryRows(
       `select id, title, fingerprint, captured_at
        from learning_captures

@@ -6,6 +6,13 @@ complete the courses and quizzes required for each service qualification with
 the least amount of human effort possible, and to *learn* from each session so
 subsequent sessions are faster.
 
+**Vitriol release authorization (owner, 2026-11-03).** Once requested work is
+complete and verified, the agent may commit, push and deploy this personal
+project to production without asking again. Existing dependency-audit findings
+may be reported without blocking an otherwise verified focused fix. This
+exception applies only to Vitriol; do not infer it for any other project. It
+does not require weakening authentication or exposing credentials.
+
 **Read order for a new session:**
 1. This file — start-up drill, tool inventory, when-to-use-what.
 2. `docs/QUIZ-TYPES.md` — encyclopedia of every course/quiz variant seen so far

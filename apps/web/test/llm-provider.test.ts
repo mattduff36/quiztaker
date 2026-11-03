@@ -135,6 +135,34 @@ test('provider test follows decideLearnerStep and sanitizes failures', async () 
   }
 });
 
+test('GPT-6.1 Sol connection test uses supported reasoning parameters', async () => {
+  const result = await completeHostedChat({
+    provider: 'openai', model: 'gpt-6.1-sol', apiKey, snapshot: CONNECTION_TEST_SNAPSHOT,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.temperature, undefined);
+      assert.equal(body.max_tokens, undefined);
+      assert.equal(body.reasoning_effort, 'low');
+      assert.ok(body.max_completion_tokens >= 4096);
+      return successResponse('{"action":"wait","ms":0}');
+    },
+  });
+  assert.equal(result.ok, true);
+});
+
+test('provider failures distinguish incompatible settings and quota without exposing upstream text', async () => {
+  for (const [status, error, expected] of [
+    [400, { param: 'temperature', code: 'unsupported_value', message: apiKey }, /temperature/],
+    [429, { code: 'insufficient_quota', message: apiKey }, /API billing/],
+    [400, { message: apiKey }, /HTTP 400/],
+  ] as const) {
+    const result = await completeHostedChat({ provider:'openai', model:'gpt-6.1-sol', apiKey, snapshot:CONNECTION_TEST_SNAPSHOT,
+      fetchImpl: async () => new Response(JSON.stringify({error}), {status}) });
+    assert.equal(result.ok, false);
+    if (!result.ok) { assert.match(result.error, expected); assert.ok(!result.error.includes(apiKey)); }
+  }
+});
+
 test('save keeps a blank key only for the same provider and only after a valid test', async () => {
   const stored: StoredLlmSecret = {
     provider: 'openai',

@@ -3,6 +3,7 @@ import type { LearnerAction, LearnerSnapshot } from '@quiztaker/core';
 import { queryOne } from '@/lib/db';
 import { getServerEnv } from '@/lib/env';
 import { LEARNER_SYSTEM_PROMPT, learnerIsEnabled } from '@/lib/learner';
+import { chatParameters } from '@/lib/chat-parameters';
 
 export const LLM_PROVIDERS = {
   openai: {
@@ -35,7 +36,7 @@ export type LlmProviderId = keyof typeof LLM_PROVIDERS;
 export type LlmSource = 'personal' | 'inherited' | 'disabled' | 'none';
 
 export const LLM_RESPONSE_MAX_BYTES = 64 * 1024;
-export const LLM_REQUEST_TIMEOUT_MS = 15_000;
+export const LLM_REQUEST_TIMEOUT_MS = 60_000;
 export const LLM_MAX_TOKENS = 256;
 export const LLM_SETTINGS_MAX_BYTES = 8 * 1024;
 
@@ -300,8 +301,7 @@ export async function completeHostedChat(input: {
       },
       body: JSON.stringify({
         model,
-        temperature: 0,
-        max_tokens: LLM_MAX_TOKENS,
+        ...chatParameters(input.provider, model, LLM_MAX_TOKENS),
         messages: [
           { role: 'system', content: LEARNER_SYSTEM_PROMPT },
           { role: 'user', content: JSON.stringify(input.snapshot) },
@@ -311,7 +311,7 @@ export async function completeHostedChat(input: {
   } catch {
     return { ok: false, error: 'Provider request did not complete' };
   }
-  if (!response.ok) return { ok: false, error: providerFailure(response.status) };
+  if (!response.ok) return { ok: false, error: await providerFailure(response) };
   const body = await readLimited(response);
   if (body == null) return { ok: false, error: 'Provider response was too large' };
   let content = '';
@@ -390,11 +390,26 @@ export function currentDeployment(): DeploymentLearner {
   };
 }
 
-function providerFailure(status: number): string {
+async function providerFailure(response: Response): Promise<string> {
+  const status = response.status;
+  // Do not echo upstream messages: they can contain the submitted credential.
+  const body = await readLimited(response);
+  let code = '';
+  let param = '';
+  try {
+    const error = JSON.parse(body || '{}').error;
+    code = typeof error?.code === 'string' ? error.code : '';
+    param = typeof error?.param === 'string' ? error.param : '';
+  } catch { /* Non-JSON provider failures still get a useful status message. */ }
   if (status === 401 || status === 403) return 'Provider rejected the API key';
   if (status === 404) return 'Provider model was not found';
+  if (status === 429 && code === 'insufficient_quota') return 'The API account has no available quota. Check the selected project and API billing.';
   if (status === 429) return 'Provider is rate limiting requests';
-  return 'Provider request failed';
+  if (status === 400 && ['max_tokens', 'max_completion_tokens', 'temperature', 'reasoning_effort', 'response_format'].includes(param)) {
+    return `The selected model rejected the ${param} setting. Check model compatibility.`;
+  }
+  if (status === 400) return 'Provider rejected the request. Check the model and its supported settings (HTTP 400).';
+  return `Provider request failed (HTTP ${status}). Please try again.`;
 }
 
 async function readLimited(response: Response): Promise<string | null> {

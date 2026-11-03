@@ -1,5 +1,6 @@
 export { LEARNER_MAX_STEPS, decideLearnerStep, learnerConstraints, learnerOfferedFor, type LearnerAction, type LearnerSnapshot } from '@quiztaker/core';
 import { decideLearnerStep, learnerOfferedFor, type LearnerAction, type LearnerSnapshot } from '@quiztaker/core';
+import { chatParameters } from '@/lib/chat-parameters';
 
 export const DEFAULT_LEARNER_INSTRUCTIONS = [
   'Start by inspecting the course structure.',
@@ -152,7 +153,7 @@ export async function requestLearnerDecision(input: {
       },
       body: JSON.stringify({
         model,
-        temperature: 0,
+        ...chatParameters(base === 'https://api.openai.com/v1' ? 'openai' : '', model),
         messages: [
           { role: 'system', content: LEARNER_SYSTEM_PROMPT },
           { role: 'user', content: JSON.stringify(snapshot) },
