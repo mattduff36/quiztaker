@@ -257,18 +257,26 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
     if (!name || (navigationOnly && UNSAFE_LABEL.test(name))) continue;
     let kind;
     if (navigationOnly) {
+      const link = await handle.evaluate(el => {
+        if (el.tagName !== 'A') return {safe:true,postback:false};
+        const href = (el.getAttribute('href') || '').trim();
+        if (/^javascript:\s*(?:void\s*\(\s*0\s*\)\s*;?|;)$/i.test(href.trim())) return {safe:true,postback:false};
+        // Observed ASP.NET button postbacks: identifier target, empty string
+        // arguments and fixed flags only. Never evaluate a model-supplied URL.
+        if (el.getAttribute('role') === 'button') {
+          const direct = /^javascript:\s*__doPostBack\(\s*(['"])([A-Za-z_][A-Za-z0-9_$:.]*)\1\s*,\s*(['"])\3\s*\)\s*;?$/.exec(href.trim());
+          const options = /^javascript:\s*WebForm_DoPostBackWithOptions\(\s*new\s+WebForm_PostBackOptions\(\s*(['"])([A-Za-z_][A-Za-z0-9_$:.]*)\1\s*,\s*(['"])\3\s*,\s*true\s*,\s*(['"])\4\s*,\s*(['"])\5\s*,\s*false\s*,\s*true\s*\)\s*\)\s*;?$/.exec(href.trim());
+          const target = (direct || options)?.[2];
+          if (target && !/login|logout|signout|signin|password|account|payment|purchase|checkout|delete|remove|unsubscribe/i.test(target)) return {safe:true,postback:true};
+        }
+        return {safe:!['javascript:','mailto:','tel:','data:'].includes(el.protocol.toLowerCase()) && !/\b(logout|signout|delete|purchase|checkout|account|login)\b/i.test(href),postback:false};
+      }).catch(() => ({safe:false,postback:false}));
+      if (!link.safe) continue;
       const submits = await isSubmitControl(handle);
-      // Next/Save form controls advance quiz pages; their form type alone
-      // does not make them a final submission. Read mode refuses both.
-      kind = SUBMIT_LABEL.test(name) ? 'submission' : submits || ASSESSMENT_START_LABEL.test(name) || /^(save|return later|summary)\b/i.test(name) ? 'quiz-navigation' : 'content';
+      // Form/postback navigation can consume assessment state; it is quiz-only
+      // even when labelled Next rather than a final Submit control.
+      kind = SUBMIT_LABEL.test(name) ? 'submission' : submits || link.postback || ASSESSMENT_START_LABEL.test(name) || /^(save|return later|summary)\b/i.test(name) ? 'quiz-navigation' : 'content';
       if (mode !== 'quiz' && (kind === 'submission' || kind === 'quiz-navigation')) continue;
-      const safeLink = await handle.evaluate(el => {
-        if (el.tagName !== 'A') return true;
-        const href = el.getAttribute('href') || '';
-        if (/^javascript:\s*(?:void\s*\(\s*0\s*\)\s*;?|;)$/i.test(href.trim())) return true;
-        return !/^(javascript|mailto|tel|data):/i.test(href) && !/\b(logout|signout|delete|purchase|checkout|account|login)\b/i.test(href);
-      }).catch(() => false);
-      if (!safeLink) continue;
     }
     const id = `${prefix}${listed.length + 1}`;
     handles.set(id, handle);

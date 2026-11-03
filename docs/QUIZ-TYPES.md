@@ -490,3 +490,12 @@ intersecting the current viewport before the 120-candidate scan and 40-control
 output limits, with offscreen controls retained as a fallback. This lets
 scrolling reveal later curriculum modules. An offline Chrome fixture exercises
 150 module links and actual scroll/click actions; live completion is not implied.
+
+### Canon ASP.NET assessment navigation
+
+Observed Next, Summary and Save/Return Later anchors use standard WebForms
+JavaScript postbacks rather than ordinary links. Helper 1.0.20 recognizes only
+button anchors with identifier targets, empty string arguments and the observed
+fixed WebForm flags, rejecting extra script and external action URLs. These
+controls are classified as quiz navigation and excluded in Read mode. The
+offline regression clicks the exact postback markup; it is not a live pass claim.

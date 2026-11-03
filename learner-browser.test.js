@@ -158,6 +158,49 @@ test('real answer, form Next, final Submit and visible pass; old mode cannot sub
   } finally { await browser.close(); }
 });
 
+test('observed WebForms assessment anchors navigate only in quiz mode and reject arbitrary script or external actions', async () => {
+  const browser = await chromium.launch({channel:'chrome',headless:true});
+  try {
+    const page = await browser.newPage();
+    const options = target => `javascript:WebForm_DoPostBackWithOptions(new WebForm_PostBackOptions("${target}", "", true, "", "", false, true));`;
+    await page.setContent(`<h1 id="question">Question 1</h1><label><input type="radio" name="answer" value="correct">Correct answer</label><label><input type="radio" name="answer" value="other">Other answer</label>
+      <a role="button" href="javascript:__doPostBack('ac$SaveButton','')" onclick="javascript:stopCountdown();">Save / Return Later</a>
+      <a role="button" href='${options('ac$ReviewButton')}'>Summary</a><a role="button" href='${options('ac$NextButton')}'>Next »</a>
+      <a role="button" href="javascript:alert(1)">Arbitrary script</a>
+      <a role="button" href=" &#x09;javascript:alert(1)">Whitespace script</a>
+      <a role="button" href='${options('ac$NextButton')}alert(1)'>Appended script</a>
+      <a role="button" href='javascript:WebForm_DoPostBackWithOptions(new WebForm_PostBackOptions("ac$NextButton", "", true, "", "https://evil.invalid/submit", false, true));'>External action</a>
+      <a role="button" href="javascript:__doPostBack('ac$DeleteAccountButton','')">Misleading target</a>
+      <a role="button" href="javascript:__doPostBack('ac$NextButton','nonempty')">Nonempty argument</a>
+      <a href='${options('ac$NextButton')}'>Missing button role</a>`);
+    await page.evaluate(() => {
+      window.stopCountdown = () => {window.countdownStopped=true;};
+      window.WebForm_PostBackOptions = function(eventTarget,eventArgument,validation,validationGroup,actionUrl,trackFocus,clientSubmit) {Object.assign(this,{eventTarget,eventArgument,validation,validationGroup,actionUrl,trackFocus,clientSubmit});};
+      window.__doPostBack = target => {
+        if(target==='ac$NextButton' && document.querySelector('input[value=correct]').checked) document.querySelector('#question').textContent='Question 2';
+        if(target==='ac$ReviewButton') document.querySelector('#question').textContent='Quiz summary';
+        if(target==='ac$SaveButton') document.querySelector('#question').textContent='Quiz saved';
+      };
+      window.WebForm_DoPostBackWithOptions = options => window.__doPostBack(options.eventTarget);
+    });
+    const quiz = await readSnapshot(page,'quiz');
+    assert.deepEqual(quiz.snapshot.buttons.map(control=>control.name),['Save / Return Later','Summary','Next »']);
+    for(const target of quiz.snapshot.buttons) {
+      assert.equal(target.kind,'quiz-navigation');
+      assert.equal(localActionAllowed({action:'click',targetId:target.id},quiz.snapshot),false);
+    }
+    assert.deepEqual((await readSnapshot(page,'read')).snapshot.buttons,[]);
+    await act(page,'Correct answer','quiz',true);
+    await act(page,'Next »','quiz');
+    assert.equal(await page.locator('#question').textContent(),'Question 2');
+    await act(page,'Summary','quiz');
+    assert.equal(await page.locator('#question').textContent(),'Quiz summary');
+    await act(page,'Save / Return Later','quiz');
+    assert.equal(await page.locator('#question').textContent(),'Quiz saved');
+    assert.equal(await page.evaluate(()=>window.countdownStopped),true);
+  } finally {await browser.close();}
+});
+
 test('stale observed target cannot be clicked after its label changes', async () => {
   const browser = await chromium.launch({ channel:'chrome', headless:true });
   try {
