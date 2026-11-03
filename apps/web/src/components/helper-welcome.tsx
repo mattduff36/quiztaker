@@ -64,7 +64,7 @@ export function HelperWelcome({helper,onCheck,onAdvanced}:{helper:Helper;onCheck
         <p>We can confirm a helper when it connects, but your browser cannot reliably find an installed app while it is stopped. A paired PC may also be a different computer.</p>
         <p>Search the Windows Start menu for <strong>Vitriol Helper</strong>. Keep its window open. If it asks for a pairing code, <a href="/helper" className="font-semibold text-cyan-800 underline">open helper setup</a>.</p>
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-          {!older&&windows!==false?<a href="vitriol-helper://open" onClick={event=>{if(opening){event.preventDefault();return;}launch();}} aria-disabled={opening} className="min-h-11 py-2 font-semibold text-cyan-800 underline underline-offset-4">{opening?'Waiting for helper…':'Try opening the installed helper'}</a>:null}
+          {windows!==false?<a href="vitriol-helper://open" onClick={event=>{if(opening){event.preventDefault();return;}launch();}} aria-disabled={opening} className="min-h-11 py-2 font-semibold text-cyan-800 underline underline-offset-4">{opening?'Waiting for helper…':older?'Installed the update? Open helper':'Try opening the installed helper'}</a>:null}
           <a href="/helper/download?asset=installer" className="min-h-11 py-2 font-semibold text-cyan-800 underline underline-offset-4">Download or reinstall</a>
           <button type="button" disabled={checking||opening} onClick={()=>void check(true)} className="min-h-11 font-semibold text-cyan-800 underline underline-offset-4 disabled:opacity-50">{checking?'Checking connection…':'Check connection again'}</button>
         </div>
