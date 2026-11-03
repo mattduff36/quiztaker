@@ -4,6 +4,7 @@ import { HistoryList } from '@/components/history-list';
 import { PageFrame } from '@/components/page-frame';
 import { requireAuthenticatedUser } from '@/lib/auth';
 import { queryRows } from '@/lib/db';
+import { MAINTENANCE_CAPABILITIES } from '@/lib/task-completion';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,9 +31,12 @@ export default async function HistoryPage() {
             where a.user_id=history_events.user_id and a.storage_url=history_events.payload->>'outputUrl' limit 1)) as payload
        from history_events
        where user_id = $1
+         and not(kind='automation' and coalesce(payload->'outcome'->>'verified','false')='true'
+           and exists(select 1 from jobs j where j.id::text=history_events.payload->>'jobId'
+             and j.user_id=history_events.user_id and j.capability_id=any($2::text[])))
        order by occurred_at desc
        limit 500`,
-      [user.id],
+      [user.id, MAINTENANCE_CAPABILITIES],
     ),
     queryRows<{
       id: string;
