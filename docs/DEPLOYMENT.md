@@ -22,6 +22,15 @@ with vitriol_regression, then running the web tests. Production URLs are rejecte
 
 ## Control plane
 
+Dependency security pins live in the root package.json overrides. Keep the
+Better Auth core, passkey and OAuth packages aligned with better-auth, including
+their better-call and fetch peers. Neon Auth wraps a hosted service; these
+client/proxy dependency updates do not require changing the hosted auth schema.
+The local minimatch compatibility package delegates to patched upstream
+minimatch 11 while retaining the callable CommonJS interface needed by older
+ESLint plugins. Do not replace it with an unpatched minimatch version or an
+audit suppression. Its regression test covers both module interfaces.
+
 1. Create a dedicated Neon project. Enable Neon Managed Auth with email and
    password authentication, then configure the production and preview origins.
 2. Copy `.env.example` to `.env.local`. Set `DATABASE_URL`,

@@ -8,9 +8,9 @@ subsequent sessions are faster.
 
 **Vitriol release authorization (owner, 2026-11-03).** Once requested work is
 complete and verified, the agent may commit, push and deploy this personal
-project to production without asking again. Existing dependency-audit findings
-may be reported without blocking an otherwise verified focused fix. This
-exception applies only to Vitriol; do not infer it for any other project. It
+project to production without asking again. Run the project's release checks,
+including the dependency audit, before release. This authorization
+applies only to Vitriol; do not infer it for any other project. It
 does not require weakening authentication or exposing credentials.
 
 **Read order for a new session:**
