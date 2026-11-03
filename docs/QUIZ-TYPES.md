@@ -291,6 +291,22 @@ api.Commit('');
 api.Terminate('');
 ```
 
+### Xerox Learning Central: Atlantis Platform 4.5
+
+Verified on 2026-11-03 using the hosted Operations guided runner and installed
+Vitriol Helper 1.0.14. The open ATP45XTA Atlantis Platform 4.5 Differences
+Service Training player at `learningcentral.xerox.com` exposes SCORM 2004
+through nested frames. The existing registry and executor handled it without
+a new strategy: Operations reported verified completion and the Xerox page
+independently showed **100%**, then moved to **Feedback Survey** with a
+**Start Survey** button. The survey is separate; it was left untouched.
+No learner question was raised during this run. Do not infer that a survey
+has been answered or that a broader certification has been awarded.
+
+Xerox player addresses can contain a `user_cookie` session token. Show only
+the origin in course-selection guidance; never copy the full address into
+handoffs, documentation, or screenshots intended for sharing.
+
 **Where the API lives.** SCORM 1.2 helpers on the `sco` frame historically
 exposed `oLMS_API` directly; on newer content only `window.API` is present.
 Rule: search every frame from the player top-window for the property, first
