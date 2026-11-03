@@ -211,15 +211,22 @@ async function visibleFrames(page) {
 async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
   const listed = [];
   const handles = new Map();
+  const candidates = [];
+  const viewport = await page.evaluate(() => ({width:innerWidth,height:innerHeight}));
   for (const frame of await visibleFrames(page)) {
+    const box = frame.parentFrame() ? await frame.frameElement().then(element => element.boundingBox()).catch(() => null) : {x:0,y:0};
+    if (!box) continue;
     const locator = navigationOnly ? frame.locator('button, a, [role=button], [role=tab], summary, [onclick], [data-toggle], [data-bs-toggle], [aria-controls], input[type=button], input[type=submit], input[type=image], .dki-element-content.speech-bubble, img.dki-element-content.hasRollover') : frame.getByRole(role);
-    const indices = await locator.evaluateAll(elements => {
+    const indices = await locator.evaluateAll((elements, view) => {
       const indices = [];
       for (let index = 0; index < elements.length; index += 1) {
         const el = elements[index];
         const rect = el.getBoundingClientRect();
         const style = getComputedStyle(el);
         if (!el.getClientRects().length || !rect.width || !rect.height || style.visibility === 'hidden' || style.visibility === 'collapse') continue;
+        // Cornerstone uses this marker on passive layout/progress containers,
+        // unlike actual collapse/tab controls. Preserve interactive evidence.
+        if (el.getAttribute('data-toggle') === 'cso-frame' && !el.matches('a,button,input,summary,[role],[onclick],[tabindex]') && style.cursor !== 'pointer') continue;
         if (el.matches('.dki-element-content.speech-bubble, img.dki-element-content.hasRollover') && style.cursor !== 'pointer') continue;
         let facing = true;
         for (let face = el; face; face = face.parentElement) {
@@ -232,36 +239,41 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
           if (matrix.m33 < -0.001) { facing = false; break; }
         }
         if (!facing) continue;
-        indices.push(index);
-        if (indices.length >= 120) break;
+        const inViewport = rect.bottom > Math.max(0,view.top) && rect.top < Math.min(innerHeight,view.bottom)
+          && rect.right > Math.max(0,view.left) && rect.left < Math.min(innerWidth,view.right);
+        indices.push({index,inViewport});
       }
       return indices;
-    }).catch(() => []);
-    for (const index of indices) {
-      const handle = locator.nth(index);
-      if (!await handle.isVisible().catch(() => false) || !await handle.isEnabled().catch(() => false)) continue;
-      const name = await accessibleName(handle);
-      if (!name || (navigationOnly && UNSAFE_LABEL.test(name))) continue;
-      let kind;
-      if (navigationOnly) {
-        const submits = await isSubmitControl(handle);
-        // Next/Save form controls advance quiz pages; their form type alone
-        // does not make them a final submission. Read mode refuses both.
-        kind = SUBMIT_LABEL.test(name) ? 'submission' : submits || ASSESSMENT_START_LABEL.test(name) || /^(save|return later|summary)\b/i.test(name) ? 'quiz-navigation' : 'content';
-        if (mode !== 'quiz' && (kind === 'submission' || kind === 'quiz-navigation')) continue;
-        const safeLink = await handle.evaluate(el => {
-          if (el.tagName !== 'A') return true;
-          const href = el.getAttribute('href') || '';
-          if (/^javascript:\s*(?:void\s*\(\s*0\s*\)\s*;?|;)$/i.test(href.trim())) return true;
-          return !/^(javascript|mailto|tel|data):/i.test(href) && !/\b(logout|signout|delete|purchase|checkout|account|login)\b/i.test(href);
-        }).catch(() => false);
-        if (!safeLink) continue;
-      }
-      const id = `${prefix}${listed.length + 1}`;
-      handles.set(id, handle);
-      listed.push({ id, name, ...(kind ? { kind } : {}) });
-      if (listed.length >= 40) return { listed, handles };
+    }, {left:-box.x,top:-box.y,right:viewport.width-box.x,bottom:viewport.height-box.y}).catch(() => []);
+    for (const candidate of indices) candidates.push({locator,...candidate});
+  }
+  // Stable viewport-first order makes a scroll reveal later modules, while
+  // keeping offscreen course controls as an auto-scroll fallback.
+  candidates.sort((a,b) => Number(b.inViewport)-Number(a.inViewport));
+  for (const {locator,index} of candidates.slice(0,120)) {
+    const handle = locator.nth(index);
+    if (!await handle.isVisible().catch(() => false) || !await handle.isEnabled().catch(() => false)) continue;
+    const name = await accessibleName(handle);
+    if (!name || (navigationOnly && UNSAFE_LABEL.test(name))) continue;
+    let kind;
+    if (navigationOnly) {
+      const submits = await isSubmitControl(handle);
+      // Next/Save form controls advance quiz pages; their form type alone
+      // does not make them a final submission. Read mode refuses both.
+      kind = SUBMIT_LABEL.test(name) ? 'submission' : submits || ASSESSMENT_START_LABEL.test(name) || /^(save|return later|summary)\b/i.test(name) ? 'quiz-navigation' : 'content';
+      if (mode !== 'quiz' && (kind === 'submission' || kind === 'quiz-navigation')) continue;
+      const safeLink = await handle.evaluate(el => {
+        if (el.tagName !== 'A') return true;
+        const href = el.getAttribute('href') || '';
+        if (/^javascript:\s*(?:void\s*\(\s*0\s*\)\s*;?|;)$/i.test(href.trim())) return true;
+        return !/^(javascript|mailto|tel|data):/i.test(href) && !/\b(logout|signout|delete|purchase|checkout|account|login)\b/i.test(href);
+      }).catch(() => false);
+      if (!safeLink) continue;
     }
+    const id = `${prefix}${listed.length + 1}`;
+    handles.set(id, handle);
+    listed.push({ id, name, ...(kind ? { kind } : {}) });
+    if (listed.length >= 40) return { listed, handles };
   }
   return { listed, handles };
 }

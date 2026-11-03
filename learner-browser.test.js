@@ -105,6 +105,33 @@ test('hidden persistent slides cannot starve later controls or misattribute the 
   } finally { await browser.close(); }
 });
 
+test('curriculum scrolling offers later modules before the control caps and ignores passive cso-frame containers', async () => {
+  const browser = await chromium.launch({channel:'chrome',headless:true});
+  try {
+    const page = await browser.newPage({viewport:{width:900,height:400}});
+    await page.setContent(`<style>body{margin:0}a.module{display:block;height:28px;line-height:28px}header{position:fixed;top:0;right:0;background:white}</style><header><output id="selected">No module chosen</output></header>
+      <div data-toggle="cso-frame" class="treeRoot"><h1>Long curriculum</h1>
+      ${Array.from({length:160},()=>'<div data-toggle="cso-frame" class="cso-placeholder">100%</div>').join('')}
+      <button type="button" data-toggle="cso-frame" onclick="document.querySelector('#selected').textContent='Overview opened'">Course overview</button>
+      ${Array.from({length:150},(_,i)=>`<a class="module" href="javascript:;" onclick="document.querySelector('#selected').textContent='Module ${i+1} opened'">Open module ${String(i+1).padStart(3,'0')}</a>`).join('')}</div>`);
+    const before = await readSnapshot(page);
+    assert.equal(before.snapshot.buttons.length,40);
+    assert.ok(before.snapshot.buttons.some(control=>control.name==='Course overview'),'a real cso-frame button must remain actionable');
+    assert.ok(before.snapshot.buttons.some(control=>control.name==='Open module 001'));
+    assert.ok(!before.snapshot.buttons.some(control=>control.name==='Open module 150'));
+    assert.ok(before.snapshot.buttons.every(control=>control.name==='Course overview'||/^Open module \d{3}$/.test(control.name)),'passive progress/tree containers must not consume controls');
+    assert.equal(sameLearnerView(before.snapshot,(await readSnapshot(page)).snapshot),true);
+    for(let index=0;index<30;index+=1) await applyAction(page,{action:'scroll'},before.snapshot,before.handles);
+    const after = await readSnapshot(page);
+    assert.equal(after.snapshot.buttons.length,40);
+    assert.ok(after.snapshot.buttons.some(control=>control.name==='Open module 150'),'viewport priority must run before both the 120-candidate and 40-control caps');
+    assert.ok(after.snapshot.buttons.some(control=>control.name==='Open module 001'),'offscreen course controls remain a fallback');
+    assert.equal(sameLearnerView(after.snapshot,(await readSnapshot(page)).snapshot),true);
+    await act(page,'Open module 150');
+    assert.equal(await page.locator('#selected').textContent(),'Module 150 opened');
+  } finally {await browser.close();}
+});
+
 test('real answer, form Next, final Submit and visible pass; old mode cannot submit', async () => {
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   try {

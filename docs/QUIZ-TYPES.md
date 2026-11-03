@@ -481,3 +481,12 @@ flipcard backs, and attributes excerpts to a visible heading. Offline Chrome
 coverage verifies these controls; this is not a live course-pass claim.
 Pointer-enabled DKI speech bubbles and rollover information icons are also
 observed controls; unlabeled icons receive a stable human-readable number.
+
+### Long Cornerstone curricula (control discovery)
+
+Helper 1.0.19 excludes passive `data-toggle="cso-frame"` layout/progress
+containers unless they have interactive evidence. It prioritizes controls
+intersecting the current viewport before the 120-candidate scan and 40-control
+output limits, with offscreen controls retained as a fallback. This lets
+scrolling reveal later curriculum modules. An offline Chrome fixture exercises
+150 module links and actual scroll/click actions; live completion is not implied.
