@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Check, Download, LoaderCircle, Play, X } from 'lucide-react';
 import { Panel } from '@/components/page-frame';
 import { GuidedRunner } from '@/components/guided-runner';
@@ -97,6 +97,8 @@ interface PlanResponse {
 }
 
 export function OperationsClient(props: { helperId: string }) {
+  const [view, setView] = useState<'normal' | 'advanced'>('normal');
+  const viewId = useId();
   const activity = useOperatorActivity(props.helperId);
   const [visible,setVisible] = useState(true);
   const [refreshError,setRefreshError] = useState('');
@@ -397,6 +399,18 @@ export function OperationsClient(props: { helperId: string }) {
 
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-300">
+        <div role="tablist" aria-label="Operations mode" className="flex gap-5" onKeyDown={event => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+          event.preventDefault();
+          const next = event.key === 'Home' ? 'normal' : event.key === 'End' ? 'advanced' : view === 'normal' ? 'advanced' : 'normal';
+          setView(next);
+          event.currentTarget.querySelector<HTMLButtonElement>(`[id="${viewId}-${next}-tab"]`)?.focus();
+        }}>
+          {(['normal', 'advanced'] as const).map(mode => <button key={mode} type="button" role="tab" id={`${viewId}-${mode}-tab`} aria-controls={`${viewId}-${mode}-panel`} aria-selected={view === mode} tabIndex={view === mode ? 0 : -1} onClick={() => setView(mode)} className={`min-h-11 border-b-2 px-1 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 ${view === mode ? 'border-cyan-700 text-cyan-900' : 'border-transparent text-slate-600 hover:text-slate-950'}`}>{mode === 'normal' ? 'Normal' : 'Advanced'}</button>)}
+        </div>
+        {activity.ready && !activity.paused ? <button type="button" onClick={() => void activity.pause()} className="min-h-11 rounded-md px-3 text-sm font-medium text-slate-700 hover:bg-white focus-visible:outline-2 focus-visible:outline-cyan-700">Pause session</button> : null}
+      </div>
       <section className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-slate-200 bg-white p-5" aria-labelledby="connection-title">
         <div className="min-w-0 flex-1" aria-live="polite">
           <h2 id="connection-title" className="text-lg font-semibold text-slate-950">{snapshotStale ? 'Checking the browser again' : connectionCopy[readiness].title}</h2>
@@ -416,12 +430,15 @@ export function OperationsClient(props: { helperId: string }) {
         : activity.warning ? <section role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950"><p className="text-sm">Still there? Your session pauses in {Math.max(1,Math.ceil(activity.remainingMs/1000))} seconds without activity on this page.</p><button type="button" onClick={()=>void activity.resume()} className="min-h-11 rounded-md border border-amber-400 px-4 text-sm font-semibold">Keep working</button></section> : null}
       {activity.error ? <p role="alert" className="text-sm text-rose-800">{activity.error} <button type="button" onClick={()=>void activity.resume()} className="underline underline-offset-4">Retry session connection</button></p> : null}
       {update?.needed ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-950"><span>A helper update is available{update.latestVersion ? `: v${update.latestVersion}` : ''}. Keep the helper running while it installs.</span><button type="button" disabled={busy || Boolean(active) || updateBusy} onClick={() => void requestHelperUpdate()} className="min-h-11 rounded-md bg-amber-900 px-4 py-2 font-semibold text-white disabled:opacity-40">{updateBusy ? 'Requesting update…' : 'Update helper'}</button>{updateNote ? <p className="w-full">{updateNote}</p> : null}</div> : null}
+      <div role="tabpanel" id={`${viewId}-normal-panel`} aria-labelledby={`${viewId}-normal-tab`} hidden={view !== 'normal'}>
       <GuidedRunner helperId={props.helperId} session={session} selectedTarget={selectedTarget} onSelect={setSelectedTarget}
         ready={browserReady && protocolReady && !operationBusy && activity.ready && !activity.paused && !backgroundRefresh} active={Boolean(active)&&!backgroundRefresh} refreshing={backgroundRefresh} onBusy={setGuidedBusy} onRefresh={load}
-        paused={activity.paused||!activity.ready} onPause={()=>void activity.pause()} connection={readiness} onConnect={()=>void run('start-browser',{capabilityId:'start-browser'},false)} onRefreshTabs={()=>void refreshBrowser(true)} refreshError={refreshError} snapshotStale={snapshotStale}
+        paused={activity.paused||!activity.ready} connection={readiness} onConnect={()=>void run('start-browser',{capabilityId:'start-browser'},false)} onRefreshTabs={()=>void refreshBrowser(true)} refreshError={refreshError} snapshotStale={snapshotStale}
         lastJob={job} lastOutput={output} outputJobId={outputJobId} />
+      </div>
       {error ? <div role="alert" className="flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><AlertTriangle className="size-4" />{error}</div> : null}
-      <details className="rounded-lg border border-slate-300 bg-slate-50"><summary className="cursor-pointer px-5 py-4 font-semibold text-slate-700">Advanced tools and run details{active ? ' · job running' : ''}</summary><div className="space-y-6 p-4 sm:p-5">
+      <div role="tabpanel" id={`${viewId}-advanced-panel`} aria-labelledby={`${viewId}-advanced-tab`} hidden={view !== 'advanced'}>
+      <div className="space-y-6">
       {job ? (
         <section className="overflow-hidden rounded-lg border border-slate-800 bg-slate-950 text-slate-200">
           <header className="flex items-center justify-between px-5 py-3">
@@ -550,7 +567,7 @@ export function OperationsClient(props: { helperId: string }) {
       </div>
 
 
-      </div></details>
+      </div></div>
       {pendingPlan ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/70 p-4">
           <div className="w-full max-w-xl rounded-lg bg-white p-6">

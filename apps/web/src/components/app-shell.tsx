@@ -10,6 +10,7 @@ import {
   Settings,
 } from 'lucide-react';
 import { productName, productSlogan } from '@/lib/brand';
+import { ServiceStatusBar } from '@/components/service-status-bar';
 
 const navigation = [
   { href: '/', label: 'Operations', icon: Boxes },
@@ -64,7 +65,7 @@ export function AppShell(props: {
           </form>
         </div>
       </aside>
-      <main className="min-w-0">{props.children}</main>
+      <main className="min-w-0"><ServiceStatusBar />{props.children}</main>
     </div>
   );
 }

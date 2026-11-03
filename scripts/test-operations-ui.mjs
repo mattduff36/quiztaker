@@ -17,12 +17,13 @@ const helperId='11111111-1111-4111-8111-111111111111';
 await writeFile(join(temp,'entry.tsx'),`import React from ${JSON.stringify(join(root,'node_modules/react/index.js').replaceAll('\\','/'))};
 import{createRoot}from ${JSON.stringify(join(root,'node_modules/react-dom/client.js').replaceAll('\\','/'))};
 import{OperationsClient}from ${JSON.stringify(join(root,'apps/web/src/components/operations-client.tsx').replaceAll('\\','/'))};
-createRoot(document.getElementById('root')!).render(<OperationsClient helperId="${helperId}"/>);`);
-await build({entryPoints:[join(temp,'entry.tsx')],outfile:join(temp,'app.js'),bundle:true,format:'iife',platform:'browser',jsx:'automatic',tsconfig:join(root,'apps/web/tsconfig.json'),define:{'process.env.NODE_ENV':'"test"'}});
+import{AppShell}from ${JSON.stringify(join(root,'apps/web/src/components/app-shell.tsx').replaceAll('\\','/'))};
+createRoot(document.getElementById('root')!).render(<AppShell email="operator@example.invalid"><div className="fixture"><OperationsClient helperId="${helperId}"/></div></AppShell>);`);
+await build({entryPoints:[join(temp,'entry.tsx')],outfile:join(temp,'app.js'),bundle:true,format:'iife',platform:'browser',jsx:'automatic',tsconfig:join(root,'apps/web/tsconfig.json'),define:{'process.env.NODE_ENV':'"test"','process.env':'{}'}});
 const css=await postcss([tailwind({base:join(root,'apps/web')})]).process(await readFile(join(root,'apps/web/src/app/globals.css'),'utf8'),{from:join(root,'apps/web/src/app/globals.css')});
 await writeFile(join(temp,'app.css'),css.css+'\n:root{--font-plex:Arial}body{margin:0}.fixture{max-width:1120px;margin:auto;padding:24px}');
 
-function state(){return{last:null,paused:false,online:true,connected:true,refreshes:0,checks:0,activityPosts:0,pausePosts:0,jobs:new Map(),latest:null,serial:0,selected:null,blocked:false,retries:0};}
+function state(){return{last:null,paused:false,online:true,connected:true,refreshes:0,checks:0,statusFailed:false,statusStale:false,activityPosts:0,pausePosts:0,jobs:new Map(),latest:null,serial:0,selected:null,blocked:false,retries:0};}
 function reply(path,method,body,now,s){
   const activity=()=>({paused:s.paused,lastActivityAt:new Date(s.last??now).toISOString(),expiresAt:new Date((s.last??now)+1_800_000).toISOString(),serverNow:new Date(now).toISOString()});
   const session=()=>({id:'22222222-2222-4222-8222-222222222222',revision:1,cdp_connected:s.connected,updated_at:new Date(now).toISOString(),tabs:[{targetId:'course',index:0,title:'Xerox course overview',url:'https://example.invalid/course',fingerprint:'course-fingerprint'},{targetId:'blank',index:1,title:'Blank tab',url:'about:blank',fingerprint:'blank'}],roster:null,detection:null});
@@ -37,6 +38,7 @@ function reply(path,method,body,now,s){
     return activity();
   }
   if(path==='/api/operations/context'){s.checks++;return{helper:{id:helperId,device_name:'Test PC',version:'1.0.15',protocol_version:2,is_online:s.online},operatorActivity:s.last===null?null:activity(),session:session(),activeJob:s.latest,captures:[],recentUrls:[],learnerEnabled:true};}
+  if(path==='/api/services/status')return s.statusFailed?{__status:503,error:'Service status is unavailable.'}:{checkedAt:new Date(now).toISOString(),helper:{online:s.online,lastSeenAt:new Date(now).toISOString()},browser:{connected:s.connected,checkedAt:new Date(now-(s.statusStale?120_000:0)).toISOString()},assistant:{ready:true,source:'personal',provider:'openai'}};
   if(path.startsWith('/api/operations/learning'))return{id:null,objective:null,history:[]};
   if(path==='/api/operations/actions'){
     if(body.capabilityId==='detect'&&!s.blocked){s.blocked=true;makeJob('list-tabs');return{plan:{planId:'detect-plan'},waitingForJob:true};}
@@ -55,7 +57,7 @@ const server=createServer(async(req,res)=>{
   try{
     if(req.url.startsWith('/api/')){let text='';for await(const chunk of req)text+=chunk;const result=reply(req.url,req.method,text?JSON.parse(text):{},Date.now(),servedState);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));return;}
     if(req.url==='/app.js'||req.url==='/app.css'){res.writeHead(200,{'content-type':req.url.endsWith('.js')?'text/javascript':'text/css'});res.end(await readFile(join(temp,req.url.slice(1))));return;}
-    res.writeHead(200,{'content-type':'text/html'});res.end('<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/app.css"><title>Vitriol Operations verification</title></head><body><main class="fixture"><div id="root"></div></main><script src="/app.js"></script></body></html>');
+    res.writeHead(200,{'content-type':'text/html'});res.end('<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/app.css"><title>Vitriol Operations verification</title></head><body><div id="root"></div><script src="/app.js"></script></body></html>');
   }catch(error){res.writeHead(500);res.end(String(error));}
 });
 await new Promise(done=>server.listen(0,'127.0.0.1',done));
@@ -74,6 +76,12 @@ try{
       const {__status,...json}=result;await route.fulfill({status:__status||200,json});
     });
     await page.goto(url);
+    const services=page.getByRole('navigation',{name:'Service status',exact:true});
+    await expect(services.getByRole('link',{name:'Helper: Connected',exact:true})).toBeVisible();
+    await expect(services.getByRole('link',{name:'Assistant: Configured',exact:true})).toBeVisible();
+    const normal=page.getByRole('tab',{name:'Normal',exact:true});
+    const advanced=page.getByRole('tab',{name:'Advanced',exact:true});
+    await expect(normal).toHaveAttribute('aria-selected','true');
     const select=page.getByRole('combobox',{name:'Course tab',exact:true});
     await expect(select).toBeEnabled();
     await expect(select.getByRole('option')).toHaveCount(2);
@@ -87,6 +95,19 @@ try{
     await mode.selectOption('read');
     await expect(goal).toHaveValue(/Read all relevant material/);
     await goal.fill('Read this course overview and ask me before continuing.');
+    const jobsBeforeSwitch=fixture.serial;
+    await advanced.click();
+    await expect(advanced).toHaveAttribute('aria-selected','true');
+    await expect(goal).toBeHidden();
+    await expect(page.getByRole('button',{name:'End session',exact:true})).toBeVisible();
+    await expect(services).toBeVisible();
+    await page.screenshot({path:join(artifacts,viewport.width>500?'desktop-advanced.png':'mobile-advanced.png'),fullPage:true});
+    await advanced.press('Home');
+    await expect(normal).toHaveAttribute('aria-selected','true');
+    await expect(normal).toBeFocused();
+    await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
+    expect(fixture.serial).toBe(jobsBeforeSwitch);
+    await goal.focus();
     await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
     const before=fixture.refreshes;
     await page.clock.fastForward(46_000);
@@ -98,6 +119,7 @@ try{
     await expect(goal).toBeFocused();
     await expect(select).toHaveValue('course');
     await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
+    await page.evaluate(()=>window.scrollTo(0,0));
     await page.screenshot({path:join(artifacts,viewport.width>500?'desktop.png':'mobile.png'),fullPage:true});
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
@@ -112,17 +134,27 @@ try{
     await page.clock.fastForward(2*60_000);
     await expect(page.getByRole('heading',{name:'Your session is paused',exact:true})).toBeVisible();
     await expect.poll(()=>fixture.pausePosts).toBe(0);
-    const advanced=page.getByText('Advanced tools',{exact:false}).first();
-    if(await advanced.count())await advanced.click();
+    await advanced.click();
     await expect(page.getByRole('button',{name:'End session',exact:true})).toBeEnabled();
     const probesWhenPaused=fixture.refreshes;
     await page.clock.fastForward(60_000);
     expect(fixture.refreshes).toBe(probesWhenPaused);
     await page.getByRole('button',{name:'Resume session',exact:true}).click();
     await expect(page.getByRole('heading',{name:'Your session is paused',exact:true})).toBeHidden();
+    await normal.click();
     await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
+    fixture.statusStale=true;
+    await page.clock.fastForward(21_000);
+    await expect(services.getByRole('link',{name:'Browser: Check overdue',exact:true})).toBeVisible();
+    fixture.statusFailed=true;
+    await page.clock.fastForward(21_000);
+    await expect(services.getByRole('link',{name:'Website: Unavailable',exact:true})).toBeVisible();
+    await expect(services.getByRole('link',{name:'Helper: Unknown',exact:true})).toBeVisible();
+    fixture.statusFailed=false;fixture.statusStale=false;
+    await page.clock.fastForward(41_000);
+    await expect(services.getByRole('link',{name:'Browser: Connected',exact:true})).toBeVisible();
     expect(errors).toEqual([]);
-    console.log(`PASS ${viewport.width}px: guided start, preserved focus/input, automatic refresh, idle warning/pause and explicit resume.`);
+    console.log(`PASS ${viewport.width}px: Normal/Advanced preserve state and keyboard focus; compact service status handles stale/failure/recovery; guided start, automatic refresh and idle protection.`);
     await page.close();
   }
   passed=true;
