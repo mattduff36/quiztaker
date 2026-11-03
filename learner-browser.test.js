@@ -51,6 +51,60 @@ test('real browser reads nested course cards, collapse panels, icon modals and l
   } finally { await browser.close(); }
 });
 
+test('hidden persistent slides cannot starve later controls or misattribute the active topic', async () => {
+  const browser = await chromium.launch({channel:'chrome',headless:true});
+  try {
+    const page = await browser.newPage({viewport:{width:1000,height:800}});
+    await page.setContent('<iframe style="width:950px;height:750px"></iframe>');
+    const frame = page.frames()[1];
+    await frame.setContent(`<style>.card{position:relative;width:240px;height:80px;transform-style:preserve-3d}.card.flipped{transform:rotateY(180deg)}.face{position:absolute;inset:0;backface-visibility:hidden}.back{transform:rotateY(180deg)}</style>
+      <section hidden><h1>GET INVOLVED: PROBLEMS WITH PRINTING</h1>${Array.from({length:150},(_,i)=>`<button>Hidden old control ${i}</button>`).join('')}</section>
+      <h1 style="position:absolute;left:-5000px;top:0">GET INVOLVED: OLD OFFSCREEN TOPIC</h1>
+      <h1>GET THE STORY: TYPES OF PAPER</h1>
+      <div class="card"><div class="face front" role="button" onclick="this.parentElement.classList.add('flipped')">Open paper card</div><div class="face back" role="button" onclick="this.parentElement.classList.remove('flipped')">Paper card back: Reverse-side material</div></div>
+      <a href="javascript:;" onclick="document.querySelector('#panel').hidden=false">Getting the right paper</a><div id="panel" hidden>Opened accordion material</div>
+      <a href="javascript:;" onclick="document.querySelector('#status').textContent='Next lesson selected'">Next</a><output id="status"></output>
+      <div id="speech" class="dki-element-content speech-bubble" tabindex="1" style="cursor:pointer">Sarah: hear about paper quality</div><output id="speech-status"></output>
+      <img id="quality-icon" class="dki-element-content pngFix hasRollover" tabindex="-1" alt="" width="32" height="32" style="cursor:pointer">
+      <img class="dki-element-content hasRollover" alt="Not interactive" width="32" height="32" style="cursor:auto">
+      <div id="quality-modal" hidden>Modal fact about paper quality retained for later questions.<button type="button" onclick="this.parentElement.hidden=true">Close</button></div>
+      <a href="javascript:alert('bad')">Unsafe script link</a><a href="javascript:;alert('bad')">Unsafe appended script</a>
+      ${Array.from({length:45},(_,i)=>`<button type="button">Extra course control ${i}</button>`).join('')}`);
+    await frame.evaluate(() => {
+      document.querySelector('#speech').addEventListener('click',() => document.querySelector('#speech-status').textContent='Sarah speech bubble opened');
+      document.querySelector('#quality-icon').addEventListener('click',() => document.querySelector('#quality-modal').hidden=false);
+    });
+    const before = await readSnapshot(page);
+    assert.equal(before.snapshot.buttons.length,40);
+    assert.ok(before.snapshot.buttons.some(control=>control.name==='Next'));
+    assert.ok(before.snapshot.buttons.some(control=>control.name==='Getting the right paper'));
+    assert.ok(before.snapshot.buttons.some(control=>control.name==='Open paper card'));
+    assert.ok(before.snapshot.buttons.some(control=>control.name==='Sarah: hear about paper quality'));
+    assert.ok(before.snapshot.buttons.some(control=>control.name==='Course information icon 1'));
+    assert.ok(!before.snapshot.buttons.some(control=>control.name==='Not interactive'));
+    assert.ok(!before.snapshot.buttons.some(control=>/Hidden old|Paper card back|Unsafe/.test(control.name)));
+    assert.match(before.snapshot.text,/Source:.*GET THE STORY: TYPES OF PAPER/);
+    assert.doesNotMatch(before.snapshot.text,/GET INVOLVED|Reverse-side material/);
+    await act(page,'Open paper card');
+    const flipped = await readSnapshot(page);
+    assert.ok(!flipped.snapshot.buttons.some(control=>control.name==='Open paper card'));
+    assert.ok(flipped.snapshot.buttons.some(control=>control.name==='Paper card back: Reverse-side material'));
+    assert.match(flipped.snapshot.text,/Reverse-side material/);
+    await act(page,'Getting the right paper');
+    assert.match((await readSnapshot(page)).snapshot.text,/Opened accordion material/);
+    await act(page,'Next');
+    assert.match((await readSnapshot(page)).snapshot.text,/Next lesson selected/);
+    await act(page,'Sarah: hear about paper quality');
+    assert.match((await readSnapshot(page)).snapshot.text,/Sarah speech bubble opened/);
+    await act(page,'Course information icon 1');
+    const capturedModal = (await readSnapshot(page)).snapshot;
+    assert.match(capturedModal.text,/Modal fact about paper quality retained for later questions/);
+    await act(page,'Close');
+    assert.doesNotMatch((await readSnapshot(page)).snapshot.text,/Modal fact about paper quality retained for later questions/);
+    assert.match(capturedModal.text,/Modal fact about paper quality retained for later questions/);
+  } finally { await browser.close(); }
+});
+
 test('real answer, form Next, final Submit and visible pass; old mode cannot submit', async () => {
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   try {

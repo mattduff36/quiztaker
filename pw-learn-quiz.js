@@ -14,6 +14,8 @@
 // not a shell argument.
 // Quiz jobs allow at most two observed Retake/Retry actions; failed-result
 // snapshots are retained before those actions, and only visible passes finish.
+// Hidden persistent slides never consume the visible-control scan budget;
+// transformed-away flipcard faces and hidden headings are not observations.
 //
 // Usage:
 //   node pw-learn-quiz.js <tabIdx> [--dry]
@@ -172,7 +174,13 @@ async function accessibleName(locator) {
     const id = el.getAttribute('id');
     const explicit = id ? el.ownerDocument.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
     const wrapping = el.closest('label');
-    return (explicit?.textContent || wrapping?.textContent || el.innerText || el.textContent || el.getAttribute('title') || el.getAttribute('alt') || el.getAttribute('value') || el.querySelector('img')?.getAttribute('alt') || el.querySelector('[title]')?.getAttribute('title') || ((el.hasAttribute('data-toggle') || el.hasAttribute('data-bs-toggle') || el.hasAttribute('aria-controls')) ? `Open panel: ${el.getAttribute('aria-controls') || el.getAttribute('data-target') || el.getAttribute('href') || 'course detail'}` : ''));
+    const name = (explicit?.textContent || wrapping?.textContent || el.innerText || el.textContent || el.getAttribute('title') || el.getAttribute('alt') || el.getAttribute('value') || el.querySelector('img')?.getAttribute('alt') || el.querySelector('[title]')?.getAttribute('title') || ((el.hasAttribute('data-toggle') || el.hasAttribute('data-bs-toggle') || el.hasAttribute('aria-controls')) ? `Open panel: ${el.getAttribute('aria-controls') || el.getAttribute('data-target') || el.getAttribute('href') || 'course detail'}` : ''));
+    if (String(name).trim()) return name;
+    if (el.matches('img.dki-element-content.hasRollover') && getComputedStyle(el).cursor === 'pointer') {
+      const icons = Array.from(el.ownerDocument.querySelectorAll('img.dki-element-content.hasRollover')).filter(icon => icon.getClientRects().length && getComputedStyle(icon).visibility !== 'hidden' && getComputedStyle(icon).cursor === 'pointer');
+      return `Course information icon ${icons.indexOf(el) + 1}`;
+    }
+    return '';
   }).catch(() => '');
   if (text && typeof text === 'object' && text.screenElement) {
     return screenElementControlName(text.id, text.className).slice(0, 160);
@@ -201,9 +209,32 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
   const listed = [];
   const handles = new Map();
   for (const frame of await visibleFrames(page)) {
-    const locator = navigationOnly ? frame.locator('button, a, [role=button], [role=tab], summary, [onclick], [data-toggle], [data-bs-toggle], [aria-controls], input[type=button], input[type=submit], input[type=image]') : frame.getByRole(role);
-    const count = Math.min(await locator.count().catch(() => 0), 120);
-    for (let index = 0; index < count; index += 1) {
+    const locator = navigationOnly ? frame.locator('button, a, [role=button], [role=tab], summary, [onclick], [data-toggle], [data-bs-toggle], [aria-controls], input[type=button], input[type=submit], input[type=image], .dki-element-content.speech-bubble, img.dki-element-content.hasRollover') : frame.getByRole(role);
+    const indices = await locator.evaluateAll(elements => {
+      const indices = [];
+      for (let index = 0; index < elements.length; index += 1) {
+        const el = elements[index];
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        if (!el.getClientRects().length || !rect.width || !rect.height || style.visibility === 'hidden' || style.visibility === 'collapse') continue;
+        if (el.matches('.dki-element-content.speech-bubble, img.dki-element-content.hasRollover') && style.cursor !== 'pointer') continue;
+        let facing = true;
+        for (let face = el; face; face = face.parentElement) {
+          if (getComputedStyle(face).backfaceVisibility !== 'hidden') continue;
+          let matrix = new DOMMatrix();
+          for (let node = face; node; node = node.parentElement) {
+            const transform = getComputedStyle(node).transform;
+            if (transform !== 'none') matrix = new DOMMatrix(transform).multiply(matrix);
+          }
+          if (matrix.m33 < -0.001) { facing = false; break; }
+        }
+        if (!facing) continue;
+        indices.push(index);
+        if (indices.length >= 120) break;
+      }
+      return indices;
+    }).catch(() => []);
+    for (const index of indices) {
       const handle = locator.nth(index);
       if (!await handle.isVisible().catch(() => false) || !await handle.isEnabled().catch(() => false)) continue;
       const name = await accessibleName(handle);
@@ -218,7 +249,7 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
         const safeLink = await handle.evaluate(el => {
           if (el.tagName !== 'A') return true;
           const href = el.getAttribute('href') || '';
-          if (/^javascript:\s*void\s*\(\s*0\s*\)\s*;?$/i.test(href.trim())) return true;
+          if (/^javascript:\s*(?:void\s*\(\s*0\s*\)\s*;?|;)$/i.test(href.trim())) return true;
           return !/^(javascript|mailto|tel|data):/i.test(href) && !/\b(logout|signout|delete|purchase|checkout|account|login)\b/i.test(href);
         }).catch(() => false);
         if (!safeLink) continue;
@@ -237,7 +268,21 @@ async function readSnapshot(page, mode = 'read') {
   for (const frame of await visibleFrames(page)) {
     try {
       const observed = await frame.evaluate(() => {
-        const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth && s.display !== 'none' && s.visibility !== 'hidden' && el.getClientRects().length; };
+        const visible = (el, inViewport = true) => {
+          const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+          if (!r.width || !r.height || s.display === 'none' || s.visibility === 'hidden' || !el.getClientRects().length) return false;
+          if (inViewport && !(r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth)) return false;
+          for (let face = el; face; face = face.parentElement) {
+            if (getComputedStyle(face).backfaceVisibility !== 'hidden') continue;
+            let matrix = new DOMMatrix();
+            for (let node = face; node; node = node.parentElement) {
+              const transform = getComputedStyle(node).transform;
+              if (transform !== 'none') matrix = new DOMMatrix(transform).multiply(matrix);
+            }
+            if (matrix.m33 < -0.001) return false;
+          }
+          return true;
+        };
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
         const lines = [];
         while (walker.nextNode()) {
@@ -247,7 +292,9 @@ async function readSnapshot(page, mode = 'read') {
           const value = node.textContent.replace(/\s+/g, ' ').trim();
           if (value) lines.push(value);
         }
-        return { heading: document.querySelector('h1,h2,[role=heading]')?.textContent?.trim() || document.title, text: lines.join('\n'), position: Math.round(scrollY), end: scrollY + innerHeight >= document.documentElement.scrollHeight - 2 };
+        const headings = Array.from(document.querySelectorAll('h1,h2,[role=heading]'));
+        const heading = headings.find(el => visible(el)) || headings.find(el => visible(el, false));
+        return { heading: heading?.textContent?.trim() || document.title, text: lines.join('\n'), position: Math.round(scrollY), end: scrollY + innerHeight >= document.documentElement.scrollHeight - 2 };
       });
       if (!observed.text.trim()) continue;
       const source = frame.url().split(/[?#]/)[0].slice(0, 500);

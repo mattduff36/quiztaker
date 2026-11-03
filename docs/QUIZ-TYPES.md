@@ -463,3 +463,15 @@ Only visible quiz pass/score evidence counts as passing; a model summary does
 not. Failure evidence remains in course memory for a deliberate subsequent run.
 Offline Chrome fixtures cover the controls and quiz flow; these fixtures are
 not evidence that any live qualification has been passed.
+
+### Persistent course slides and visible controls (Canon observation)
+
+Canon PaperTheory keeps earlier slides in the DOM: the live page had 161
+interactive candidates, with visible navigation only after index 120. Helper
+1.0.17 budgets the first 120 visible, front-facing candidates rather than raw
+DOM positions, and still returns at most 40 controls. It accepts observed
+`javascript:;` no-op links, excludes arbitrary JavaScript URLs and hidden
+flipcard backs, and attributes excerpts to a visible heading. Offline Chrome
+coverage verifies these controls; this is not a live course-pass claim.
+Pointer-enabled DKI speech bubbles and rollover information icons are also
+observed controls; unlabeled icons receive a stable human-readable number.
