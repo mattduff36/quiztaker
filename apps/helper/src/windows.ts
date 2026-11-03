@@ -7,7 +7,7 @@ export function shouldAutoMinimize(
 ): boolean {
   return platform === 'win32'
     && isDisabled !== '1'
-    && !args.some(argument=>/^vitriol-helper:\/\/open(?:\?|$)/i.test(argument))
+    && !args.some(argument=>/^vitriol-helper:\/\/open\/?(?:\?|$)/i.test(argument))
     && !args.includes('--no-minimize');
 }
 

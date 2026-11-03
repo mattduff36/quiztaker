@@ -118,6 +118,7 @@ test('opens production without pairing and selects explicit trusted origins', ()
     pairing: null,
   });
   assert.equal(parsePairingLaunch(['vitriol-helper://open']), null);
+  assert.deepEqual(resolveHelperLaunch(['vitriol-helper://open/']), resolveHelperLaunch(['vitriol-helper://open']));
   for (const target of ['https://www.vitriol.co.uk', 'https://vitriol.co.uk', 'http://localhost:4000', 'http://127.0.0.1:3000']) {
     const args = [`vitriol-helper://open?controlPlaneUrl=${encodeURIComponent(target)}`];
     assert.equal(resolveHelperLaunch(args).controlPlaneUrl, target);
@@ -159,7 +160,7 @@ test('rejects unsafe, ambiguous, and credential-bearing protocol launches', () =
     'https://www.vitriol.co.uk?code=SECRET', 'http://localhost:4000#fragment',
   ];
   const unsafeLinks = [
-    'vitriol-helper://open/path', 'vitriol-helper://open/', 'vitriol-helper://open#fragment',
+    'vitriol-helper://open/path', 'vitriol-helper://open#fragment',
     'vitriol-helper://user:secret@open', 'vitriol-helper://open:123',
     'vitriol-helper://open?code=ABCD2345', 'vitriol-helper://open?unknown=value',
     'vitriol-helper://open?controlPlaneUrl=',

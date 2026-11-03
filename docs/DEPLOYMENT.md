@@ -246,11 +246,12 @@ tables to roll back.
 
 ## Welcome screen and opening the Windows helper
 
-Helper 1.0.23 adds `vitriol-helper://open` to the existing per-user Windows
+Helper 1.0.24 supports `vitriol-helper://open` to the existing per-user Windows
 protocol registration. Opening uses the saved pairing for the production origin;
 it does not create a code or replace credentials. Explicit trusted local origins
 remain supported. Website launches keep the terminal visible. The existing
-single-instance mutex prevents duplicate helpers.
+single-instance mutex prevents duplicate helpers. Both the bare link and the
+trailing slash added by Chrome during Windows protocol dispatch are accepted.
 
 The welcome page remembers an observed connection and uses account pairing as
 evidence of prior setup, not proof of installation on the current PC. Browsers
@@ -258,7 +259,7 @@ cannot enumerate this MSI-installed Win32 app while it is stopped. Unknown or
 missing installations always have install, Start-menu, pairing and retry paths;
 no blur/focus heuristic is treated as a successful launch. After twelve seconds
 without a heartbeat, recovery help opens. Only a fresh server connection advances
-to course setup. Known older helpers need a one-time 1.0.23 installer update to
+to course setup. Known older helpers need a one-time 1.0.24 installer update to
 support the Open button; they can still be started through the Start menu.
 
 Desktop/mobile fixture checks cover first-time, old-version, disconnected,

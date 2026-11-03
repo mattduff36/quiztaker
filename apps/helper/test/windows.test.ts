@@ -7,6 +7,7 @@ test('auto-minimizes only for an enabled Windows helper', () => {
   assert.equal(shouldAutoMinimize([], 'win32', undefined), true);
   assert.equal(shouldAutoMinimize(['--no-minimize'], 'win32', undefined), false);
   assert.equal(shouldAutoMinimize(['vitriol-helper://open'], 'win32', undefined), false);
+  assert.equal(shouldAutoMinimize(['vitriol-helper://open/'], 'win32', undefined), false);
   assert.equal(shouldAutoMinimize(['vitriol-helper://open?controlPlaneUrl=https%3A%2F%2Fwww.vitriol.co.uk'], 'win32', undefined), false);
   assert.equal(shouldAutoMinimize([], 'win32', '1'), false);
   assert.equal(shouldAutoMinimize([], 'linux', undefined), false);

@@ -4,7 +4,7 @@ import {useCallback,useEffect,useRef,useState} from 'react';
 import {useRouter} from 'next/navigation';
 import {ArrowRight,Download,LoaderCircle,Monitor,Play} from 'lucide-react';
 
-export const HELPER_OPEN_VERSION = '1.0.23';
+export const HELPER_OPEN_VERSION = '1.0.24';
 const REMEMBERED = 'vitriol-helper-seen-v1';
 type Helper = {device_name?:string;version?:string} | null;
 

@@ -55,7 +55,7 @@ function parseProtocolLaunch(args: string[]): Pick<HelperLaunch, 'controlPlaneUr
   if (values.length !== 1) throw new Error('Only one Vitriol Helper launch link is allowed.');
   const launch = new URL(values[0]!);
   if (launch.protocol !== 'vitriol-helper:' || !['pair', 'open'].includes(launch.hostname)
-    || launch.username || launch.password || launch.port || launch.pathname || launch.hash) {
+    || launch.username || launch.password || launch.port || (launch.pathname && launch.pathname !== '/') || launch.hash) {
     throw new Error('The Vitriol Helper launch link is invalid.');
   }
   const allowedKeys = launch.hostname === 'pair' ? ['code', 'controlPlaneUrl'] : ['controlPlaneUrl'];
