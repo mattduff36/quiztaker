@@ -4,6 +4,7 @@ import test from 'node:test';
 import postgres from 'postgres';
 import { jobRecoveryDecision, recoverHelperJobs, requestHelperJobCancellation, readRelevantJob, type RecoveryJob, type RecoveryHelper, type JobRecoveryDeps } from '../src/lib/job-recovery';
 import { endOperatorSession } from '../src/lib/operations';
+import { invalidateBrowserConnection } from '../src/lib/browser-connection';
 
 const now = new Date('2026-11-03T12:00:00Z');
 const old = new Date(now.getTime() - 3600_000);
@@ -57,6 +58,14 @@ test('Postgres: hidden orphan recovery, cancellation, ownership, session ending 
   try {
     await sql`insert into profiles(id,email) values(${user},${user + '@example.invalid'})`;
     await sql`insert into helpers(id,user_id,device_name,version,status,last_seen_at) values(${helperId},${user},'Recovery fixture','1.0.14','online',now())`;
+    const browser = randomUUID();
+    await sql`insert into browser_sessions(id,user_id,helper_id,revision,cdp_connected,tabs,updated_at) values(${browser},${user},${helperId},1,true,'[]',now())`;
+    await invalidateBrowserConnection({ userId: user, helperId, jobCreatedAt: new Date(0) }, query);
+    assert.equal((await sql`select cdp_connected from browser_sessions where id=${browser}`)[0].cdp_connected, true);
+    await invalidateBrowserConnection({ userId: 'another-user', helperId, jobCreatedAt: new Date(Date.now()+1000) }, query);
+    assert.equal((await sql`select cdp_connected from browser_sessions where id=${browser}`)[0].cdp_connected, true);
+    await invalidateBrowserConnection({ userId: user, helperId, jobCreatedAt: new Date(Date.now()+1000) }, query);
+    assert.equal((await sql`select cdp_connected from browser_sessions where id=${browser}`)[0].cdp_connected, false);
     const orphan = await makeJob('running');
     const newer = await makeJob('completed');
     await sql`update jobs set created_at=now() where id=${newer}`;

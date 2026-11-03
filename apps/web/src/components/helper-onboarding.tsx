@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Check, Clipboard, Download, LoaderCircle, Play, RefreshCw } from 'lucide-react';
 import { productName } from '@/lib/brand';
+import { formatDisplayDate } from '@/lib/display-date';
 
 interface PairingDetails {
   code: string;
@@ -288,6 +289,5 @@ function Step(props: { number: string; title: string; children: React.ReactNode 
 }
 
 function formatDate(value?: string): string {
-  if (!value) return 'never';
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
+  return formatDisplayDate(value);
 }

@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { formatDisplayDate } from '@/lib/display-date';
 
 type ProviderId = 'openai' | 'gemini' | 'openrouter';
 
@@ -139,7 +140,7 @@ export function LlmSettings(props: { status: LlmStatus; providers: readonly Prov
 }
 
 function statusCopy(status: LlmStatus): string {
-  if (status.source === 'personal' && status.ready) return `Personal connection tested successfully${status.testedAt ? ` at ${new Date(status.testedAt).toLocaleString()}` : ''}. Provider availability and credit can change.`;
+  if (status.source === 'personal' && status.ready) return `Personal connection tested successfully${status.testedAt ? ` at ${formatDisplayDate(status.testedAt)}` : ''}. Provider availability and credit can change.`;
   if (status.source === 'personal') return 'A personal connection is saved but is not ready.';
   if (status.source === 'disabled') return 'Hosted AI is disconnected. Deployment credentials stay unused.';
   if (status.source === 'inherited') return 'Using the site’s default AI configuration. It has not been tested by this setup flow. Test and save your own connection to replace it.';

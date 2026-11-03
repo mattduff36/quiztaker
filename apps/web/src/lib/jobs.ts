@@ -20,6 +20,7 @@ import { mapPlan } from '@/lib/plans';
 import { recordLocalPausedQuestion, storedLearnerPauseScope } from '@/lib/learner-memory';
 import { TERMINAL_JOB_LOCK_SQL } from '@/lib/job-lock';
 import { recoverHelperJobs } from '@/lib/job-recovery';
+import { browserConnectionLost, invalidateBrowserConnection } from '@/lib/browser-connection';
 
 interface JobRow extends Record<string, unknown> {
   id: string;
@@ -34,6 +35,7 @@ interface JobRow extends Record<string, unknown> {
   fingerprint: string | null;
   nonce: string;
   status: string;
+  created_at: string | Date;
   input?: Record<string, unknown>;
 }
 
@@ -298,6 +300,9 @@ export async function recordJobEvent(
        where close_job_id = $1 and status = 'ending'`,
       [jobId, status === 'completed' ? 'ended' : 'close_failed', input.occurredAt],
     );
+  }
+  if (status === 'failed' && browserConnectionLost(output, job.capability_id, input.data.result)) {
+    await invalidateBrowserConnection({ userId, helperId, jobCreatedAt: job.created_at }, sql);
   }
   if (!probeOnly && !waitingForUser) {
     await queueStrategyEvidence(sql, {

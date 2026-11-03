@@ -10,6 +10,13 @@ marked helper-offline. A healthy active job has no elapsed-runtime expiry.
 Queued work is retained unless cancelled. Recovered work is never replayed;
 attempt/history records and original output remain available.
 
+CDP transport failures invalidate older connected browser snapshots and clear
+their tabs, roster and detection. A delayed failure cannot invalidate a snapshot
+recorded after its job was queued. Use Start browser/Reconnect browser, then
+Refresh, to repopulate the current tabs. UI timestamps use an explicit British
+format and Europe/London time zone on both server and client to avoid hydration
+errors from different machine locales.
+
 Operations prioritises actual active jobs over newer completed jobs. Ending a
 session cancels queued work and requests cancellation of active work before
 queuing browser close; genuinely active course work retains the force-close

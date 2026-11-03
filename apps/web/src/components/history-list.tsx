@@ -2,6 +2,7 @@
 
 import { parseAsString, useQueryState } from 'nuqs';
 import { Search } from 'lucide-react';
+import { formatDisplayDate } from '@/lib/display-date';
 
 interface HistoryRow {
   id: number;
@@ -51,7 +52,7 @@ export function HistoryList({ rows, sessions = [], jobs = [] }: {
           {sessions.map((session) => (
             <article key={session.id} className="rounded-lg border border-slate-300 bg-white p-4 text-sm">
               <p className="font-semibold text-slate-950">Session {session.status}</p>
-              <p className="mt-1 text-slate-500">{new Date(session.started_at).toLocaleString()}{session.ended_at ? ` – ${new Date(session.ended_at).toLocaleString()}` : ''}</p>
+              <p className="mt-1 text-slate-500">{formatDisplayDate(session.started_at)}{session.ended_at ? ` – ${formatDisplayDate(session.ended_at)}` : ''}</p>
               <p className="mt-2 text-slate-600">{session.recap?.courses ?? 0} courses in {session.recap?.items ?? 0} events{session.recap?.error ? ` · ${session.recap.error}` : ''}</p>
               {session.needs_review?.length ? <p className="mt-2 text-amber-800">{session.needs_review.length} items need review</p> : null}
             </article>
@@ -89,7 +90,7 @@ export function HistoryList({ rows, sessions = [], jobs = [] }: {
       <div className="mt-5 overflow-hidden rounded-lg border border-slate-300 bg-white">
         {visibleRows.length ? visibleRows.map((row) => (
           <article key={row.id} className="grid gap-3 border-b border-slate-200 px-5 py-4 last:border-0 md:grid-cols-[150px_100px_1fr_180px] md:items-center">
-            <time className="font-mono text-[11px] text-slate-500">{new Date(row.occurred_at).toLocaleString()}</time>
+            <time className="font-mono text-[11px] text-slate-500">{formatDisplayDate(row.occurred_at)}</time>
             <span className="w-fit rounded-full bg-slate-100 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-slate-600">{row.kind}</span>
             <div>
               <h2 className="font-semibold text-slate-950">{row.title}</h2>
