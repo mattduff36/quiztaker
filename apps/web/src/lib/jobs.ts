@@ -7,6 +7,7 @@ import {
   deriveHelperSecret,
   diagnoseRun,
   getCapability,
+  normalizeProcessExitCode,
   signJob,
   type JobEnvelope,
   type JobEventInput,
@@ -22,6 +23,7 @@ import { TERMINAL_JOB_LOCK_SQL } from '@/lib/job-lock';
 import { recoverHelperJobs } from '@/lib/job-recovery';
 import { browserConnectionLost, invalidateBrowserConnection } from '@/lib/browser-connection';
 import { assertOperatorActive, enforceOperatorIdle } from '@/lib/operator-activity';
+import { recordPlayerJobOutcome } from '@/lib/player-knowledge';
 
 interface JobRow extends Record<string, unknown> {
   id: string;
@@ -122,8 +124,12 @@ export async function recordJobEvent(
   userId: string,
   jobId: string,
   input: JobEventInput,
+  deps?: {queryOne: typeof queryOne; queryRows: typeof queryRows; withTransaction: typeof withTransaction},
 ): Promise<void> {
-  const job = await queryOne<JobRow>(
+  const readOne = deps?.queryOne ?? queryOne;
+  const readRows = deps?.queryRows ?? queryRows;
+  const transaction = deps?.withTransaction ?? withTransaction;
+  const job = await readOne<JobRow>(
     'select * from jobs where id = $1 and helper_id = $2 and user_id = $3',
     [jobId, helperId, userId],
   );
@@ -143,7 +149,7 @@ export async function recordJobEvent(
   const isTerminal = ['completed', 'failed', 'cancelled'].includes(input.event);
   if (!isTerminal) {
     if (!isOutputEvent || input.sequence <= 202) {
-      const inserted = await queryOne<{ id: number }>(
+      const inserted = await readOne<{ id: number }>(
         `insert into job_events (user_id, job_id, sequence, event, data, occurred_at)
          values ($1, $2, $3, $4, $5::jsonb, $6)
          on conflict (job_id, sequence) do nothing
@@ -153,7 +159,7 @@ export async function recordJobEvent(
       if (!inserted) return;
     }
     if (input.event === 'started') {
-      await queryRows(
+      await readRows(
         `update jobs
          set status = 'running', started_at = $2
          where id = $1 and status = 'dispatched'`,
@@ -164,7 +170,7 @@ export async function recordJobEvent(
   }
 
   if (!output) {
-    const chunks = await queryRows<{ data: { text?: string } }>(
+    const chunks = await readRows<{ data: { text?: string } }>(
       `select data from job_events
        where job_id = $1 and event in ('stdout', 'stderr')
        order by sequence`,
@@ -172,7 +178,12 @@ export async function recordJobEvent(
     );
     output = chunks.map((row) => String(row.data?.text ?? '')).join('');
   }
-  const code = input.event === 'cancelled' ? null : Number(input.data.code ?? 1);
+  const rawCode = input.event === 'cancelled' ? null : input.data.code ?? 1;
+  const code = normalizeProcessExitCode(rawCode);
+  if (input.event !== 'cancelled') {
+    eventData.code = code;
+    if (code !== rawCode) eventData.rawCode = rawCode;
+  }
   const outcome = input.event === 'cancelled'
     ? { outcome: 'cancelled' as const, verified: false, status: 'cancelled' }
     : classifyOutcome({ script: job.script, code, output });
@@ -181,7 +192,7 @@ export async function recordJobEvent(
   const status = input.event === 'completed' && outcome.outcome === 'success' && outcome.verified
     ? 'completed'
     : input.event === 'cancelled' ? 'cancelled' : waitingForUser ? 'awaiting-input' : 'failed';
-  const plan = await queryOne<{
+  const plan = await readOne<{
     label: string;
     targets: Array<{ id?: string; title: string }>;
     input: unknown;
@@ -191,7 +202,7 @@ export async function recordJobEvent(
     [job.plan_id, job.user_id],
   );
   const probeOnly = ['list-tabs', 'cdp-check', 'cert-status', 'detect', 'cert-dry-run', 'tab-inspect', 'fit-tab', 'start-browser', 'close-browser', 'open-url', 'learn-capture'].includes(job.capability_id);
-  await withTransaction(async (sql) => {
+  await transaction(async (sql) => {
   const locked = await sql<{ status: string }>(
     // No job key changes here. FOR UPDATE would block heartbeat's FK KEY SHARE
     // while heartbeat holds helpers, creating a jobs -> helpers -> jobs cycle.
@@ -321,6 +332,11 @@ export async function recordJobEvent(
     });
   }
   });
+  if (job.capability_id === 'quiz-learn' && input.event !== 'cancelled') {
+    await recordPlayerJobOutcome({ userId, attemptId: job.attempt_id, jobId, status, verified: outcome.verified,
+      noProgress: output.includes('This action has not changed the page.') })
+      .catch(() => console.warn('Player outcome knowledge could not be updated'));
+  }
 }
 
 async function storeJobOutput(

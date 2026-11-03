@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import {
   capabilities,
   parseLearnerMode,
+  normalizeProcessExitCode,
   resolveScriptArgs,
   resultEnvelope,
   verifyJob,
@@ -14,6 +15,7 @@ import { readBrowserSession } from './browser-session.js';
 import { closeOwnedBrowser, ensureBrowser, killTree } from './browser-supervisor.js';
 import { ensureHelperDirectories, getAutomationRoot, getHelperHome } from './config.js';
 import { structuredResult } from './results.js';
+import { rememberOutbox } from './outbox.js';
 
 const MAX_CAPTURED_OUTPUT_CHARS = 10 * 1024 * 1024;
 
@@ -60,10 +62,24 @@ export function startJob(
   let isOutputTruncated = false;
   let isCancelled = false;
   let eventQueue = Promise.resolve();
+  let deliveryDeferred = false;
   const emit = (event: JobEventInput['event'], data: Record<string, unknown>) => {
     sequence += 1;
     const input = { sequence, event, data, occurredAt: new Date().toISOString() };
-    eventQueue = eventQueue.catch(() => undefined).then(() => sendEvent(input));
+    eventQueue = eventQueue.then(async () => {
+      let announceDeferred = false;
+      if (!deliveryDeferred) {
+        try { await sendEvent(input); return; }
+        catch { deliveryDeferred = true; announceDeferred = true; }
+      }
+      // One failed bounded delivery defers this job's remaining events rather
+      // than repeatedly blocking completion or rejecting a void callback.
+      try {
+        rememberOutbox(envelope.payload.jobId, input);
+        if (announceDeferred) console.warn('Job reporting is unavailable. Events are saved in the local outbox for retry.');
+      }
+      catch { console.error('Could not save a pending job event to the local outbox.'); }
+    });
     return eventQueue;
   };
 
@@ -135,12 +151,18 @@ export function startJob(
       void emit('failed', { error: error.message });
       reject(error);
     });
-    child.on('close', (code) => {
+    child.on('close', (rawCode) => {
+      const code = normalizeProcessExitCode(rawCode);
+      if (code !== rawCode) {
+        const text = `Executor exited with Windows status 0x${Number(rawCode).toString(16).toUpperCase()} (${rawCode}; signed ${code}).\n`;
+        ({ output, isOutputTruncated } = appendOutput(output, text, isOutputTruncated));
+        void emit('stderr', {text});
+      }
       const event = isCancelled ? 'cancelled' : code === 0 ? 'completed' : 'failed';
       const result = structuredResult(capability.id, output, code);
       const data = isCancelled
-        ? { requestedAt: new Date().toISOString(), code, output, result }
-        : { code, output, result };
+        ? { requestedAt: new Date().toISOString(), code, output, result, ...(code !== rawCode ? {rawCode} : {}) }
+        : { code, output, result, ...(code !== rawCode ? {rawCode} : {}) };
       rememberNonce(envelope.payload.nonce, envelope.payload.jobId, true);
       void emit(event, data).finally(() => resolvePromise({ code, output }));
     });

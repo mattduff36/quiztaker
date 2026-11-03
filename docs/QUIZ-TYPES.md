@@ -404,6 +404,12 @@ This section is generated from verified attempt evidence in `data/knowledge/stra
 
 ## Canon / Cornerstone OnDemand curriculum (2026-10-14)
 
+Reusable player documentation and observed family evidence are now described in
+`docs/PLAYER-KNOWLEDGE.md`. The hosted Learning page keeps this knowledge separate
+from course answers and verified execution strategies. Unknown players and
+no-progress runs enter the research queue; documentation alone never proves that
+a navigation strategy works.
+
 The Canon Development Hub uses `*.csod.com/phnx/driver.aspx?routename=Learning/Curriculum/CurriculumPlayer`, a different platform from the HP Saba integration. The captured Engineer Certification Programme curriculum shows module sections and a Launch Test control. A curriculum is not an assessment question page. Detection recognizes it and offers capture, with instructions to open the intended module then detect again. Do not apply Saba roster selectors or SCORM completion assumptions to this host. Actual assessment controls, attempt limits, and passing verification are not yet inspected or supported by a verified strategy.
 ## Guided course workflow
 

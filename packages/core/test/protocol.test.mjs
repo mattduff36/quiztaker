@@ -11,6 +11,7 @@ import {
   validateCapabilityInput,
   validateOpenUrl,
   verifyJob,
+  normalizeProcessExitCode,
 } from '../dist/index.js';
 
 const target = {
@@ -19,6 +20,16 @@ const target = {
   targetId: '22222222-2222-4222-8222-222222222222',
   fingerprint: 'abcdefabcdefabcdefabcdef',
 };
+
+test('Windows unsigned process statuses preserve their int32 bits without database overflow', () => {
+  assert.equal(normalizeProcessExitCode(3221226505),-1073740791);
+  assert.equal(normalizeProcessExitCode(-1073740791),-1073740791);
+  assert.equal(normalizeProcessExitCode(0xffffffff),-1);
+  assert.equal(normalizeProcessExitCode(0x80000000),-2147483648);
+  assert.equal(normalizeProcessExitCode(0),0);
+  assert.equal(normalizeProcessExitCode(null),null);
+  for(const value of [undefined,NaN,Infinity,0x100000000,-2147483649,1.5,'invalid']) assert.equal(normalizeProcessExitCode(value),1);
+});
 
 test('rejects quiz executors and unsafe open URLs', () => {
   assert.equal(PROTOCOL_VERSION, 2);

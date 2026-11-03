@@ -4,6 +4,14 @@ import { getCapability } from './capabilities.js';
 export const PROTOCOL_VERSION = 2;
 export const RESULT_SCHEMA_VERSION = 1;
 
+/** Preserve Windows' 32-bit status bits in PostgreSQL's signed int32 range. */
+export function normalizeProcessExitCode(value: unknown): number | null {
+  if (value === null) return null;
+  const code = typeof value === 'number' ? value : typeof value === 'string' && /^-?\d+$/.test(value) ? Number(value) : NaN;
+  if (!Number.isInteger(code) || code < -0x80000000 || code > 0xffffffff) return 1;
+  return code > 0x7fffffff ? code - 0x100000000 : code;
+}
+
 const QUIZ_EXECUTOR = /^pw-quiz-/;
 
 export interface TargetRef {

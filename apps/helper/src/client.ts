@@ -5,6 +5,7 @@ import type { HelperConfig } from './config.js';
 import { unprotectSecret } from './config.js';
 import type { HelperUpdateOffer } from './updater.js';
 import { HELPER_VERSION } from './version.js';
+import { takeOutboxBatch } from './outbox.js';
 
 interface PollResponse {
   job: JobEnvelope | null;
@@ -60,7 +61,7 @@ export class ControlPlaneClient {
         return;
       } catch (error) {
         lastError = error;
-        await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** attempt)));
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** attempt)));
       }
     }
     throw lastError;
@@ -136,6 +137,16 @@ export class ControlPlaneClient {
     }
     return response;
   }
+}
+
+/** Stop on the first failed replay; retain it and every unsent event. */
+export async function flushPendingEvents(send: (jobId: string, event: JobEventInput) => Promise<void>): Promise<void> {
+  const batch = takeOutboxBatch();
+  for (const [index, item] of batch.events.entries()) {
+    try { await send(item.jobId, item.event); }
+    catch { batch.commit(batch.events.slice(index)); return; }
+  }
+  batch.commit([]);
 }
 
 function readUpdateOffer(value: unknown): HelperUpdateOffer | null {

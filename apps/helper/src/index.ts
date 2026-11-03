@@ -2,7 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { PROTOCOL_VERSION, classifyOutcome } from '@quiztaker/core';
-import { ControlPlaneClient } from './client.js';
+import { ControlPlaneClient, flushPendingEvents } from './client.js';
 import {
   ensureHelperDirectories,
   getAutomationRoot,
@@ -17,7 +17,6 @@ import {
   resolveHelperLaunch,
 } from './pairing.js';
 import { isAllowedArtifact } from './artifacts.js';
-import { rememberOutbox, takeOutboxBatch } from './outbox.js';
 import { readLocalCaptures, readLocalHistory, readLocalReviews } from './sync.js';
 import { migrateLegacyLocalData } from './migrate.js';
 import { HELPER_VERSION } from './version.js';
@@ -87,7 +86,7 @@ async function main(): Promise<void> {
         hasAnnouncedOnline = true;
         await announceOnline(config.controlPlaneUrl);
       }
-      await flushOutbox(client);
+      await flushPendingEvents((jobId, event) => client.sendEvent(jobId, event));
       if (Date.now() >= nextSyncAt) {
         await client.syncHistory({
           history: readLocalHistory(),
@@ -123,10 +122,7 @@ async function main(): Promise<void> {
             envelope,
             config.helperId,
             client.deviceSecret,
-            (event) => client.sendEvent(jobId, event).catch((error: unknown) => {
-              rememberOutbox(jobId, event);
-              throw error;
-            }),
+            (event) => client.sendEvent(jobId, event),
             {
               proposeLearnerStep: (snapshot) => client.proposeLearnerStep(jobId, snapshot),
               isCancellationRequested: () => client.isCancellationRequested(jobId),
@@ -211,23 +207,6 @@ async function monitorCancellation(
 function stop(): void {
   isStopping = true;
   runningJob?.run.cancel();
-}
-
-async function flushOutbox(client: ControlPlaneClient): Promise<void> {
-  const batch = takeOutboxBatch();
-  if (!batch.events.length) {
-    batch.commit([]);
-    return;
-  }
-  const failed = [];
-  for (const item of batch.events) {
-    try {
-      await client.sendEvent(item.jobId, item.event);
-    } catch {
-      failed.push(item);
-    }
-  }
-  batch.commit(failed);
 }
 
 async function writeStrategySnapshot(snapshot: {

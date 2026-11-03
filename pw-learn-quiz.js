@@ -16,12 +16,15 @@
 // snapshots are retained before those actions, and only visible passes finish.
 // Hidden persistent slides never consume the visible-control scan budget;
 // transformed-away flipcard faces and hidden headings are not observations.
+// Read-only DOM family markers support source-linked player knowledge; they
+// never authorize actions, identify an exact version or provide quiz answers.
 //
 // Usage:
 //   node pw-learn-quiz.js <tabIdx> [--dry]
 
 const readline = require('node:readline');
 const { chromium } = require('playwright');
+const { observePlayerEvidence } = require('./lib/player-evidence');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 const MAX_STEPS = 80;
@@ -328,7 +331,7 @@ async function readSnapshot(page, mode = 'read') {
     snapshot: {
       title: (await page.title().catch(() => '')).slice(0,200),
       url: page.url().slice(0,500),
-      text: sections.map(section => section.slice(0, Math.floor(7800 / Math.max(1, sections.length)))).join('\n').slice(0, 8000),
+      text: `${await observePlayerEvidence(page)}\n${sections.map(section => section.slice(0, Math.floor(7600 / Math.max(1, sections.length)))).join('\n')}`.slice(0, 8000),
       buttons: buttons.listed,
       choices: [...radios.listed, ...checks.listed],
       tabs,

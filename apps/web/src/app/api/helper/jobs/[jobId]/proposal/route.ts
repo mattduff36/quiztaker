@@ -30,6 +30,7 @@ import {
 } from '@/lib/llm-provider';
 import { authenticateHelper } from '@/lib/security';
 import { enforceOperatorIdle, readOperatorActivity } from '@/lib/operator-activity';
+import { observePlayerKnowledge, withPlayerKnowledge } from '@/lib/player-knowledge';
 
 const control = z.object({
   id: z.string().max(8),
@@ -117,7 +118,12 @@ export async function POST(
   } catch {
     return NextResponse.json({ stop: true, error: 'Learner instructions could not be read' });
   }
-  const modelSnapshot = withStandingInstructions(composeLearnerSnapshot(snapshot, retained), instructions);
+  // Player documentation is bounded navigation context, never action authority.
+  // Knowledge-store or public-document failures must not stop the course run.
+  const playerKnowledge = await observePlayerKnowledge({ userId: helper.userId, attemptId: job.attempt_id, snapshot })
+    .catch(() => { console.warn('Player knowledge could not be updated'); return null; });
+  const composed = composeLearnerSnapshot(snapshot, retained);
+  const modelSnapshot = withStandingInstructions(playerKnowledge ? withPlayerKnowledge(composed, playerKnowledge) : composed, instructions);
   const stored = await loadSecretLlmConnection(helper.userId);
   const choice = chooseProposalLearner(stored);
   if (choice.kind === 'disabled') {

@@ -18,3 +18,13 @@ implementing it.
   or uncertain coverage as needing review rather than silently complete.
 - Review after the current navigation and retained-material workflow has been
   proven against the Canon course. Do not implement in the current release.
+
+## Helper update progress
+
+- Decision: accepted for future development by the owner, 3 November 2026.
+- Show distinct Downloading, Installing and Reconnected phases, including a
+  clear recoverable failure state if the helper does not return.
+- Temporarily prevent starting new course work while the helper is being
+  replaced; preserve the user's browser, goal and conversation.
+- This is deferred UI work. Investigating an actual failed restart remains part
+  of fixing the current workflow, without adding this progress interface now.

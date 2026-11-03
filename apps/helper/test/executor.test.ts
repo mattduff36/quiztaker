@@ -6,6 +6,58 @@ import test from 'node:test';
 import { deriveHelperSecret, signJob, type JobEventInput } from '@quiztaker/core';
 import { startJob } from '../src/executor.js';
 import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
+import { ControlPlaneClient, flushPendingEvents } from '../src/client.js';
+import { readOutbox } from '../src/outbox.js';
+
+test('Windows crash status and failed event reporting preserve terminal intent without stopping the helper', {skip:process.platform!=='win32'}, async () => {
+  const directory = mkdtempSync(join(tmpdir(),'vitriol-crash-report-'));
+  process.env.QUIZTAKER_HOME=join(directory,'home');
+  process.env.QUIZTAKER_AUTOMATION_ROOT=directory;
+  writeFileSync(join(directory,'pw-list-tabs.js'),'process.exit(3221226505);');
+  let failEvents=true;let attempts=0;let heartbeats=0;
+  const received: JobEventInput[]=[];
+  const server=createServer(async(req,res)=>{
+    let text='';for await(const chunk of req)text+=chunk;
+    res.setHeader('content-type','application/json');
+    if(req.url?.endsWith('/events')) {
+      attempts+=1;
+      if(failEvents){res.statusCode=500;res.end(JSON.stringify({error:'fixture database reporting failure'}));return;}
+      received.push(JSON.parse(text));
+    } else if(req.url?.endsWith('/heartbeat')) {heartbeats+=1;}
+    res.end(JSON.stringify({ok:true,update:null}));
+  });
+  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const address=server.address() as {port:number};
+  const helperId=randomUUID();const secret=deriveHelperSecret('integration-master-key-32-characters',helperId);
+  const client=new ControlPlaneClient({schemaVersion:1,helperId,controlPlaneUrl:`http://127.0.0.1:${address.port}`,encryptedDeviceSecret:`plain:${Buffer.from('fixture-only-secret').toString('base64')}`,deviceName:'Offline fixture',pairedAt:new Date().toISOString()});
+  const makeEnvelope=()=>signJob({jobId:randomUUID(),planId:randomUUID(),attemptId:randomUUID(),helperId,capabilityId:'list-tabs',capabilityVersion:1,script:'pw-list-tabs.js',args:[],fingerprint:null,nonce:randomUUID(),issuedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60_000).toISOString()},secret);
+  try {
+    const envelope=makeEnvelope();
+    const result=await startJob(envelope,helperId,secret,event=>client.sendEvent(envelope.payload.jobId,event)).completion;
+    assert.equal(result.code,-1073740791);
+    assert.match(result.output,/0xC0000409.*3221226505/);
+    assert.equal(attempts,4,'one bounded request sequence, remaining events defer to the existing outbox');
+    const pending=readOutbox();
+    const terminal=pending.find(item=>item.event.event==='failed')!;
+    assert.equal(terminal.event.data.code,-1073740791);
+    assert.equal(terminal.event.data.rawCode,3221226505);
+    assert.equal(terminal.jobId,envelope.payload.jobId);
+    await client.heartbeat({status:'online'});
+    assert.equal(heartbeats,1);
+    let replayCalls=0;
+    await flushPendingEvents(async()=>{replayCalls+=1;throw new Error('still unavailable');});
+    assert.equal(replayCalls,1);
+    assert.equal(readOutbox().length,pending.length);
+    failEvents=false;
+    await flushPendingEvents((jobId,event)=>client.sendEvent(jobId,event));
+    assert.equal(readOutbox().length,0);
+    assert.ok(received.some(event=>event.event==='failed'&&event.data.rawCode===3221226505));
+    writeFileSync(join(directory,'pw-list-tabs.js'),'console.log("subsequent job completed");');
+    const next=makeEnvelope();
+    assert.equal((await startJob(next,helperId,secret,event=>client.sendEvent(next.payload.jobId,event)).completion).code,0);
+  } finally {await new Promise<void>(resolve=>server.close(()=>resolve()));rmSync(directory,{recursive:true,force:true});}
+});
 
 test('signed learner intent reaches the executor and old jobs override inherited quiz mode', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'vitriol-learner-mode-'));

@@ -4,6 +4,8 @@ import { PageFrame, Panel } from '@/components/page-frame';
 import { ReviewList } from '@/components/review-list';
 import { requireAuthenticatedUser } from '@/lib/auth';
 import { queryRows } from '@/lib/db';
+import { readPlayerKnowledge, PLAYER_KNOWLEDGE_CAPABILITY } from '@/lib/player-knowledge';
+import { PlayerKnowledgePanel } from '@/components/player-knowledge-panel';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,7 +16,7 @@ export const metadata: Metadata = {
 
 export default async function LearningPage() {
   const user = await requireAuthenticatedUser();
-  const [strategies, reviews, captures] = await Promise.all([
+  const [strategies, reviews, captures, playerKnowledge] = await Promise.all([
     queryRows<{
       id: string;
       capability_id: string;
@@ -56,8 +58,9 @@ export default async function LearningPage() {
        limit 20`,
       [user.id],
     ),
+    readPlayerKnowledge(user.id),
   ]);
-  const values = strategies;
+  const values = strategies.filter(item => item.capability_id !== PLAYER_KNOWLEDGE_CAPABILITY);
   return (
     <AppShell email={user.email}>
       <PageFrame eyebrow="Measured evidence" title="Learning" description="Strategies promote only after three verified successes across two distinct targets. Regressions return to review.">
@@ -67,6 +70,7 @@ export default async function LearningPage() {
           <Metric label="Needs review" value={reviews.length} />
           <Metric label="Regressions" value={values.filter((item) => item.status === 'needs-review').length} />
         </div>
+        <div className="mt-6"><PlayerKnowledgePanel records={playerKnowledge} /></div>
         <div className="mt-6 grid gap-6 xl:grid-cols-2">
           <Panel title="Strategies">
             {values.length ? values.map((strategy) => (
