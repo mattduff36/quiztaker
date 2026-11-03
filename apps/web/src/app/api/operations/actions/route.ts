@@ -126,7 +126,8 @@ async function requestHelperUpdate(userId: string, helperId: string) {
   if (decision.mode === 'queue' && decision.latestVersion) {
     await queryOne(
       `update helpers
-       set update_requested_version = $3, update_requested_at = now(), update_error = null
+       set update_requested_version = $3, update_requested_at = now(), update_error = null,
+           update_phase = 'requested', update_phase_version = $3, update_phase_updated_at = now()
        where id = $1 and user_id = $2`,
       [helperId, userId, decision.latestVersion],
     );

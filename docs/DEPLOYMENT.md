@@ -1,5 +1,39 @@
 # Hosted deployment and helper operations
 
+## Course coverage and update progress
+
+The helper now stays visible by default. Its TTY header shows connection, current
+job, update phase and HTTP counters above a scrolling sanitized traffic log;
+non-TTY output uses plain text. `--minimize` opts into the previous minimize-after-
+connection behavior. Request/response text is bounded and redacts credentials,
+signatures, cookies and URL session queries; binary uploads/images show type and
+size only. Local append-only JSONL logs rotate across three files of up to 5 MB
+under `%LOCALAPPDATA%\QuizTaker Helper\logs`; do not share these logs publicly,
+because ordinary course content and guidance remain visible as requested.
+
+Apply `0011_helper_update_progress.sql` before deploying the progress interface.
+It adds nullable `helpers.update_phase`, `update_phase_version` and
+`update_phase_updated_at`; existing helpers remain compatible. A request records
+Requested. New helpers persist/report Preparing, Downloading and Installing over
+authenticated heartbeats; download-time heartbeats keep presence current. Only a
+healthy heartbeat at or above the requested version records Reconnected and
+clears that request. Failure details remain in `update_error`; informative stages
+do not use that error field. Older helpers cannot report intermediate phases and
+therefore remain Requested/Waiting. A long gap displays waiting, not invented
+completion or an automatic process kill. Normal/manual course starts pause during
+replacement; browser tabs and guided input stay intact, with session controls
+still available.
+
+Course coverage uses user-owned `strategies.evidence` records under the internal
+`course-coverage` capability; no new coverage table or migration is needed. A
+bounded topic inventory comes from observed course menus/headings, keyed by the
+canonical inner-course source address without query/hash. A visible source/topic
+excerpt marks Visited. Collected requires a matching excerpt actually present in
+that user's learner material store. The checklist explicitly reports incomplete
+or unknown inventory and never equates these observations with learned material
+or verified full coverage. Internal coverage records are excluded from strategy
+promotion metrics.
+
 ## Guided Operations and inactivity protection
 
 The course section guides connection, tab selection, the course goal and the

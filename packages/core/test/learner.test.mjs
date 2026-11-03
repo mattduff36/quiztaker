@@ -9,6 +9,8 @@ import {
   parseLearnerAction,
   learnerConstraints,
   storedLearnerPolicy,
+  learnerActions,
+  getCapability,
 } from '../dist/index.js';
 
 const snapshot = {
@@ -20,6 +22,31 @@ const snapshot = {
     { id: 'c1', name: 'Late point differentiation configuration (LPDC)' },
   ],
 };
+
+test('expanded browser tools require capability4 rather than an old capability3 plan', () => {
+  const capability=getCapability('quiz-learn');assert.equal(capability.version,4);
+  const plan={script:capability.script,capabilityId:capability.id,capabilityVersion:3,args:['0'],confirmed:true,consumed:false,expiresAt:new Date(Date.now()+60_000).toISOString()};
+  assert.equal(authorizeRun({script:capability.script,args:['0'],plan}).ok,false);
+  assert.equal(authorizeRun({script:capability.script,args:['0'],plan:{...plan,capabilityVersion:4}}).ok,true);
+});
+
+test('browser tool contract validates direction/find text and repairs checked-answer or unanswered Next decisions', () => {
+  assert.ok(learnerActions.has('find-text'));
+  assert.deepEqual(parseLearnerAction({action:'scroll'},snapshot),{ok:true,action:{action:'scroll'}});
+  assert.deepEqual(parseLearnerAction({action:'scroll',direction:'up'},snapshot),{ok:true,action:{action:'scroll',direction:'up'}});
+  assert.equal(parseLearnerAction({action:'scroll',direction:'left'},snapshot).ok,false);
+  assert.deepEqual(parseLearnerAction({action:'find-text',text:' paper grain '},snapshot),{ok:true,action:{action:'find-text',text:'paper grain'}});
+  for(const text of ['', 'x'.repeat(161)])assert.equal(parseLearnerAction({action:'find-text',text},snapshot).ok,false);
+  const page={text:'Question 1 of 20',buttons:[{id:'b1',name:'Next »',kind:'quiz-navigation'}],choices:[{id:'c1',name:'A',checked:false},{id:'c2',name:'B',checked:false}]};
+  const unanswered=parseLearnerAction({action:'click',targetId:'b1'},page,{mode:'quiz'});
+  assert.equal(unanswered.ok,false);assert.match(unanswered.error,/Select an answer/);
+  page.choices[0].checked=true;
+  const repeated=parseLearnerAction({action:'answer-select',targetId:'c1'},page,{mode:'quiz'});
+  assert.equal(repeated.ok,false);assert.match(repeated.error,/already selected.*Next/);
+  assert.equal(parseLearnerAction({action:'click',targetId:'b1'},page,{mode:'quiz'}).ok,true);
+  assert.equal(parseLearnerAction({action:'click',targetId:'b1'},{...page,choices:[{id:'c1',name:'Legacy unknown'}]},{mode:'quiz'}).ok,true);
+  assert.equal(parseLearnerAction({action:'click',targetId:'b1'},{...page,buttons:[{id:'b1',name:'Next',kind:'content'}],choices:[{id:'c1',name:'A',checked:false}]},{mode:'read'}).ok,true);
+});
 
 test('only stored quiz intent authorizes observed submission and semantic course controls', () => {
   const quiz = storedLearnerPolicy({mode:'quiz'}, learnerConstraints('quiz'));

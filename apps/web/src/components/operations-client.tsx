@@ -9,6 +9,7 @@ import { useOperatorActivity } from '@/components/use-operator-activity';
 import { BROWSER_REFRESH_MS, operationsPollDelay, SNAPSHOT_STALE_MS } from '@/lib/operations-policy';
 import type { OperatorActivity } from '@/lib/operator-activity';
 import { formatDisplayDate } from '@/lib/display-date';
+import { CourseCoverage } from '@/components/course-coverage';
 
 interface TabRow {
   targetId: string;
@@ -38,6 +39,7 @@ interface DetectionSnapshot {
 }
 
 interface ContextResponse {
+  courseCoverage?: import('@/lib/course-coverage').CourseCoverage[];
   operatorActivity?: OperatorActivity | null;
   helper: {
     id: string;
@@ -71,6 +73,11 @@ interface ContextResponse {
     mode: 'none' | 'download' | 'queue';
     requestedVersion: string | null;
     error: string | null;
+    phase?: string | null;
+    phaseVersion?: string | null;
+    phaseUpdatedAt?: string | null;
+    inProgress?: boolean;
+    progressLabel?: string | null;
   };
 }
 
@@ -116,7 +123,8 @@ export function OperationsClient(props: { helperId: string }) {
   const [job, setJob] = useState<ContextResponse['activeJob']>(null);
   const [operationBusy, setBusy] = useState(false);
   const [guidedBusy, setGuidedBusy] = useState(false);
-  const busy = operationBusy || guidedBusy || activity.paused || !activity.ready;
+  const replacingHelper = context?.helperUpdate?.inProgress === true;
+  const busy = operationBusy || guidedBusy || activity.paused || !activity.ready || replacingHelper;
   const [forceCloseOffer, setForceCloseOffer] = useState(false);
   const [updateNote, setUpdateNote] = useState('');
   const [updateBusy, setUpdateBusy] = useState(false);
@@ -163,14 +171,14 @@ export function OperationsClient(props: { helperId: string }) {
   },[load]);
 
   const refreshBrowser = useCallback(async(force=false)=>{
-    if (!activity.ready || activity.paused || !visible || operationBusy || guidedBusy || active || !context?.helper?.is_online) return;
+    if (!activity.ready || activity.paused || !visible || operationBusy || guidedBusy || active || replacingHelper || !context?.helper?.is_online) return;
     if(!force && Date.now()-browserProbe.current<BROWSER_REFRESH_MS)return;
     browserProbe.current=Date.now();
     try {
       const response=await fetch('/api/operations/activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({helperId:props.helperId,action:'refresh',force}),signal:AbortSignal.timeout(15_000)});
       await readJsonResponse(response,'Could not refresh browser tabs.');setRefreshError('');await load();
     } catch(cause){setRefreshError(errorMessage(cause,'Could not refresh browser tabs. Check the helper and retry.'));}
-  },[activity.ready,activity.paused,visible,operationBusy,guidedBusy,active,context?.helper?.is_online,props.helperId,load]);
+  },[activity.ready,activity.paused,visible,operationBusy,guidedBusy,active,replacingHelper,context?.helper?.is_online,props.helperId,load]);
 
   useEffect(()=>{
     void refreshBrowser();
@@ -365,7 +373,7 @@ export function OperationsClient(props: { helperId: string }) {
   }
 
   async function endSession(forceClose: boolean) {
-    if (operationBusy || !helperReady) return;
+    if (operationBusy || (!helperReady && !replacingHelper)) return;
     setBusy(true);
     setError('');
     try {
@@ -413,14 +421,14 @@ export function OperationsClient(props: { helperId: string }) {
       </div>
       <section className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-slate-200 bg-white p-5" aria-labelledby="connection-title">
         <div className="min-w-0 flex-1" aria-live="polite">
-          <h2 id="connection-title" className="text-lg font-semibold text-slate-950">{snapshotStale ? 'Checking the browser again' : connectionCopy[readiness].title}</h2>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{snapshotStale ? 'The previous tab snapshot is old. Vitriol is checking the current browser before allowing another run.' : connectionCopy[readiness].detail}</p>
+          <h2 id="connection-title" className="text-lg font-semibold text-slate-950">{replacingHelper ? 'Helper update in progress' : snapshotStale ? 'Checking the browser again' : connectionCopy[readiness].title}</h2>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{replacingHelper ? 'The helper may disconnect while the installer replaces it. Wait for it to reconnect; your browser and course stay open.' : snapshotStale ? 'The previous tab snapshot is old. Vitriol is checking the current browser before allowing another run.' : connectionCopy[readiness].detail}</p>
           <p className="mt-2 text-xs text-slate-500">{lastChecked ? 'Connection updates automatically' : 'Checking connection'}{activity.paused ? ' · session paused' : backgroundRefresh ? ' · updating course tabs' : active ? ' · following the current run' : ' · tabs update while the browser is free'}</p>
           {session?.updated_at?<p className="mt-1 text-xs text-slate-500">Browser last checked {formatDisplayDate(session.updated_at)}</p>:null}
           {contextError ? <p className="mt-2 text-sm text-rose-800">{contextError}</p> : null}
           {active&&!backgroundRefresh ? <p className="mt-2 text-sm font-medium text-slate-700">Wait for the current job to finish before sending another operation.</p> : null}
         </div>
-        {readiness === 'unavailable' ? <Action primary disabled={busy} onClick={() => void load()}>Retry connection</Action>
+        {replacingHelper ? null : readiness === 'unavailable' ? <Action primary disabled={busy} onClick={() => void load()}>Retry connection</Action>
           : readiness === 'helper-offline' ? <a href="/helper" className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800">Set up helper</a>
           : readiness === 'browser-offline' ? <Action primary disabled={!helperReady || busy || Boolean(active)} onClick={() => run('start-browser', { capabilityId: 'start-browser' }, false)}>Start browser</Action>
           : readiness === 'browser-unknown' ? <Action primary disabled={!helperReady || busy || Boolean(active)} onClick={() => run('start-browser', { capabilityId: 'start-browser' }, false)}>Start browser</Action>
@@ -429,12 +437,13 @@ export function OperationsClient(props: { helperId: string }) {
       {activity.paused ? <section role="status" className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-amber-300 bg-amber-50 p-5 text-amber-950"><div><h2 className="font-semibold">Your session is paused</h2><p className="mt-1 max-w-2xl text-sm leading-6">Vitriol stops queuing steps and asks the helper to stop any current run. Your browser tabs, goal and conversation are kept. Resume when you are ready, then inspect the current page again.</p></div><button type="button" onClick={()=>void activity.resume()} className="min-h-11 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800">Resume session</button></section>
         : activity.warning ? <section role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950"><p className="text-sm">Still there? Your session pauses in {Math.max(1,Math.ceil(activity.remainingMs/1000))} seconds without activity on this page.</p><button type="button" onClick={()=>void activity.resume()} className="min-h-11 rounded-md border border-amber-400 px-4 text-sm font-semibold">Keep working</button></section> : null}
       {activity.error ? <p role="alert" className="text-sm text-rose-800">{activity.error} <button type="button" onClick={()=>void activity.resume()} className="underline underline-offset-4">Retry session connection</button></p> : null}
-      {update?.needed ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-950"><span>A helper update is available{update.latestVersion ? `: v${update.latestVersion}` : ''}. Keep the helper running while it installs.</span><button type="button" disabled={busy || Boolean(active) || updateBusy} onClick={() => void requestHelperUpdate()} className="min-h-11 rounded-md bg-amber-900 px-4 py-2 font-semibold text-white disabled:opacity-40">{updateBusy ? 'Requesting update…' : 'Update helper'}</button>{updateNote ? <p className="w-full">{updateNote}</p> : null}</div> : null}
+      {update?.needed || update?.progressLabel ? <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-950"><div><p>{update.progressLabel || `A helper update is available${update.latestVersion ? `: v${update.latestVersion}` : ''}.`}{update.phaseVersion ? ` · v${update.phaseVersion}` : ''}</p>{update.phaseUpdatedAt ? <p className="mt-1 text-xs">Last reported {formatDisplayDate(update.phaseUpdatedAt)}{replacingHelper && Date.now()-Date.parse(update.phaseUpdatedAt)>10*60_000 ? ' · Still waiting for a new report. Check that the helper is running; no completion has been confirmed.' : ''}</p> : null}{replacingHelper ? <p className="mt-1 text-xs">Course starts are paused while the helper is replaced. Your browser, goal and conversation are kept.</p> : null}{update.error ? <p className="mt-2">{update.error}</p> : null}</div>{update.needed ? <button type="button" disabled={busy || Boolean(active) || updateBusy} onClick={() => void requestHelperUpdate()} className="min-h-11 rounded-md bg-amber-900 px-4 py-2 font-semibold text-white disabled:opacity-40">{updateBusy ? 'Requesting update…' : replacingHelper ? 'Updating helper…' : 'Update helper'}</button> : null}{updateNote && !update.progressLabel ? <p className="w-full">{updateNote}</p> : null}</div> : null}
       <div role="tabpanel" id={`${viewId}-normal-panel`} aria-labelledby={`${viewId}-normal-tab`} hidden={view !== 'normal'}>
       <GuidedRunner helperId={props.helperId} session={session} selectedTarget={selectedTarget} onSelect={setSelectedTarget}
-        ready={browserReady && protocolReady && !operationBusy && activity.ready && !activity.paused && !backgroundRefresh} active={Boolean(active)&&!backgroundRefresh} refreshing={backgroundRefresh} onBusy={setGuidedBusy} onRefresh={load}
+        ready={browserReady && protocolReady && !operationBusy && activity.ready && !activity.paused && !backgroundRefresh && !replacingHelper} active={Boolean(active)&&!backgroundRefresh} refreshing={backgroundRefresh} onBusy={setGuidedBusy} onRefresh={load}
         paused={activity.paused||!activity.ready} connection={readiness} onConnect={()=>void run('start-browser',{capabilityId:'start-browser'},false)} onRefreshTabs={()=>void refreshBrowser(true)} refreshError={refreshError} snapshotStale={snapshotStale}
         lastJob={job} lastOutput={output} outputJobId={outputJobId} />
+      <CourseCoverage courses={context?.courseCoverage || []} />
       </div>
       {error ? <div role="alert" className="flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><AlertTriangle className="size-4" />{error}</div> : null}
       <div role="tabpanel" id={`${viewId}-advanced-panel`} aria-labelledby={`${viewId}-advanced-tab`} hidden={view !== 'advanced'}>
@@ -452,7 +461,7 @@ export function OperationsClient(props: { helperId: string }) {
         </section>
       ) : null}
       {pollError ? <p role="alert" className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{pollError} Status refresh will retry automatically.</p> : null}
-      {context && (update?.protocolBlocked || update?.needed) ? (
+      {context && !replacingHelper && (update?.protocolBlocked || update?.needed) ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <div className="min-w-0 flex-1">
             <p>{updateBanner(update, protocolReady)}</p>
@@ -464,7 +473,7 @@ export function OperationsClient(props: { helperId: string }) {
             ) : null}
           </div>
           {update?.needed ? (
-            <button type="button" className="inline-flex shrink-0 items-center gap-2 rounded-md bg-amber-800 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={updateBusy} onClick={() => void requestHelperUpdate()}>
+            <button type="button" className="inline-flex shrink-0 items-center gap-2 rounded-md bg-amber-800 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={updateBusy || replacingHelper} onClick={() => void requestHelperUpdate()}>
               {updateBusy ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
               Update helper
             </button>
@@ -562,8 +571,8 @@ export function OperationsClient(props: { helperId: string }) {
 
       <div className="flex flex-wrap justify-end gap-3 border-t border-slate-200 pt-5">
         <button type="button" disabled={!helperReady || !protocolReady || operationBusy || Boolean(active)} onClick={() => run('close-browser', { capabilityId: 'close-browser' }, false)} className="rounded-md border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700 disabled:opacity-40">Close browser</button>
-        <button type="button" className="rounded-md border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700" disabled={!helperReady || operationBusy} onClick={() => endSession(false)}>End session</button>
-        {forceCloseOffer ? <button className="rounded-md bg-rose-700 px-4 py-2 text-sm font-semibold text-white" disabled={!helperReady || operationBusy} onClick={() => endSession(true)}>Force close</button> : null}
+        <button type="button" className="rounded-md border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700" disabled={(!helperReady && !replacingHelper) || operationBusy} onClick={() => endSession(false)}>End session</button>
+        {forceCloseOffer ? <button className="rounded-md bg-rose-700 px-4 py-2 text-sm font-semibold text-white" disabled={(!helperReady && !replacingHelper) || operationBusy} onClick={() => endSession(true)}>Force close</button> : null}
       </div>
 
 

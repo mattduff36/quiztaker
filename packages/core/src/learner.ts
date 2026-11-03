@@ -8,6 +8,7 @@ export const learnerActions = new Set([
   'click',
   'answer-select',
   'scroll',
+  'find-text',
   'wait',
   'capture',
   'verify',
@@ -48,7 +49,8 @@ export type LearnerAction =
   | { action: 'click'; targetId: string }
   | { action: 'answer-select'; targetId: string }
   | { action: 'select-tab'; targetId: string }
-  | { action: 'scroll' }
+  | { action: 'scroll'; direction?: 'up' | 'down' }
+  | { action: 'find-text'; text: string }
   | { action: 'wait'; ms: number }
   | { action: 'capture' }
   | { action: 'verify' }
@@ -117,6 +119,12 @@ export function parseLearnerAction(
     const target = (pool ?? []).find((item) => item.id === targetId);
     if (!target) return { ok: false, error: 'Learner target is not on the page' };
     if (name === 'click' && !learnerControlAllowed(target, policy)) return { ok: false, error: 'Learner cannot submit the quiz or use this control in the selected mode' };
+    if (name === 'answer-select' && target.checked === true) return {ok:false,error:'This answer is already selected. Inspect checked states and choose Next or a different answer.'};
+    const radios = (snapshot.choices ?? []).filter(choice => /^c\d+$/.test(choice.id));
+    if (name === 'click' && policy.mode === 'quiz' && /^next(?: page| slide)?[ »›→]*$/i.test(target.name.trim())
+      && /\bQuestion\s+\d+\s+of\s+\d+\b/i.test(snapshot.text ?? '') && radios.length > 0 && radios.every(choice => choice.checked === false)) {
+      return {ok:false,error:'Select an answer on this question before choosing Next.'};
+    }
     return { ok: true, action: { action: name, targetId } };
   }
   if (name === 'ask-user') return parseAskUser(record);
@@ -125,7 +133,16 @@ export function parseLearnerAction(
     return { ok: true, action: { action: 'wait', ms: Math.max(0, Math.min(1000, Math.floor(requested))) } };
   }
   if (name === 'verify') return { ok: true, action: { action: 'verify' } };
-  if (name === 'scroll' || name === 'capture') return { ok: true, action: { action: name } };
+  if (name === 'scroll') {
+    if (record.direction != null && record.direction !== 'up' && record.direction !== 'down') return {ok:false,error:'Scroll direction must be up or down'};
+    return {ok:true,action:{action:'scroll',...(record.direction ? {direction:record.direction as 'up' | 'down'} : {})}};
+  }
+  if (name === 'find-text') {
+    const text = typeof record.text === 'string' ? record.text.trim() : '';
+    if (!text || text.length > 160) return {ok:false,error:'Find text must contain 1 to 160 characters'};
+    return {ok:true,action:{action:'find-text',text}};
+  }
+  if (name === 'capture') return {ok:true,action:{action:'capture'}};
   return { ok: false, error: 'Learner action is not allowed' };
 }
 

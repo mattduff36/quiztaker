@@ -60,7 +60,7 @@ export default async function LearningPage() {
     ),
     readPlayerKnowledge(user.id),
   ]);
-  const values = strategies.filter(item => item.capability_id !== PLAYER_KNOWLEDGE_CAPABILITY);
+  const values = strategies.filter(item => item.capability_id !== PLAYER_KNOWLEDGE_CAPABILITY && item.capability_id !== 'course-coverage');
   return (
     <AppShell email={user.email}>
       <PageFrame eyebrow="Measured evidence" title="Learning" description="Strategies promote only after three verified successes across two distinct targets. Regressions return to review.">

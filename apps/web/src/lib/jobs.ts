@@ -42,6 +42,21 @@ interface JobRow extends Record<string, unknown> {
   input?: Record<string, unknown>;
 }
 
+/** Keep session/browser recovery available while the helper replaces its runtime. */
+export function assertHelperUpdateAllowsJob(capabilityId: string, helper: {
+  update_requested_version?: unknown;
+  update_error?: unknown;
+  update_phase?: unknown;
+}) {
+  if (capabilityId === 'close-browser') return;
+  const phase = typeof helper.update_phase === 'string' ? helper.update_phase : null;
+  if (phase === 'failed' || phase === 'reconnected') return;
+  const failedLegacyRequest = typeof helper.update_error === 'string' && helper.update_error.trim();
+  if (helper.update_requested_version && !failedLegacyRequest) {
+    throw new Error('The helper is updating. Wait for it to reconnect before starting another job.');
+  }
+}
+
 export async function createJob(userId: string, planId: string): Promise<{ jobId: string }> {
   let rawPlan = await queryOne<Record<string, unknown>>(
     'select * from plans where id = $1 and user_id = $2',
@@ -69,8 +84,10 @@ export async function createJob(userId: string, planId: string): Promise<{ jobId
   await withTransaction(async (sql) => {
     if (plan.capabilityId !== 'close-browser') await assertOperatorActive(userId,plan.helperId,sql);
     // Serialize all queue requests for this helper, including separate browser tabs.
-    const [helper] = await sql('select id from helpers where id = $1 and user_id = $2 and revoked_at is null for update', [plan.helperId, userId]);
+    const [helper] = await sql(`select id, update_requested_version, update_error, update_phase
+      from helpers where id = $1 and user_id = $2 and revoked_at is null for update`, [plan.helperId, userId]);
     if (!helper) throw new Error('Helper is unavailable');
+    assertHelperUpdateAllowsJob(plan.capabilityId, helper);
     const [active] = await sql("select id from jobs where helper_id = $1 and user_id = $2 and status in ('queued', 'dispatched', 'running') limit 1", [plan.helperId, userId]);
     if (active && plan.capabilityId !== 'close-browser') throw new Error('A job is already active. Wait for it to finish or cancel it first.');
     const capabilityInput = rawPlan!.input as Record<string, unknown> | undefined;

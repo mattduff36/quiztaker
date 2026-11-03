@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { describeHelperUpdate, isTrustedBrowserDownload } from '../src/lib/helper-update.js';
+import { describeHelperUpdate, isTrustedBrowserDownload, reportedUpdatePhase } from '../src/lib/helper-update.js';
 import type { HelperRelease } from '@quiztaker/core';
 
 const release = (version: string, extras: Partial<HelperRelease> = {}): HelperRelease => ({
@@ -12,6 +12,31 @@ const release = (version: string, extras: Partial<HelperRelease> = {}): HelperRe
   installerUrl: `https://github.com/mattduff36/quiztaker/releases/download/v${version}/VitriolHelper-${version}-win-x64.msi`,
   installerSha256: 'def456',
   ...extras,
+});
+
+test('update progress requires matching authenticated version reports and confirms reconnection from the running version', () => {
+  const input = { requestedVersion: '1.0.21', reportedVersion: '1.0.19' };
+  assert.equal(reportedUpdatePhase(input), null);
+  assert.equal(reportedUpdatePhase({ ...input, phase: 'downloading', phaseVersion: '1.0.20' }), null);
+  assert.deepEqual(reportedUpdatePhase({ ...input, phase: 'downloading', phaseVersion: '1.0.21' }), { phase: 'downloading', version: '1.0.21', reconnected: false });
+  assert.deepEqual(reportedUpdatePhase({ ...input, reportedVersion: '1.0.21' }), { phase: 'reconnected', version: '1.0.21', reconnected: true });
+  assert.equal(reportedUpdatePhase({ ...input, requestedVersion: null, phase: 'installing', phaseVersion: '1.0.21' }), null);
+});
+
+test('old helpers show requested/waiting and reported failures release the replacement block', () => {
+  const input = { currentVersion: '1.0.19', protocolVersion: 2, supportsSelfUpdate: true, requestedVersion: '1.0.21', release: release('1.0.21') };
+  const old = describeHelperUpdate(input);
+  assert.equal(old.phase, 'requested');
+  assert.equal(old.inProgress, true);
+  assert.match(old.progressLabel || '', /waiting/);
+  assert.doesNotMatch(old.progressLabel || '', /Downloading|Installing/);
+  assert.equal(describeHelperUpdate({ ...input, phase: 'downloading' }).progressLabel, 'Downloading and checking the update');
+  const failed = describeHelperUpdate({ ...input, phase: 'failed', error: 'Checksum mismatch' });
+  assert.equal(failed.inProgress, false);
+  assert.equal(failed.phase, 'failed');
+  const complete = describeHelperUpdate({ ...input, requestedVersion: null, currentVersion: '1.0.21', phase: 'reconnected', phaseVersion: '1.0.21' });
+  assert.equal(complete.inProgress, false);
+  assert.match(complete.progressLabel || '', /reconnected/);
 });
 
 test('protocol 1 helpers download the installer instead of installing it themselves', () => {

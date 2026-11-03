@@ -4,6 +4,7 @@ import { queryOne } from '@/lib/db';
 import { getServerEnv } from '@/lib/env';
 import { learnerSystemPrompt, learnerIsEnabled } from '@/lib/learner';
 import { chatParameters } from '@/lib/chat-parameters';
+import { completeOpenAiResponses, type ToolRun } from '@/lib/ai-responses';
 
 export const LLM_PROVIDERS = {
   openai: {
@@ -276,7 +277,9 @@ export async function completeHostedChat(input: {
   snapshot: LearnerSnapshot;
   policy?: import('@quiztaker/core').LearnerPolicy;
   fetchImpl?: typeof fetch;
-}): Promise<{ ok: true; action: LearnerAction } | { ok: false; error: string }> {
+  userId?: string;
+  testTool?: 'web_search' | 'code_interpreter';
+}): Promise<ToolRun> {
   let url: URL;
   try {
     url = new URL(hostedChatUrl(input.provider));
@@ -289,6 +292,8 @@ export async function completeHostedChat(input: {
   const model = normalizeModel(input.model);
   const apiKey = normalizeApiKey(input.apiKey);
   if (!model || !apiKey) return { ok: false, error: 'Provider request is invalid' };
+  if (input.provider === 'openai') return completeOpenAiResponses({ ...input, model, apiKey, readLimited, providerFailure });
+  if (input.snapshot.image) return { ok: false, error: 'Screenshot understanding is currently available with the personal OpenAI connection. This provider was not sent the image.' };
   const fetchImpl = input.fetchImpl ?? fetch;
   let feedback = '';
   // Leave time for the helper's 45-second step-response deadline.
@@ -416,7 +421,7 @@ async function providerFailure(response: Response): Promise<string> {
   if (status === 400 && ['max_tokens', 'max_completion_tokens', 'temperature', 'reasoning_effort', 'response_format'].includes(param)) {
     return `The selected model rejected the ${param} setting. Check model compatibility.`;
   }
-  if (status === 400) return 'Provider rejected the request. Check the model and its supported settings (HTTP 400).';
+  if (status === 400) return 'Provider rejected the request. Check model, vision and tool support (HTTP 400); no tool research is claimed.';
   return `Provider request failed (HTTP ${status}). Please try again.`;
 }
 

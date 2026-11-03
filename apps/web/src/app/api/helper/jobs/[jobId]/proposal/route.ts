@@ -31,11 +31,15 @@ import {
 import { authenticateHelper } from '@/lib/security';
 import { enforceOperatorIdle, readOperatorActivity } from '@/lib/operator-activity';
 import { observePlayerKnowledge, withPlayerKnowledge } from '@/lib/player-knowledge';
+import { recordCourseCoverage } from '@/lib/course-coverage';
+
+export const maxDuration = 120;
 
 const control = z.object({
   id: z.string().max(8),
   name: z.string().max(160),
   kind: z.enum(['content', 'navigation', 'quiz-navigation', 'submission']).optional(),
+  checked: z.boolean().optional(),
 });
 
 const schema = z.object({
@@ -46,6 +50,8 @@ const schema = z.object({
     choices: z.array(control).max(40).optional(),
     buttons: z.array(control).max(40).optional(),
     tabs: z.array(z.object({id:z.string().max(8),name:z.string().max(160),url:z.string().max(500)})).max(20).optional(),
+    image: z.string().max(900_000).regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/).optional(),
+    outlines: z.array(z.object({url:z.string().max(500),title:z.string().max(200),topics:z.array(z.string().max(160)).max(60)})).max(4).optional(),
   }),
 });
 
@@ -94,8 +100,11 @@ export async function POST(
     choices: incoming.choices,
     buttons: incoming.buttons,
     tabs: incoming.tabs,
+    image: incoming.image,
+    outlines: incoming.outlines,
     ...(storedGuidance.guidance ? { guidance: storedGuidance.guidance } : {}),
   };
+  await recordCourseCoverage({userId:helper.userId,attemptId:job.attempt_id,snapshot}).catch(() => { console.warn('Course coverage could not be updated'); });
   const conversation = storedConversation(job.input?.conversationId, job.browser_session_id);
   if (!conversation.ok) return NextResponse.json({ stop: true, error: conversation.error });
   let retained: Awaited<ReturnType<typeof readLearnerSessionForModel>> = null;
@@ -168,7 +177,12 @@ export async function POST(
       apiKey,
       snapshot: modelSnapshot,
       policy,
+      userId: helper.userId,
     });
+    if (personal.evidence?.length) {
+      await queryOne(`insert into attempt_events (user_id, attempt_id, event, data) values ($1,$2,'learner-tools',$3::jsonb) returning id`,
+        [helper.userId,job.attempt_id,JSON.stringify({jobId,evidence:personal.evidence})]);
+    }
     return finishLearnerDecision(conversation, helper.userId, helper.helperId, incoming, personal.ok
       ? { action: personal.action }
       : { stop: true, error: personal.error });

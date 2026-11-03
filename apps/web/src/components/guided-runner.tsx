@@ -92,6 +92,7 @@ export function GuidedRunner(props: {
     || (restoredQuestion && restoredPauseTab && (savedTarget?.targetId === props.selectedTarget || restoredPauseTab.targetId === props.selectedTarget)
       ? { ...restoredQuestion, model: true, targetId: restoredPauseTab.targetId, sessionId: session?.id } : null);
   const openModuleRequest = question?.question === 'Open the intended question or module, then resume.';
+  const detachedQuestion = !question ? currentQuestion || restoredQuestion : null;
   const replies = openModuleRequest ? ['Done, resume now'] : [...new Set(question?.options || [])].filter((option) => option.trim());
   const showReplyField = Boolean(question?.model && (customReply || replies.length === 0));
   const pauseTab = uniqueQuestionTab(question?.url, session?.tabs || []);
@@ -360,6 +361,7 @@ export function GuidedRunner(props: {
       <p role="status" aria-live="polite" className="mt-2 text-sm font-medium leading-6 text-slate-800">{currentProgress}</p>
     </section> : null}
     {replyError ? <p role="alert" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">{replyError}</p> : null}
+    {detachedQuestion ? <section className="space-y-2 border-t border-slate-200 pt-5" aria-live="polite"><h3 className="font-semibold text-slate-950">Earlier assistant question</h3><p className="text-slate-800">{detachedQuestion.question}</p><p className="text-sm text-slate-600">The page has changed. Inspect the intended course page to continue with fresh information.</p></section> : null}
     {question ? <section className="space-y-4 border-t border-slate-200 pt-5" aria-labelledby="assistant-request-title">
       <h3 id="assistant-request-title" className="text-base font-semibold text-slate-950">{openModuleRequest || !question.model ? 'Action needed in the helper browser' : 'Your AI assistant has a question'}</h3>
       <p className="text-sm leading-6 text-slate-600">{openModuleRequest ? 'Vitriol could not find quiz controls on this page. Learning is paused until you are ready.' : 'Learning is paused. Choose a reply below or write your own to continue.'}</p>

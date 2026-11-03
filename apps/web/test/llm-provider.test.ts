@@ -32,6 +32,7 @@ const deployment = {
 function successResponse(content: string, status = 200): Response {
   return new Response(JSON.stringify({
     choices: [{ message: { content } }],
+    output: [{type:'message',content:[{type:'output_text',text:content}]}],
   }), { status });
 }
 
@@ -67,14 +68,15 @@ test('hosted calls use only the fixed https destinations', async () => {
       fetchImpl: async (url, init) => {
         seen.push(String(url));
         assert.equal(init?.redirect, 'error');
-        assert.equal(JSON.parse(String(init?.body)).max_tokens, LLM_MAX_TOKENS);
+        const body = JSON.parse(String(init?.body));
+        assert.equal(provider === 'openai' ? body.max_output_tokens : body.max_tokens, provider === 'openai' ? 4096 : LLM_MAX_TOKENS);
         return successResponse('{"action":"wait","ms":0}');
       },
     });
     assert.equal(result.ok, true);
   }
   assert.deepEqual(seen, [
-    LLM_PROVIDERS.openai.chatUrl,
+    'https://api.openai.com/v1/responses',
     LLM_PROVIDERS.gemini.chatUrl,
     LLM_PROVIDERS.openrouter.chatUrl,
   ]);
@@ -141,9 +143,9 @@ test('personal hosted provider retries one invalid action then returns a format 
     const result = await completeHostedChat({provider:'openai',model:'gpt-4o-mini',apiKey,policy:{mode:'quiz'},snapshot:CONNECTION_TEST_SNAPSHOT,fetchImpl:async(_url,init)=>{
       calls += 1;
       const request = JSON.parse(String(init?.body));
-      assert.match(request.messages[0].content,/Selected intent: Take the quiz/);
-      assert.deepEqual(JSON.parse(request.messages.at(-1).content),CONNECTION_TEST_SNAPSHOT);
-      if(calls===2) assert.match(request.messages[1].content,/previous response was invalid/);
+      assert.match(request.instructions,/Selected intent: Take the quiz/);
+      assert.equal(JSON.parse(request.input[0].content[0].text).title,CONNECTION_TEST_SNAPSHOT.title);
+      if(calls===2) assert.match(request.input.at(-1).content,/previous response was invalid/);
       return successResponse(recover&&calls===2?'{"action":"wait","ms":0}':'not-json');
     }});
     assert.equal(calls,2);
@@ -159,8 +161,9 @@ test('GPT-6.1 Sol connection test uses supported reasoning parameters', async ()
       const body = JSON.parse(String(init?.body));
       assert.equal(body.temperature, undefined);
       assert.equal(body.max_tokens, undefined);
-      assert.equal(body.reasoning_effort, 'low');
-      assert.ok(body.max_completion_tokens >= 4096);
+      assert.deepEqual(body.reasoning, {effort:'low'});
+      assert.ok(body.max_output_tokens >= 4096);
+      assert.equal(body.store,false);
       return successResponse('{"action":"wait","ms":0}');
     },
   });

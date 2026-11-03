@@ -11,6 +11,7 @@ import {
   createApplyScript,
   createHelperRestartLines,
   helperUpdateError,
+  helperUpdateProgress,
   installHelperUpdate,
   isAllowedReleaseHost,
   quoteCommandArg,
@@ -21,6 +22,26 @@ import {
 const version = '1.0.4';
 const zipUrl = `https://github.com/mattduff36/quiztaker/releases/download/v${version}/vitriol-helper-windows-x64-v${version}.zip`;
 const msiUrl = `https://github.com/mattduff36/quiztaker/releases/download/v${version}/VitriolHelper-${version}-win-x64.msi`;
+
+test('persists and reports genuine phases before downloading and spawning the installer', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'vitriol-phases-'));
+  const localAppData = mkdtempSync(join(tmpdir(), 'vitriol-phase-local-'));
+  mkdirSync(join(localAppData, 'Programs', 'Vitriol Helper'), { recursive: true });
+  writeFileSync(join(localAppData, 'Programs', 'Vitriol Helper', 'Start Vitriol Helper.cmd'), '@echo off\r\n');
+  const bytes = Buffer.from('test verified installer');
+  const phases: string[] = [];
+  assert.equal(await installHelperUpdate({
+    offer: offer({ installerUrl: msiUrl, installerSha256: createHash('sha256').update(bytes).digest('hex') }),
+    helperHome: home, localAppData, controlPlaneUrl: 'https://www.vitriol.co.uk', platform: 'win32',
+    onPhase: async (phase, target) => { phases.push(phase); assert.equal((await helperUpdateProgress(home))?.updatePhase, phase); assert.equal(target, version); },
+    fetchImpl: async () => { assert.equal(phases.at(-1), 'downloading'); return new Response(bytes); },
+    spawnImpl: () => assert.equal(phases.at(-1), 'installing'),
+  }), 'restarting');
+  assert.deepEqual(phases, ['preparing', 'downloading', 'installing']);
+  assert.deepEqual(await helperUpdateProgress(home), { updatePhase: 'installing', updateVersion: version });
+  await reconcileHelperUpdate(home, version);
+  assert.equal(await helperUpdateProgress(home), undefined);
+});
 
 test('accepts only the Vitriol release assets for one version', () => {
   assert.equal(classifyReleaseAsset(zipUrl, version), 'zip');

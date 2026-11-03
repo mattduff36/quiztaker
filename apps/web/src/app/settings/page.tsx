@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import { AppShell } from '@/components/app-shell';
 import { LearnerPreferences } from '@/components/learner-preferences';
 import { LlmSettings } from '@/components/llm-settings';
+import { AiToolsPanel } from '@/components/ai-tools-panel';
+import { aiToolCatalog } from '@/lib/ai-tool-catalog';
 import { PageFrame, Panel } from '@/components/page-frame';
 import { RevokeHelperButton } from '@/components/revoke-helper-button';
 import { requireAuthenticatedUser } from '@/lib/auth';
@@ -68,6 +70,7 @@ export default async function SettingsPage() {
             providers={LLM_PROVIDER_OPTIONS}
           />
         </div>
+        <div className="mt-6"><AiToolsPanel tools={aiToolCatalog(llm,helpers.length > 0)} /></div>
       </PageFrame>
     </AppShell>
   );

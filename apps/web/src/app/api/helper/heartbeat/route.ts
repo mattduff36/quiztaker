@@ -6,6 +6,7 @@ import { queryOne, queryRows } from '@/lib/db';
 import { retryDatabaseConflict } from '@/lib/database-retry';
 import { recoverHelperJobs } from '@/lib/job-recovery';
 import { enforceOperatorIdle } from '@/lib/operator-activity';
+import { reportedUpdatePhase } from '@/lib/helper-update';
 
 const schema = z.object({
   status: z.enum(['online', 'busy']),
@@ -19,7 +20,9 @@ const schema = z.object({
   })).max(50).optional(),
   supportsSelfUpdate: z.boolean().optional(),
   updateError: z.string().max(500).optional(),
-});
+  updatePhase: z.enum(['preparing', 'downloading', 'installing', 'failed']).optional(),
+  updateVersion: z.string().regex(/^\d+\.\d+\.\d+$/).optional(),
+}).refine(value => !value.updatePhase || Boolean(value.updateVersion));
 
 const RELEASE_VERSION = /^\d+\.\d+\.\d+$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
@@ -69,15 +72,20 @@ async function handleHeartbeat(request: Request) {
 
   let requestedVersion = row?.update_requested_version ?? null;
   let requestedAt = row?.update_requested_at ?? null;
-  if (requestedVersion && compareVersions(reportedVersion, requestedVersion) >= 0) {
+  const phase = reportedUpdatePhase({ requestedVersion, reportedVersion, phase: parsed.data.updatePhase, phaseVersion: parsed.data.updateVersion });
+  if (phase?.reconnected) {
     await queryRows(
       `update helpers
-       set update_requested_version = null, update_requested_at = null, update_error = null
-       where id = $1`,
-      [helper.helperId],
+       set update_requested_version = null, update_requested_at = null, update_error = null,
+           update_phase = 'reconnected', update_phase_version = $2, update_phase_updated_at = now()
+       where id = $1 and update_requested_version = $2`,
+      [helper.helperId, phase.version],
     );
     requestedVersion = null;
     requestedAt = null;
+  } else if (phase) {
+    await queryRows(`update helpers set update_phase = $3, update_phase_version = $2, update_phase_updated_at = now()
+      where id = $1 and update_requested_version = $2`, [helper.helperId, phase.version, phase.phase]);
   }
 
   const update = row?.supports_self_update
@@ -109,7 +117,8 @@ async function pendingUpdate(
   if (release.version !== requestedVersion) {
     const bumped = await queryOne<{ update_requested_at: unknown }>(
       `update helpers
-       set update_requested_version = $2, update_requested_at = now(), update_error = null
+       set update_requested_version = $2, update_requested_at = now(), update_error = null,
+           update_phase = 'requested', update_phase_version = $2, update_phase_updated_at = now()
        where id = $1
        returning update_requested_at`,
       [helperId, release.version],

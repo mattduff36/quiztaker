@@ -6,6 +6,8 @@ import { unprotectSecret } from './config.js';
 import type { HelperUpdateOffer } from './updater.js';
 import { HELPER_VERSION } from './version.js';
 import { takeOutboxBatch } from './outbox.js';
+import type { HelperTerminal } from './terminal-ui.js';
+import { sanitizeLogText } from './terminal-ui.js';
 
 interface PollResponse {
   job: JobEnvelope | null;
@@ -14,7 +16,7 @@ interface PollResponse {
 export class ControlPlaneClient {
   private readonly secret: string;
 
-  constructor(private readonly config: HelperConfig) {
+  constructor(private readonly config: HelperConfig, private readonly terminal?: HelperTerminal) {
     this.secret = unprotectSecret(config.encryptedDeviceSecret);
   }
 
@@ -26,6 +28,8 @@ export class ControlPlaneClient {
     status: 'online' | 'busy';
     activeJobId?: string;
     updateError?: string;
+    updatePhase?: import('./updater.js').HelperUpdatePhase;
+    updateVersion?: string;
   }): Promise<{ update: HelperUpdateOffer | null }> {
     const response = await this.request('/api/helper/heartbeat', {
       method: 'POST',
@@ -33,6 +37,7 @@ export class ControlPlaneClient {
         status: state.status,
         ...(state.activeJobId ? { activeJobId: state.activeJobId } : {}),
         ...(state.updateError ? { updateError: state.updateError } : {}),
+        ...(state.updatePhase && state.updateVersion ? { updatePhase: state.updatePhase, updateVersion: state.updateVersion } : {}),
         version: HELPER_VERSION,
         cdpPort: Number(process.env.PLAYWRIGHT_CDP_PORT || 9222),
         protocolVersion: PROTOCOL_VERSION,
@@ -122,6 +127,10 @@ export class ControlPlaneClient {
   }
 
   private async request(path: string, init: RequestInit, timeoutMs = 30_000): Promise<Response> {
+    const started = Date.now();
+    const method = init.method || 'GET';
+    try { this.terminal?.sent(method, path, init.body); } catch { /* Observability must not stop a request. */ }
+    try {
     const response = await fetch(`${this.config.controlPlaneUrl}${path}`, {
       ...init,
       headers: {
@@ -131,11 +140,17 @@ export class ControlPlaneClient {
       },
       signal: AbortSignal.timeout(timeoutMs),
     });
+    await this.terminal?.received(method, path, response, Date.now() - started).catch(() => undefined);
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
-      throw new Error(`Control plane returned ${response.status}: ${detail}`);
+      throw new Error(`Control plane returned ${response.status}: ${sanitizeLogText(detail.slice(0, 4000))}`);
     }
     return response;
+    } catch (error) {
+      this.terminal?.setStatus({ connection: 'reconnecting', lastHttp: `${method} ${path.split(/[?#]/)[0]} failed (${Date.now() - started}ms)` });
+      this.terminal?.log('HTTP ERROR', error);
+      throw error;
+    }
   }
 }
 

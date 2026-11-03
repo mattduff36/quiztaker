@@ -18,6 +18,9 @@
 // transformed-away flipcard faces and hidden headings are not observations.
 // Read-only DOM family markers support source-linked player knowledge; they
 // never authorize actions, identify an exact version or provide quiz answers.
+// Checked choices prevent duplicate selection. Scroll/find operate on observed
+// content; capture supplies one privacy-checked viewport JPEG to the next step.
+// Course outlines include unvisited headings as inventory, never read coverage.
 //
 // Usage:
 //   node pw-learn-quiz.js <tabIdx> [--dry]
@@ -40,7 +43,9 @@ const REPEATED_VIEW_LIMIT = 3;
 const REPEATED_VIEW_OPTION = 'Done, resume now';
 const PASS_EVIDENCE = /\byou (?:have )?passed\b|\b(?:result|status):\s*passed\b|\byour score:\s*100\s*%/i;
 const FAIL_EVIDENCE = /\bnot (?:\w+\s+){0,3}pass(?:ed)?\b|\b(did not pass|haven't passed|failed|unsuccessful|not successful)\b/i;
-const ALLOWED = new Set(['click', 'answer-select', 'select-tab', 'scroll', 'wait', 'capture', 'verify', 'ask-user']);
+const ALLOWED = new Set(['click', 'answer-select', 'select-tab', 'scroll', 'find-text', 'wait', 'capture', 'verify', 'ask-user']);
+const observationState = new WeakMap();
+const MAX_CAPTURE_DATA_URL = 900_000;
 const LEARNER_NEEDS_INPUT = 'needs-user-input';
 const NO_CONTROLS_QUESTION = 'Open the intended question or module, then resume.';
 
@@ -112,7 +117,7 @@ function screenElementControlName(id, className) {
 function learnerActionSignature(action) {
   const name = typeof action?.action === 'string' ? action.action : '';
   const targetId = typeof action?.targetId === 'string' ? action.targetId : '';
-  return `${name}\u0000${targetId}`;
+  return `${name}\u0000${targetId}\u0000${name === 'scroll' ? action?.direction || 'down' : ''}\u0000${action?.text || ''}`;
 }
 
 function noteRepeatedLearnerAction(state, action, snapshot) {
@@ -136,6 +141,8 @@ function noteRepeatedLearnerAction(state, action, snapshot) {
 function localActionAllowed(action, snapshot, mode = 'read') {
   if (!action || typeof action !== 'object') return false;
   if (!ALLOWED.has(action.action)) return false;
+  if (action.action === 'scroll') return action.direction == null || action.direction === 'up' || action.direction === 'down';
+  if (action.action === 'find-text') return typeof action.text === 'string' && action.text.trim().length > 0 && action.text.length <= 160;
   if (action.action === 'ask-user') return learnerQuestionPayload(snapshot, action) != null;
   if (action.action === 'select-tab') {
     const target = snapshot.tabs?.find(tab => tab.id === action.targetId);
@@ -146,8 +153,12 @@ function localActionAllowed(action, snapshot, mode = 'read') {
     const pool = action.action === 'click' ? snapshot.buttons : snapshot.choices;
     const target = (pool || []).find((item) => item.id === action.targetId);
     if (!target) return false;
+    if (action.action === 'answer-select' && target.checked === true) return false;
     if (action.action === 'click') {
       if (UNSAFE_LABEL.test(target.name)) return false;
+      const radios = (snapshot.choices || []).filter(choice => /^c\d+$/.test(choice.id));
+      if (mode === 'quiz' && /^next(?: page| slide)?[ »›→]*$/i.test(target.name.trim()) && /\bQuestion\s+\d+\s+of\s+\d+\b/i.test(snapshot.text || '')
+        && radios.length > 0 && radios.every(choice => choice.checked === false)) return false;
       if (ASSESSMENT_START_LABEL.test(target.name)) return mode === 'quiz';
       if (SUBMIT_LABEL.test(target.name) || target.kind === 'submission' || target.kind === 'quiz-navigation') return mode === 'quiz';
       if (!['content', 'navigation'].includes(target.kind) && !clickLabelAllowed(target.name)) return false;
@@ -228,6 +239,81 @@ async function visibleFrames(page) {
   return frames;
 }
 
+function canonicalCourseSource(value) {
+  try {const url=new URL(value);return /^https?:$/.test(url.protocol)?`${url.origin}${url.pathname}`.slice(0,500):'';} catch {return '';}
+}
+
+async function readCourseOutlines(page) {
+  const outlines=[];
+  for(const frame of await visibleFrames(page)) {
+    const url=canonicalCourseSource(frame.url());
+    if(!url || /(?:evallaunch|evaluation|assessment|quiz|exam)(?:[/.]|$)|\b(?:login\d*|signin|oauth|sso)\b/i.test(url)) continue;
+    const inventory=await frame.evaluate(()=>{
+      if(document.querySelector('input[type=password]') || /\bQuestion\s+\d+\s+of\s+\d+\b/i.test((document.body?.innerText||'').slice(0,2000))) return null;
+      const topics=[];
+      for(const el of document.querySelectorAll('h1,h2,h3,[role=heading]')) {
+        const text=(el.textContent||'').replace(/\s+/g,' ').trim().slice(0,160);
+        if(!text || /^Question\s+\d+/i.test(text) || topics.includes(text)) continue;
+        topics.push(text);if(topics.length>=60)break;
+      }
+      return topics.length?{title:(document.title||topics[0]).replace(/\s+/g,' ').trim().slice(0,160),topics}:null;
+    }).catch(()=>null);
+    if(inventory && !outlines.some(item=>item.url===url)) outlines.push({url,...inventory});
+  }
+  // Concrete content documents take precedence over generic LMS wrappers.
+  outlines.sort((a,b)=>Number(/LMS\d*\.aspx|content-player/i.test(a.url))-Number(/LMS\d*\.aspx|content-player/i.test(b.url)));
+  return outlines.slice(0,4);
+}
+
+function observationFor(page) {
+  let state=observationState.get(page);
+  if(!state){state={};observationState.set(page,state);}
+  return state;
+}
+
+async function captureCurrentView(page) {
+  const state=observationFor(page);delete state.image;delete state.imageUrl;
+  const frames=page.frames();
+  if(frames.length>32){state.feedback='Screenshot skipped: this page has too many frames to check safely.';return;}
+  for(const frame of frames) {
+    if(frame.parentFrame()&&!await frame.frameElement().then(el=>el.isVisible()).catch(()=>false))continue;
+    const address=canonicalCourseSource(frame.url());
+    if(/\b(?:login\d*|signin|sign-in|oauth|sso|authenticate)\b/i.test(address)) {state.feedback='Screenshot skipped on an authentication page.';return;}
+    const sensitive=frame.locator('input[type=password],input[autocomplete*=password],input[autocomplete=one-time-code],input[name*=password i],input[id*=password i],input[name*=token i],input[id*=token i],input[name*=secret i],input[id*=secret i],input[name*=api_key i],input[id*=api_key i],input[name*=apikey i],input[id*=apikey i],textarea[name*=secret i],form[action*=login i],form[action*=signin i]');
+    const count=await sensitive.count().catch(()=>-1);
+    if(count<0 || count>50){state.feedback='Screenshot skipped: sensitive fields could not be checked safely.';return;}
+    for(let index=0;index<count;index++) if(await sensitive.nth(index).isVisible().catch(()=>true)) {state.feedback='Screenshot skipped because an authentication or sensitive field is visible.';return;}
+  }
+  try {
+    const jpeg=await page.screenshot({type:'jpeg',quality:55,fullPage:false,scale:'css',timeout:10_000});
+    const image=`data:image/jpeg;base64,${jpeg.toString('base64')}`;
+    if(image.length>MAX_CAPTURE_DATA_URL){state.feedback='Screenshot skipped because the viewport image exceeds the size limit.';return;}
+    state.image=image;state.imageUrl=page.url();state.feedback='A viewport screenshot was captured by the last capture action.';
+  } catch {state.feedback='The viewport screenshot was unavailable. Continue using the observed text and controls.';}
+}
+
+async function findRenderedText(page,text) {
+  for(const frame of await visibleFrames(page)) {
+    const matches=frame.getByText(text,{exact:false}).filter({visible:true});
+    const count=Math.min(await matches.count().catch(()=>0),50);
+    for(let index=0;index<count;index++) {
+      const target=matches.nth(index);
+      const facing=await target.evaluate(el=>{
+        for(let face=el;face;face=face.parentElement) {
+          if(getComputedStyle(face).backfaceVisibility!=='hidden')continue;
+          let matrix=new DOMMatrix();
+          for(let node=face;node;node=node.parentElement){const transform=getComputedStyle(node).transform;if(transform!=='none')matrix=new DOMMatrix(transform).multiply(matrix);}
+          if(matrix.m33 < -0.001)return false;
+        }
+        return true;
+      }).catch(()=>false);
+      if(!facing)continue;
+      try {await target.scrollIntoViewIfNeeded({timeout:3000});return true;} catch { /* Try another observed text match. */ }
+    }
+  }
+  return false;
+}
+
 async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
   const listed = [];
   const handles = new Map();
@@ -305,7 +391,20 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
     }
     const id = `${prefix}${listed.length + 1}`;
     handles.set(id, handle);
-    listed.push({ id, name, ...(kind ? { kind } : {}) });
+    const checked = await handle.evaluate(el => {
+      const state = node => {
+        if (node.matches('input[type=radio],input[type=checkbox]')) return node.checked;
+        if (node.matches('[role=radio],[role=checkbox]')) {
+          const value = node.getAttribute('aria-checked');
+          if (value === 'true' || value === 'false') return value === 'true';
+        }
+      };
+      const own = state(el);
+      if (typeof own === 'boolean') return own;
+      const nested = el.querySelectorAll('input[type=radio],input[type=checkbox],[role=radio],[role=checkbox]');
+      return nested.length === 1 ? state(nested[0]) : undefined;
+    }).catch(() => undefined);
+    listed.push({ id, name, ...(kind ? { kind } : {}), ...(typeof checked === 'boolean' ? {checked} : {}) });
     if (listed.length >= 40) return { listed, handles };
   }
   return { listed, handles };
@@ -372,21 +471,28 @@ async function readSnapshot(page, mode = 'read') {
       handles.set(id,{page:candidate,url:candidate.url(),name});
     }
   } catch { /* A tab closing during observation is not a selectable target. */ }
+  const outlines=await readCourseOutlines(page);
+  const state=observationFor(page);
+  const image=state.imageUrl===page.url()?state.image:undefined;
+  delete state.image;delete state.imageUrl;
   return {
     snapshot: {
       title: (await page.title().catch(() => '')).slice(0,200),
       url: page.url().slice(0,500),
-      text: `${await observePlayerEvidence(page)}\n${sections.map(section => section.slice(0, Math.floor(7600 / Math.max(1, sections.length)))).join('\n')}`.slice(0, 8000),
+      text: `${await observePlayerEvidence(page)}\n${state.feedback?`Tool feedback: ${state.feedback}\n`:''}${sections.map(section => section.slice(0, Math.floor(7400 / Math.max(1, sections.length)))).join('\n')}`.slice(0, 8000),
       buttons: buttons.listed,
       choices: [...radios.listed, ...checks.listed],
       tabs,
+      ...(image?{image}:{}),
+      ...(outlines.length?{outlines}:{}),
     },
     handles,
   };
 }
 
 function sameLearnerView(before, after) {
-  return JSON.stringify(before) === JSON.stringify(after);
+  const withoutImage=value=>{if(!value||typeof value!=='object')return value;const {image,...rest}=value;return rest;};
+  return JSON.stringify(withoutImage(before)) === JSON.stringify(withoutImage(after));
 }
 
 function createActionReader() {
@@ -430,7 +536,7 @@ function createActionReader() {
       const index = pending.indexOf(entry);
       if (index >= 0) pending.splice(index, 1);
       reject(new Error('Learner input timed out'));
-    }, 45_000);
+    }, 120_000);
     pending.push(entry);
     process.stdout.write(`LEARNER_SNAPSHOT ${JSON.stringify(snapshot)}\n`);
     }),
@@ -440,6 +546,7 @@ function createActionReader() {
 
 async function applyAction(page, action, snapshot, handles, mode = 'read', retryState = { count: 0 }) {
   if (!localActionAllowed(action, snapshot, mode)) throw new Error('Learner action is not allowed');
+  const state=observationFor(page);delete state.feedback;
   if (action.action === 'select-tab') {
     const target = handles.get(action.targetId);
     const observed = snapshot.tabs?.find(tab => tab.id === action.targetId);
@@ -450,8 +557,13 @@ async function applyAction(page, action, snapshot, handles, mode = 'read', retry
   }
   if (action.action === 'scroll') {
     // Scroll each visible course frame as well as the outer wrapper.
-    for (const frame of await visibleFrames(page)) await frame.evaluate(() => window.scrollBy(0, Math.max(300, innerHeight * 0.8))).catch(() => undefined);
+    for (const frame of await visibleFrames(page)) await frame.evaluate(direction => window.scrollBy(0, (direction==='up'?-1:1)*Math.max(300, innerHeight * 0.8)),action.direction||'down').catch(() => undefined);
     await page.waitForTimeout(100);
+    return;
+  }
+  if(action.action==='find-text') {
+    const found=await findRenderedText(page,action.text.trim());
+    state.feedback=found?`Found rendered text: ${action.text.trim()}`:`Text was not found in rendered course content: ${action.text.trim()}`;
     return;
   }
   if (action.action === 'wait') {
@@ -460,7 +572,7 @@ async function applyAction(page, action, snapshot, handles, mode = 'read', retry
     return;
   }
   if (action.action === 'capture') {
-    console.log(`Captured quiz view: ${snapshot.title || snapshot.url}`);
+    await captureCurrentView(page);
     return;
   }
   const handle = handles.get(action.targetId);
@@ -610,6 +722,7 @@ module.exports = {
   applyAction,
   visibleFrames,
   sameLearnerView,
+  readCourseOutlines,
   clickLabelAllowed,
   screenElementControlName,
   noteRepeatedLearnerAction,

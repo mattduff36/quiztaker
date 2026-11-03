@@ -1,13 +1,12 @@
 # Future development
 
-Items in this document are accepted ideas for a later development pass, not
-instructions to implement them during the current course test. Propose each new
-idea to the owner and record their decision before adding it to the backlog or
-implementing it.
+The owner approved implementing the two items below in the combined development
+pass on 3 November 2026. They are no longer deferred. Propose each newly discovered
+idea to the owner and record their decision before implementing it.
 
 ## Course coverage checklist
 
-- Decision: accepted for future development by the owner, 3 November 2026.
+- Decision: approved for the current combined release, 3 November 2026.
 - Purpose: make incomplete reading easy to spot before starting an assessment.
 - Show the topics Vitriol has visited, the sections from which it has collected
   material, and material or interactions that remain unchecked.
@@ -16,15 +15,17 @@ implementing it.
   panel has been read or all information learned.
 - Preserve progress across related pages and sessions. Treat changed material
   or uncertain coverage as needing review rather than silently complete.
-- Review after the current navigation and retained-material workflow has been
-  proven against the Canon course. Do not implement in the current release.
+- Implementation: source-linked topic inventory, visited and retained-material
+  metadata shown in Normal mode. Collected means some retained material, never
+  proof that all interactions were read or the topic was learned.
 
 ## Helper update progress
 
-- Decision: accepted for future development by the owner, 3 November 2026.
+- Decision: approved for the current combined release, 3 November 2026.
 - Show distinct Downloading, Installing and Reconnected phases, including a
   clear recoverable failure state if the helper does not return.
 - Temporarily prevent starting new course work while the helper is being
   replaced; preserve the user's browser, goal and conversation.
-- This is deferred UI work. Investigating an actual failed restart remains part
-  of fixing the current workflow, without adding this progress interface now.
+- Implementation: persisted authenticated phase reports with requested/preparing,
+  downloading, installing, reconnected and failed states. Older helpers show
+  requested/waiting rather than fabricated phases. Migration 0011 is required.

@@ -69,7 +69,7 @@ test('signed learner intent reaches the executor and old jobs override inherited
   const secret = deriveHelperSecret('integration-master-key-32-characters', helperId);
   try {
     for (const mode of [undefined, 'read', 'quiz']) {
-      const envelope = signJob({jobId:randomUUID(),planId:randomUUID(),attemptId:randomUUID(),helperId,capabilityId:'quiz-learn',capabilityVersion:3,script:'pw-learn-quiz.js',args:[],fingerprint:null,nonce:randomUUID(),issuedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60_000).toISOString(),input:mode?{mode}:{}},secret);
+      const envelope = signJob({jobId:randomUUID(),planId:randomUUID(),attemptId:randomUUID(),helperId,capabilityId:'quiz-learn',capabilityVersion:4,script:'pw-learn-quiz.js',args:[],fingerprint:null,nonce:randomUUID(),issuedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60_000).toISOString(),input:mode?{mode}:{}},secret);
       const result = await startJob(envelope,helperId,secret,async()=>{}, {proposeLearnerStep:async()=>({stop:true})}).completion;
       assert.equal(result.code,0);
       assert.match(result.output,new RegExp(`MODE=${mode || 'read'}`));

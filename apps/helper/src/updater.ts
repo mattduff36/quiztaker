@@ -26,10 +26,11 @@ export interface HelperUpdateOffer {
   installerSha256: string | null;
 }
 
+export type HelperUpdatePhase = 'preparing' | 'downloading' | 'installing' | 'failed';
 interface UpdateStatus {
   version: string;
   requestedAt: string;
-  phase: 'installing' | 'failed';
+  phase: HelperUpdatePhase;
   startedAt?: string;
   detail?: string;
 }
@@ -203,6 +204,11 @@ export async function helperUpdateError(helperHome: string): Promise<string | un
   return undefined;
 }
 
+export async function helperUpdateProgress(helperHome: string): Promise<{ updatePhase: HelperUpdatePhase; updateVersion: string } | undefined> {
+  const status = await readStatus(join(helperHome, 'updates'));
+  return status ? { updatePhase: status.phase, updateVersion: status.version } : undefined;
+}
+
 export async function installHelperUpdate(options: {
   offer: HelperUpdateOffer;
   helperHome: string;
@@ -211,12 +217,21 @@ export async function installHelperUpdate(options: {
   localAppData?: string;
   fetchImpl?: typeof fetch;
   spawnImpl?: (commandLine: string) => void;
+  onPhase?: (phase: HelperUpdatePhase, version: string) => Promise<void>;
 }): Promise<'restarting' | 'skipped' | 'failed'> {
   const directory = join(options.helperHome, 'updates');
   await mkdir(directory, { recursive: true });
   const status = await readStatus(directory);
   if (!shouldAttemptUpdate(status, options.offer)) return 'skipped';
+  const phase = async (value: HelperUpdatePhase, detail?: string) => {
+    await writeStatus(directory, { version: options.offer.version, requestedAt: options.offer.requestedAt,
+      phase: value, startedAt: new Date().toISOString(), ...(detail ? { detail } : {}) });
+    // Reporting is best-effort; it cannot weaken checksum verification or turn
+    // a temporary control-plane outage into a failed trusted installation.
+    await options.onPhase?.(value, options.offer.version).catch(() => undefined);
+  };
   try {
+    await phase('preparing');
     if ((options.platform ?? process.platform) !== 'win32') throw new Error('Helper updates install only on Windows.');
     const controlPlaneUrl = assertControlPlaneUrl(options.controlPlaneUrl);
     const launcher = installedLauncherPath(options.localAppData);
@@ -226,6 +241,7 @@ export async function installHelperUpdate(options: {
     const asset = chooseReleaseAsset(options.offer);
     if (!asset) throw new Error('The published helper release is not a trusted installer.');
     const msiPath = join(directory, 'helper-update.msi');
+    await phase('downloading');
     if (asset.kind === 'msi') {
       await downloadVerifiedAsset({
         url: asset.url,
@@ -253,21 +269,11 @@ export async function installHelperUpdate(options: {
       quoteCommandArg(launcher),
       quoteCommandArg(controlPlaneUrl),
     ].join(' ');
-    await writeStatus(directory, {
-      version: options.offer.version,
-      requestedAt: options.offer.requestedAt,
-      phase: 'installing',
-      startedAt: new Date().toISOString(),
-    });
+    await phase('installing');
     (options.spawnImpl ?? defaultSpawn)(`"${command}"`);
     return 'restarting';
   } catch (error) {
-    await writeStatus(directory, {
-      version: options.offer.version,
-      requestedAt: options.offer.requestedAt,
-      phase: 'failed',
-      detail: updateErrorMessage(error),
-    }).catch(() => undefined);
+    await phase('failed', updateErrorMessage(error)).catch(() => undefined);
     return 'failed';
   }
 }
@@ -383,13 +389,13 @@ function defaultSpawn(commandLine: string): void {
 async function readStatus(directory: string): Promise<UpdateStatus | null> {
   try {
     const value = JSON.parse(await readFile(join(directory, 'status.json'), 'utf8')) as Partial<UpdateStatus>;
-    if ((value.phase !== 'installing' && value.phase !== 'failed') || typeof value.version !== 'string' || typeof value.requestedAt !== 'string') {
+    if (!['preparing', 'downloading', 'installing', 'failed'].includes(String(value.phase)) || typeof value.version !== 'string' || typeof value.requestedAt !== 'string') {
       return null;
     }
     return {
       version: value.version,
       requestedAt: value.requestedAt,
-      phase: value.phase,
+      phase: value.phase as HelperUpdatePhase,
       startedAt: typeof value.startedAt === 'string' ? value.startedAt : undefined,
       detail: typeof value.detail === 'string' ? value.detail : undefined,
     };

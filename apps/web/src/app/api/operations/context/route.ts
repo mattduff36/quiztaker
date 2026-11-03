@@ -8,6 +8,7 @@ import { parityEnabled } from '@/lib/parity';
 import { getLatestHelperRelease } from '@/lib/releases';
 import { readRelevantJob, recoverHelperJobs } from '@/lib/job-recovery';
 import { enforceOperatorIdle, readOperatorActivity } from '@/lib/operator-activity';
+import { readCourseCoverage } from '@/lib/course-coverage';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,7 +31,8 @@ export async function GET() {
   const helper = await queryOne<Record<string, unknown>>(
     `select presence.id, presence.device_name, presence.version, presence.is_online, presence.status,
             helpers.protocol_version, helpers.supported_capabilities,
-            helpers.supports_self_update, helpers.update_requested_version, helpers.update_error
+            helpers.supports_self_update, helpers.update_requested_version, helpers.update_error,
+            helpers.update_phase, helpers.update_phase_version, helpers.update_phase_updated_at
      from helper_presence presence
      join helpers on helpers.id = presence.id
      where presence.user_id = $1 and presence.revoked_at is null
@@ -82,12 +84,16 @@ export async function GET() {
     supportsSelfUpdate: helper.supports_self_update === true,
     requestedVersion: typeof helper.update_requested_version === 'string' ? helper.update_requested_version : null,
     error: typeof helper.update_error === 'string' ? helper.update_error : null,
+    phase: typeof helper.update_phase === 'string' ? helper.update_phase : null,
+    phaseVersion: typeof helper.update_phase_version === 'string' ? helper.update_phase_version : null,
+    phaseUpdatedAt: helper.update_phase_updated_at as string | Date | null,
     release,
   });
   return NextResponse.json({
     helper,
     operatorActivity: activity,
     helperUpdate,
+    courseCoverage: await readCourseCoverage(user.id).catch(() => []),
     session,
     recentUrls,
     activeJob,

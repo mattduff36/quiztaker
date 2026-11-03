@@ -11,6 +11,11 @@ export interface HelperUpdateState {
   mode: 'none' | 'download' | 'queue';
   requestedVersion: string | null;
   error: string | null;
+  phase: string | null;
+  phaseVersion: string | null;
+  phaseUpdatedAt: string | null;
+  inProgress: boolean;
+  progressLabel: string | null;
 }
 
 const RELEASE_VERSION = /^\d+\.\d+\.\d+$/;
@@ -22,6 +27,9 @@ export function describeHelperUpdate(input: {
   supportsSelfUpdate: boolean;
   requestedVersion?: string | null;
   error?: string | null;
+  phase?: string | null;
+  phaseVersion?: string | null;
+  phaseUpdatedAt?: string | Date | null;
   release: HelperRelease | null;
 }): HelperUpdateState {
   const protocolBlocked = input.protocolVersion < 2;
@@ -39,6 +47,9 @@ export function describeHelperUpdate(input: {
   let mode: HelperUpdateState['mode'] = 'none';
   if (needed && canSelfUpdate) mode = 'queue';
   else if (needed) mode = 'download';
+  const phase = input.error ? 'failed' : input.phase ?? (input.requestedVersion ? 'requested' : null);
+  const inProgress = Boolean(input.requestedVersion && phase !== 'failed' && phase !== 'reconnected');
+  const labels: Record<string, string> = { requested: 'Update requested · waiting for the helper', preparing: 'Preparing the update', downloading: 'Downloading and checking the update', installing: 'Installing · waiting for the helper to reconnect', reconnected: 'Updated helper reconnected', failed: 'The helper update needs attention' };
   return {
     needed,
     protocolBlocked,
@@ -49,7 +60,19 @@ export function describeHelperUpdate(input: {
     mode,
     requestedVersion: input.requestedVersion ?? null,
     error: input.error ?? null,
+    phase,
+    phaseVersion: input.phaseVersion ?? input.requestedVersion ?? null,
+    phaseUpdatedAt: input.phaseUpdatedAt instanceof Date ? input.phaseUpdatedAt.toISOString() : input.phaseUpdatedAt ?? null,
+    inProgress,
+    progressLabel: phase ? labels[phase] || 'Waiting for update progress' : null,
   };
+}
+
+export function reportedUpdatePhase(input: { requestedVersion: string | null; reportedVersion: string; phase?: string; phaseVersion?: string }): { phase: string; version: string; reconnected: boolean } | null {
+  if (!input.requestedVersion) return null;
+  if (compareVersions(input.reportedVersion, input.requestedVersion) >= 0) return { phase: 'reconnected', version: input.requestedVersion, reconnected: true };
+  if (input.phaseVersion !== input.requestedVersion || !['preparing', 'downloading', 'installing', 'failed'].includes(input.phase || '')) return null;
+  return { phase: input.phase!, version: input.requestedVersion, reconnected: false };
 }
 
 export function isTrustedBrowserDownload(url: string, repository: string): boolean {

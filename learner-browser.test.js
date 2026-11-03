@@ -204,6 +204,101 @@ test('real answer, form Next, final Submit and visible pass; old mode cannot sub
   } finally { await browser.close(); }
 });
 
+test('radio snapshots expose checked state so a model selects once then advances', async () => {
+  const browser=await chromium.launch({channel:'chrome',headless:true});
+  try {
+    const page=await browser.newPage();
+    await page.setContent(`<h1>Question 1 of 20</h1><label><input type="radio" name="answer" value="a">Answer A</label><label><input type="radio" name="answer" value="b">Answer B</label><button type="button" onclick="document.querySelector('h1').textContent='Question 2 of 20'">Next »</button><button type="button"><input type="checkbox" checked>Choice wrapper</button>`);
+    let view=await readSnapshot(page,'quiz');
+    assert.deepEqual(view.snapshot.choices.filter(choice=>choice.id.startsWith('c')).map(choice=>choice.checked),[false,false]);
+    assert.equal(view.snapshot.buttons.find(control=>control.name==='Choice wrapper').checked,true);
+    const next=view.snapshot.buttons.find(control=>control.name==='Next »');
+    assert.equal(localActionAllowed({action:'click',targetId:next.id},view.snapshot,'quiz'),false);
+    const model=snapshot=>snapshot.choices.some(choice=>choice.id.startsWith('c')&&choice.checked===true)?{action:'click',targetId:snapshot.buttons.find(control=>control.name==='Next »').id}:{action:'answer-select',targetId:snapshot.choices.find(choice=>choice.name==='Answer A').id};
+    await applyAction(page,model(view.snapshot),view.snapshot,view.handles,'quiz');
+    view=await readSnapshot(page,'quiz');
+    assert.equal(view.snapshot.choices.find(choice=>choice.name==='Answer A').checked,true);
+    assert.equal(localActionAllowed({action:'answer-select',targetId:view.snapshot.choices.find(choice=>choice.name==='Answer A').id},view.snapshot,'quiz'),false);
+    await applyAction(page,model(view.snapshot),view.snapshot,view.handles,'quiz');
+    assert.match((await readSnapshot(page,'quiz')).snapshot.text,/Question 2 of 20/);
+    await page.setContent('<h1>Question 2 of 20</h1><div role="radio">Unknown custom choice state</div><button type="button">Next</button>');
+    const legacy=await readSnapshot(page,'quiz');
+    assert.equal(legacy.snapshot.choices[0].checked,undefined);
+    assert.equal(localActionAllowed({action:'click',targetId:legacy.snapshot.buttons[0].id},legacy.snapshot,'quiz'),true);
+  } finally {await browser.close();}
+});
+
+test('scroll directions and literal find-text inspect rendered course text with nonfatal missing feedback', async () => {
+  const browser=await chromium.launch({channel:'chrome',headless:true});
+  try {
+    const page=await browser.newPage({viewport:{width:900,height:400}});
+    await page.setContent(`<h1>Opening overview</h1>${'<p style="height:100px">Earlier lesson material</p>'.repeat(18)}<p>Needle caliper material</p>${'<p style="height:100px">Later lesson material</p>'.repeat(8)}`);
+    const initial=await readSnapshot(page);
+    await applyAction(page,{action:'find-text',text:'Needle caliper material'},initial.snapshot,initial.handles);
+    const found=await readSnapshot(page);
+    assert.match(found.snapshot.text,/Found rendered text: Needle caliper material/);
+    const position=await page.evaluate(()=>scrollY);
+    assert.ok(position>0);
+    await applyAction(page,{action:'scroll',direction:'up'},found.snapshot,found.handles);
+    const up=await page.evaluate(()=>scrollY);assert.ok(up<position);
+    await applyAction(page,{action:'scroll'},found.snapshot,found.handles);
+    assert.ok(await page.evaluate(()=>scrollY)>up);
+    await applyAction(page,{action:'find-text',text:'javascript:window.unwantedExecution=true'},found.snapshot,found.handles);
+    assert.match((await readSnapshot(page)).snapshot.text,/Text was not found in rendered course content/);
+    assert.equal(await page.evaluate(()=>window.unwantedExecution),undefined);
+  } finally {await browser.close();}
+});
+
+test('capture attaches one bounded viewport JPEG and skips visible password/auth forms', async () => {
+  const browser=await chromium.launch({channel:'chrome',headless:true});
+  try {
+    const page=await browser.newPage({viewport:{width:800,height:400}});
+    await page.setContent('<h1>Course diagram</h1><p>A visible diagram explanation.</p>');
+    let captures=0;const screenshot=page.screenshot.bind(page);page.screenshot=async options=>{captures++;return screenshot(options);};
+    const initial=await readSnapshot(page);assert.equal(captures,0);
+    await applyAction(page,{action:'capture'},initial.snapshot,initial.handles);
+    const first=await readSnapshot(page);const second=await readSnapshot(page);
+    assert.match(first.snapshot.image,/^data:image\/jpeg;base64,/);
+    assert.ok(first.snapshot.image.length<=900_000);
+    assert.equal(Buffer.from(first.snapshot.image.split(',')[1],'base64').readUInt16BE(0),0xffd8);
+    assert.equal(second.snapshot.image,undefined);assert.equal(captures,1);
+    assert.equal(sameLearnerView(first.snapshot,second.snapshot),true);
+    assert.equal(sameLearnerView(first.snapshot,{...second.snapshot,text:'Changed course content'}),false);
+    await page.setContent('<form><label>Password<input type="password" value="fixture-only-secret"></label></form>');
+    await applyAction(page,{action:'capture'},second.snapshot,second.handles);
+    const blocked=await readSnapshot(page);assert.equal(blocked.snapshot.image,undefined);assert.equal(captures,1);
+    assert.match(blocked.snapshot.text,/Screenshot skipped/);
+    assert.doesNotMatch(blocked.snapshot.text,/fixture-only-secret/);
+    await page.setContent('<h1>Course view</h1>');
+    page.screenshot=async()=>Buffer.alloc(900_000);
+    await applyAction(page,{action:'capture'},blocked.snapshot,blocked.handles);
+    const oversized=await readSnapshot(page);assert.equal(oversized.snapshot.image,undefined);assert.match(oversized.snapshot.text,/exceeds the size limit/);
+  } finally {await browser.close();}
+});
+
+test('outlines inventory hidden topics with concrete canonical source URLs without claiming they were read', async () => {
+  const browser=await chromium.launch({channel:'chrome',headless:true});
+  try {
+    const context=await browser.newContext();
+    await context.route('https://course.invalid/**',route=>{
+      const url=new URL(route.request().url());
+      const body=url.pathname.endsWith('LMS3.aspx')?`<h1>Generic course wrapper</h1>${['2427/PaperTheory.html','2428/Chapter.html','2429/Chapter.html','2430/Chapter.html','2431/Chapter.html'].map(path=>`<iframe src="/content/${path}?session=fixture#topic" style="width:500px;height:200px"></iframe>`).join('')}`
+        :url.pathname.includes('EvalLaunch')?'<h1>Question 1 of 20</h1><h2>Assessment only</h2>'
+        :`<title>Actual course source</title><h1>Paper theory</h1><section hidden><h2>Hidden unvisited topic</h2></section>${Array.from({length:70},(_,i)=>`<h2>Topic ${i}</h2>`).join('')}`;
+      return route.fulfill({contentType:'text/html',body});
+    });
+    const page=await context.newPage();await page.goto('https://course.invalid/lms/scorm/clientLMS/LMS3.aspx?token=fixture');
+    const view=await readSnapshot(page);
+    assert.equal(view.snapshot.outlines.length,4);
+    assert.equal(view.snapshot.outlines[0].url,'https://course.invalid/content/2427/PaperTheory.html');
+    assert.ok(view.snapshot.outlines.every(outline=>!/[?#]/.test(outline.url)&&outline.topics.length<=60&&outline.topics.every(topic=>topic.length<=160)));
+    assert.ok(view.snapshot.outlines[0].topics.includes('Hidden unvisited topic'));
+    assert.doesNotMatch(view.snapshot.text,/Hidden unvisited topic/);
+    await page.goto('https://course.invalid/EvalLaunch.aspx');
+    const assessment=await readSnapshot(page,'quiz');assert.equal(assessment.snapshot.outlines,undefined);assert.match(assessment.snapshot.text,/Question 1 of 20/);
+  } finally {await browser.close();}
+});
+
 test('observed WebForms assessment anchors navigate only in quiz mode and reject arbitrary script or external actions', async () => {
   const browser = await chromium.launch({channel:'chrome',headless:true});
   try {

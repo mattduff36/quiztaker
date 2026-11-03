@@ -23,7 +23,7 @@ await build({entryPoints:[join(temp,'entry.tsx')],outfile:join(temp,'app.js'),bu
 const css=await postcss([tailwind({base:join(root,'apps/web')})]).process(await readFile(join(root,'apps/web/src/app/globals.css'),'utf8'),{from:join(root,'apps/web/src/app/globals.css')});
 await writeFile(join(temp,'app.css'),css.css+'\n:root{--font-plex:Arial}body{margin:0}.fixture{max-width:1120px;margin:auto;padding:24px}');
 
-function state(){return{last:null,paused:false,online:true,connected:true,refreshes:0,checks:0,statusFailed:false,statusStale:false,activityPosts:0,pausePosts:0,jobs:new Map(),latest:null,serial:0,selected:null,blocked:false,retries:0};}
+function state(){return{last:null,paused:false,online:true,connected:true,updatePhase:null,refreshes:0,checks:0,statusFailed:false,statusStale:false,activityPosts:0,pausePosts:0,jobs:new Map(),latest:null,serial:0,selected:null,blocked:false,retries:0};}
 function reply(path,method,body,now,s){
   const activity=()=>({paused:s.paused,lastActivityAt:new Date(s.last??now).toISOString(),expiresAt:new Date((s.last??now)+1_800_000).toISOString(),serverNow:new Date(now).toISOString()});
   const session=()=>({id:'22222222-2222-4222-8222-222222222222',revision:1,cdp_connected:s.connected,updated_at:new Date(now).toISOString(),tabs:[{targetId:'course',index:0,title:'Xerox course overview',url:'https://example.invalid/course',fingerprint:'course-fingerprint'},{targetId:'blank',index:1,title:'Blank tab',url:'about:blank',fingerprint:'blank'}],roster:null,detection:null});
@@ -37,7 +37,7 @@ function reply(path,method,body,now,s){
     if(body.action==='refresh'){if(s.paused)return{status:'skipped'};s.refreshes++;return{status:'queued',jobId:makeJob('list-tabs')};}
     return activity();
   }
-  if(path==='/api/operations/context'){s.checks++;return{helper:{id:helperId,device_name:'Test PC',version:'1.0.15',protocol_version:2,is_online:s.online},operatorActivity:s.last===null?null:activity(),session:session(),activeJob:s.latest,captures:[],recentUrls:[],learnerEnabled:true};}
+  if(path==='/api/operations/context'){s.checks++;return{helper:{id:helperId,device_name:'Test PC',version:'1.0.19',protocol_version:2,is_online:s.online},helperUpdate:s.updatePhase?{needed:true,protocolBlocked:false,currentVersion:'1.0.19',latestVersion:'1.0.21',installerAvailable:true,canSelfUpdate:true,mode:'queue',requestedVersion:'1.0.21',error:null,phase:s.updatePhase,phaseVersion:'1.0.21',phaseUpdatedAt:new Date(now).toISOString(),inProgress:true,progressLabel:'Installing · waiting for the helper to reconnect'}:undefined,courseCoverage:[{source:'https://example.invalid/course',title:'Paper theory',inventoryObserved:true,updatedAt:new Date(now).toISOString(),topics:[{title:'Paper production',visitedAt:new Date(now).toISOString(),collectedAt:new Date(now).toISOString(),collectedChars:400},{title:'Paper types',visitedAt:new Date(now).toISOString(),collectedChars:0},{title:'Paper storage',collectedChars:0}]}],operatorActivity:s.last===null?null:activity(),session:session(),activeJob:s.latest,captures:[],recentUrls:[],learnerEnabled:true};}
   if(path==='/api/services/status')return s.statusFailed?{__status:503,error:'Service status is unavailable.'}:{checkedAt:new Date(now).toISOString(),helper:{online:s.online,lastSeenAt:new Date(now).toISOString()},browser:{connected:s.connected,checkedAt:new Date(now-(s.statusStale?120_000:0)).toISOString()},assistant:{ready:true,source:'personal',provider:'openai'}};
   if(path.startsWith('/api/operations/learning'))return{id:null,objective:null,history:[]};
   if(path==='/api/operations/actions'){
@@ -95,6 +95,25 @@ try{
     await mode.selectOption('read');
     await expect(goal).toHaveValue(/Read all relevant material/);
     await goal.fill('Read this course overview and ask me before continuing.');
+    await page.getByText('Course material checklist',{exact:true}).click();
+    await expect(page.getByText('3 topics found · 1 with collected material · 1 unchecked',{exact:true})).toBeVisible();
+    await expect(page.getByText('Visited · not collected',{exact:true})).toBeVisible();
+    await page.screenshot({path:join(artifacts,viewport.width>500?'desktop-coverage.png':'mobile-coverage.png'),fullPage:true});
+    fixture.updatePhase='installing';fixture.online=false;
+    await page.clock.fastForward(16_000);
+    await expect(page.getByText('Installing · waiting for the helper to reconnect · v1.0.21',{exact:true})).toBeVisible();
+    await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeDisabled();
+    const probesDuringUpdate=fixture.refreshes;
+    await page.clock.fastForward(46_000);
+    expect(fixture.refreshes).toBe(probesDuringUpdate);
+    await advanced.click();
+    await expect(page.getByRole('button',{name:'End session',exact:true})).toBeEnabled();
+    await page.screenshot({path:join(artifacts,viewport.width>500?'desktop-update.png':'mobile-update.png'),fullPage:true});
+    await normal.click();
+    await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
+    fixture.updatePhase=null;fixture.online=true;
+    await page.clock.fastForward(16_000);
+    await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
     const jobsBeforeSwitch=fixture.serial;
     await advanced.click();
     await expect(advanced).toHaveAttribute('aria-selected','true');

@@ -20,8 +20,9 @@ import { isAllowedArtifact } from './artifacts.js';
 import { readLocalCaptures, readLocalHistory, readLocalReviews } from './sync.js';
 import { migrateLegacyLocalData } from './migrate.js';
 import { HELPER_VERSION } from './version.js';
-import { helperUpdateError, installHelperUpdate, isNewerVersion, reconcileHelperUpdate } from './updater.js';
+import { helperUpdateError, helperUpdateProgress, installHelperUpdate, isNewerVersion, reconcileHelperUpdate, type HelperUpdatePhase } from './updater.js';
 import { minimizeHelperWindow, shouldAutoMinimize } from './windows.js';
+import { HelperTerminal } from './terminal-ui.js';
 
 let isStopping = false;
 let hasAnnouncedOnline = false;
@@ -30,6 +31,8 @@ let nextSyncAt = 0;
 let nextStrategyPullAt = 0;
 let nextReleaseCheckAt = 0;
 let hasReportedConnectionRemediation = false;
+let terminal: HelperTerminal | null = null;
+let restoreConsole: (() => void) | null = null;
 
 async function main(): Promise<void> {
   ensureHelperDirectories();
@@ -54,7 +57,9 @@ async function main(): Promise<void> {
   const shouldPair = args.includes('--pair') || Boolean(launch.pairing);
   const config = shouldPair || !savedConfig ? await pairInteractively(args) : savedConfig;
 
-  const client = new ControlPlaneClient(config);
+  terminal = new HelperTerminal({ helperHome: getHelperHome(), version: HELPER_VERSION, device: config.deviceName });
+  restoreConsole = terminal.installConsole();
+  const client = new ControlPlaneClient(config, terminal);
   console.log(`Vitriol Helper ${HELPER_VERSION} (protocol ${PROTOCOL_VERSION})`);
   console.log(`Device: ${config.deviceName} (${config.helperId})`);
   console.log(`Control plane: ${config.controlPlaneUrl}`);
@@ -66,13 +71,28 @@ async function main(): Promise<void> {
           ? { status: 'busy' as const, activeJobId: runningJob.jobId }
           : { status: 'online' as const }),
         updateError: await helperUpdateError(getHelperHome()),
+        ...await helperUpdateProgress(getHelperHome()),
       });
       if (heartbeat.update && !runningJob && !isStopping) {
-        const outcome = await installHelperUpdate({
+        let phase: HelperUpdatePhase = 'preparing';
+        let reporting: Promise<unknown> | null = null;
+        const reportPhase = async (next: HelperUpdatePhase) => {
+          phase = next;
+          terminal?.setStatus({ updatePhase: phase });
+          if (reporting) await reporting.catch(() => undefined);
+          reporting = client.heartbeat({ status: 'online', updatePhase: phase, updateVersion: heartbeat.update!.version,
+            updateError: await helperUpdateError(getHelperHome()) });
+          await reporting.catch(() => console.warn('Update progress could not be sent; the helper will retry.'));
+          reporting = null;
+        };
+        const progressTimer = setInterval(() => { if (!reporting) void reportPhase(phase); }, 5_000);
+        let outcome: Awaited<ReturnType<typeof installHelperUpdate>>;
+        try { outcome = await installHelperUpdate({
           offer: heartbeat.update,
           helperHome: getHelperHome(),
           controlPlaneUrl: config.controlPlaneUrl,
-        });
+          onPhase: (value) => reportPhase(value),
+        }); } finally { clearInterval(progressTimer); }
         if (outcome === 'restarting') {
           console.log(`Installing Vitriol Helper ${heartbeat.update.version}. This window will close and reopen.`);
           await delay(1_000);
@@ -129,6 +149,7 @@ async function main(): Promise<void> {
             },
           );
           runningJob = { jobId, run };
+          terminal?.setStatus({ job: `${envelope.payload.capabilityId} ${jobId.slice(0, 8)}` });
           void monitorCancellation(client, jobId, run);
           void run.completion
             .then(async ({ code, output }) => {
@@ -141,6 +162,7 @@ async function main(): Promise<void> {
             .catch((error: unknown) => console.error('Job failed:', error))
             .finally(() => {
               runningJob = null;
+              terminal?.setStatus({ job: '' });
             });
         }
       }
@@ -179,8 +201,8 @@ async function announceOnline(controlPlaneUrl: string): Promise<void> {
   console.log('Connected and online.');
   console.log(`Open ${controlPlaneUrl} in your browser and continue to Operations.`);
   console.log('Keep this helper running; close its window when you want it to go offline.');
-  if (!shouldAutoMinimize()) {
-    console.log('Automatic minimize is disabled for this run.');
+  if (!process.argv.includes('--minimize') || !shouldAutoMinimize()) {
+    console.log('The live helper status and traffic remain visible. Use --minimize to minimize after connection.');
     return;
   }
   console.log('This window will minimize in 3 seconds.');
@@ -206,6 +228,7 @@ async function monitorCancellation(
 
 function stop(): void {
   isStopping = true;
+  terminal?.setStatus({ connection: 'stopping' });
   runningJob?.run.cancel();
 }
 
@@ -224,6 +247,7 @@ async function writeStrategySnapshot(snapshot: {
 
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
+process.once('exit', () => { restoreConsole?.(); terminal?.close(); });
 
 main().catch((error) => {
   console.error(error);
