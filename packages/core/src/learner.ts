@@ -26,6 +26,7 @@ export interface LearnerControl {
   id: string;
   name: string;
   kind?: 'content' | 'navigation' | 'quiz-navigation' | 'submission';
+  checked?: boolean;
 }
 
 export interface LearnerSnapshot {
@@ -37,6 +38,10 @@ export interface LearnerSnapshot {
   tabs?: Array<{id: string; name: string; url: string}>;
   /** Operator resume note. At most 2000 characters. */
   guidance?: string;
+  /** Explicitly requested screenshot, a bounded JPEG data URL. */
+  image?: string;
+  /** Observed course headings; inventory is not evidence of reading. */
+  outlines?: Array<{ url: string; title: string; topics: string[] }>;
 }
 
 export type LearnerAction =

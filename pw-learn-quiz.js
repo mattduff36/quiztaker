@@ -156,6 +156,29 @@ function localActionAllowed(action, snapshot, mode = 'read') {
   return true;
 }
 
+// This function runs inside the page. Only the observed DKI base/rollover pair
+// is treated as one logical image; it does not authorize hidden activation.
+function dkiInformationIcon(el) {
+  const doc = el.ownerDocument;
+  const baseSelector = 'img.dki-element-content.hasRollover';
+  const linkedClone = base => {
+    const match = /^content_(\d+)$/.exec(base.id);
+    if (!match) return null;
+    const clone = doc.getElementById(`${base.id}_rollover`);
+    return clone?.matches('img.dki-element-content.dki-image-rollover[data-id]') && clone.getAttribute('data-id') === match[1] ? clone : null;
+  };
+  let base = el.matches(baseSelector) ? el : null;
+  if (!base && el.matches('img.dki-element-content.dki-image-rollover[data-id]') && /^\d+$/.test(el.getAttribute('data-id') || '')) {
+    base = doc.getElementById(`content_${el.getAttribute('data-id')}`);
+    if (!base?.matches(baseSelector) || linkedClone(base) !== el) return null;
+  }
+  if (!base || getComputedStyle(base).cursor !== 'pointer') return null;
+  const rendered = icon => icon && icon.getClientRects().length && getComputedStyle(icon).visibility !== 'hidden' && icon.getBoundingClientRect().width > 0 && icon.getBoundingClientRect().height > 0;
+  const icons = Array.from(doc.querySelectorAll(baseSelector)).filter(icon => getComputedStyle(icon).cursor === 'pointer' && (rendered(icon) || rendered(linkedClone(icon))));
+  const index = icons.indexOf(base);
+  return index >= 0 ? {name:`Course information icon ${index + 1}`} : null;
+}
+
 async function accessibleName(locator) {
   const aria = await locator.getAttribute('aria-label').catch(() => null);
   if (aria && aria.trim()) return aria.replace(/\s+/g, ' ').trim().slice(0, 160);
@@ -179,16 +202,13 @@ async function accessibleName(locator) {
     const wrapping = el.closest('label');
     const name = (explicit?.textContent || wrapping?.textContent || el.innerText || el.textContent || el.getAttribute('title') || el.getAttribute('alt') || el.getAttribute('value') || el.querySelector('img')?.getAttribute('alt') || el.querySelector('[title]')?.getAttribute('title') || ((el.hasAttribute('data-toggle') || el.hasAttribute('data-bs-toggle') || el.hasAttribute('aria-controls')) ? `Open panel: ${el.getAttribute('aria-controls') || el.getAttribute('data-target') || el.getAttribute('href') || 'course detail'}` : ''));
     if (String(name).trim()) return name;
-    if (el.matches('img.dki-element-content.hasRollover') && getComputedStyle(el).cursor === 'pointer') {
-      const icons = Array.from(el.ownerDocument.querySelectorAll('img.dki-element-content.hasRollover')).filter(icon => icon.getClientRects().length && getComputedStyle(icon).visibility !== 'hidden' && getComputedStyle(icon).cursor === 'pointer');
-      return `Course information icon ${icons.indexOf(el) + 1}`;
-    }
     return '';
   }).catch(() => '');
   if (text && typeof text === 'object' && text.screenElement) {
     return screenElementControlName(text.id, text.className).slice(0, 160);
   }
-  return String(text).replace(/\s+/g, ' ').trim().slice(0, 160);
+  const normalized = String(text).replace(/\s+/g, ' ').trim().slice(0, 160);
+  return normalized || (await locator.evaluate(dkiInformationIcon).catch(() => null))?.name || '';
 }
 
 async function isSubmitControl(locator) {
@@ -216,7 +236,7 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
   for (const frame of await visibleFrames(page)) {
     const box = frame.parentFrame() ? await frame.frameElement().then(element => element.boundingBox()).catch(() => null) : {x:0,y:0};
     if (!box) continue;
-    const locator = navigationOnly ? frame.locator('button, a, [role=button], [role=tab], summary, [onclick], [data-toggle], [data-bs-toggle], [aria-controls], input[type=button], input[type=submit], input[type=image], .dki-element-content.speech-bubble, img.dki-element-content.hasRollover') : frame.getByRole(role);
+    const locator = navigationOnly ? frame.locator('button, a, [role=button], [role=tab], summary, [onclick], [data-toggle], [data-bs-toggle], [aria-controls], input[type=button], input[type=submit], input[type=image], .dki-element-content.speech-bubble, img.dki-element-content.hasRollover, img.dki-element-content.dki-image-rollover[data-id]') : frame.getByRole(role);
     const indices = await locator.evaluateAll((elements, view) => {
       const indices = [];
       for (let index = 0; index < elements.length; index += 1) {
@@ -228,6 +248,11 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
         // unlike actual collapse/tab controls. Preserve interactive evidence.
         if (el.getAttribute('data-toggle') === 'cso-frame' && !el.matches('a,button,input,summary,[role],[onclick],[tabindex]') && style.cursor !== 'pointer') continue;
         if (el.matches('.dki-element-content.speech-bubble, img.dki-element-content.hasRollover') && style.cursor !== 'pointer') continue;
+        if (el.matches('img.dki-element-content.dki-image-rollover[data-id]')) {
+          const dataId = el.getAttribute('data-id') || '';
+          const base = /^\d+$/.test(dataId) ? el.ownerDocument.getElementById(`content_${dataId}`) : null;
+          if (!base?.matches('img.dki-element-content.hasRollover') || el.id !== `${base.id}_rollover` || getComputedStyle(base).cursor !== 'pointer') continue;
+        }
         let facing = true;
         for (let face = el; face; face = face.parentElement) {
           if (getComputedStyle(face).backfaceVisibility !== 'hidden') continue;
@@ -451,7 +476,12 @@ async function applyAction(page, action, snapshot, handles, mode = 'read', retry
       }
       retryState.count += 1;
     }
-    await handle.click({ timeout: 5000 });
+    if (await handle.evaluate(dkiInformationIcon).catch(() => null)) {
+      if (!await handle.isVisible() || !await handle.isEnabled()) throw new Error('Learner target changed');
+      // Pointer movement creates a covering rollover image on these DKI icons.
+      // Activate the validated visible representative without triggering hover.
+      await handle.dispatchEvent('click');
+    } else await handle.click({ timeout: 5000 });
     return;
   }
   await handle.check({ timeout: 5000 });

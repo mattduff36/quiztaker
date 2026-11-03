@@ -105,6 +105,52 @@ test('hidden persistent slides cannot starve later controls or misattribute the 
   } finally { await browser.close(); }
 });
 
+test('DKI rollover icons activate without hover and keep a stable logical name after an actual hover swap', async () => {
+  const browser = await chromium.launch({channel:'chrome',headless:true});
+  try {
+    const page = await browser.newPage({viewport:{width:900,height:600}});
+    await page.setContent(`<h1>Paper quality</h1><div id="icon-box" style="position:relative;width:64px;height:64px"><img id="content_148383" class="dki-element-content pngFix hasRollover" alt="" tabindex="-1" width="64" height="64" style="cursor:pointer"></div>
+      <img id="content_999" class="dki-element-content hasRollover" alt="Hidden unrelated icon" width="64" height="64" style="cursor:pointer;display:none">
+      <img id="orphan_rollover" class="dki-element-content dki-image-rollover" data-id="888" width="32" height="32">
+      <div id="modal" hidden>Captured paper-quality modal facts.<button type="button" onclick="this.parentElement.hidden=true">Close</button></div>`);
+    await page.evaluate(() => {
+      window.hoverCount=0;window.hiddenClicks=0;
+      const base=document.querySelector('#content_148383');
+      const open=()=>document.querySelector('#modal').hidden=false;
+      base.addEventListener('click',open);
+      document.querySelector('#content_999').addEventListener('click',()=>window.hiddenClicks++);
+      base.addEventListener('mouseover',()=>{
+        window.hoverCount++;
+        let clone=document.querySelector('#content_148383_rollover');
+        if(!clone){
+          clone=document.createElement('img');clone.id='content_148383_rollover';clone.className='dki-element-content pngFix dki-image-rollover';clone.dataset.id='148383';clone.width=64;clone.height=64;clone.style.cssText='position:absolute;inset:0;cursor:pointer';
+          clone.addEventListener('click',open);document.querySelector('#icon-box').append(clone);
+        }
+        base.style.display='none';
+      });
+    });
+    const initial=await readSnapshot(page);
+    assert.deepEqual(initial.snapshot.buttons.map(control=>control.name),['Course information icon 1']);
+    await act(page,'Course information icon 1');
+    assert.equal(await page.evaluate(()=>window.hoverCount),0,'activation must avoid the pointer hover that replaces the base image');
+    assert.match((await readSnapshot(page)).snapshot.text,/Captured paper-quality modal facts/);
+    await act(page,'Close');
+    const box=await page.locator('#content_148383').boundingBox();
+    await page.mouse.move(box.x+box.width/2,box.y+box.height/2);
+    await page.locator('#content_148383_rollover').waitFor({state:'visible'});
+    assert.equal(await page.locator('#content_148383').isVisible(),false);
+    const hovered=await readSnapshot(page);
+    assert.deepEqual(hovered.snapshot.buttons,initial.snapshot.buttons);
+    assert.equal(sameLearnerView(hovered.snapshot,initial.snapshot),true);
+    await assert.rejects(applyAction(page,{action:'click',targetId:initial.snapshot.buttons[0].id},initial.snapshot,initial.handles),/target changed/);
+    await applyAction(page,{action:'click',targetId:hovered.snapshot.buttons[0].id},hovered.snapshot,hovered.handles);
+    assert.match((await readSnapshot(page)).snapshot.text,/Captured paper-quality modal facts/);
+    await act(page,'Close');
+    assert.doesNotMatch((await readSnapshot(page)).snapshot.text,/Captured paper-quality modal facts/);
+    assert.equal(await page.evaluate(()=>window.hiddenClicks),0);
+  } finally {await browser.close();}
+});
+
 test('curriculum scrolling offers later modules before the control caps and ignores passive cso-frame containers', async () => {
   const browser = await chromium.launch({channel:'chrome',headless:true});
   try {
@@ -192,10 +238,13 @@ test('observed WebForms assessment anchors navigate only in quiz mode and reject
     assert.deepEqual((await readSnapshot(page,'read')).snapshot.buttons,[]);
     await act(page,'Correct answer','quiz',true);
     await act(page,'Next »','quiz');
+    await page.waitForFunction(expected=>document.querySelector('#question')?.textContent===expected,'Question 2',{timeout:5000});
     assert.equal(await page.locator('#question').textContent(),'Question 2');
     await act(page,'Summary','quiz');
+    await page.waitForFunction(expected=>document.querySelector('#question')?.textContent===expected,'Quiz summary',{timeout:5000});
     assert.equal(await page.locator('#question').textContent(),'Quiz summary');
     await act(page,'Save / Return Later','quiz');
+    await page.waitForFunction(expected=>document.querySelector('#question')?.textContent===expected,'Quiz saved',{timeout:5000});
     assert.equal(await page.locator('#question').textContent(),'Quiz saved');
     assert.equal(await page.evaluate(()=>window.countdownStopped),true);
   } finally {await browser.close();}
