@@ -493,6 +493,24 @@ scrolling reveal later curriculum modules. An offline Chrome fixture exercises
 
 ### Canon ASP.NET assessment navigation
 
+The subsequent restored-session run on 3 November reached Summary, submitted
+final answers and visibly **Passed: 75% (15/20), threshold 70%**. Some earlier
+selections survived sign-in recovery; inspect the checked states before
+re-entering answers. The owner requires normal-user operation through the UI,
+with Vitriol using its own learning/research; do not feed it answers extracted
+from internal logs. A `Pass/Fail: Passed` results table with a score below100%
+currently falls through automatic learner verification; the operator verified
+the visible result and paused the session. Fix that recognizer in a later
+batch; do not retake a visibly passed assessment to satisfy internal status.
+
+Observed on 3 November with helper 1.0.21: checked-state observations let the
+learner select answers once, handle multiple selections and advance through a
+20-question Engineer Certification Programme Assessment. Retained material
+search and actual public web searches supplied reference evidence. The final
+Next led to an expired-session page before submission/result verification.
+This is not a pass or fail. Restore sign-in and reopen the existing saved
+attempt; never infer a result or start a retake from this state.
+
 Observed Next, Summary and Save/Return Later anchors use standard WebForms
 JavaScript postbacks rather than ordinary links. Helper 1.0.20 recognizes only
 button anchors with identifier targets, empty string arguments and the observed
