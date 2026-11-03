@@ -122,6 +122,7 @@ export async function requestHelperJobCancellation(input: {
   jobId?: string;
   endSession?: boolean;
   forceClose?: boolean;
+  excludeCapabilities?: string[];
 }, deps: JobRecoveryDeps = jobRecoveryDatabase): Promise<number> {
   let requested = 0;
   await reconcileHelperJobs(input, deps, (jobs, helper) => {
@@ -130,7 +131,7 @@ export async function requestHelperJobCancellation(input: {
     ))) {
       throw new Error('A course run is still active. Confirm a separate browser close.');
     }
-    const targets = jobs.filter((job) => !input.jobId || job.id === input.jobId);
+    const targets = jobs.filter((job) => (!input.jobId || job.id === input.jobId) && !input.excludeCapabilities?.includes(job.capability_id));
     requested = targets.length;
     return targets;
   });

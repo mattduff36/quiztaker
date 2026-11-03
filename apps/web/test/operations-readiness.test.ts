@@ -3,8 +3,8 @@ import test from 'node:test';
 import { connectionState, isWebUrl, operationNeedsBrowser, readJsonResponse } from '../src/lib/operations-readiness.js';
 
 test('browser recovery can be confirmed before a browser connection exists', () => {
-  for (const capability of ['start-browser', 'cdp-check', 'list-tabs']) assert.equal(operationNeedsBrowser(capability), false);
-  for (const capability of ['open-url', 'close-browser', 'tab-inspect', 'detect']) assert.equal(operationNeedsBrowser(capability), true);
+  for (const capability of ['start-browser', 'cdp-check', 'list-tabs', 'close-browser']) assert.equal(operationNeedsBrowser(capability), false);
+  for (const capability of ['open-url', 'tab-inspect', 'detect']) assert.equal(operationNeedsBrowser(capability), true);
 });
 
 test('connection status distinguishes absent browser evidence from a disconnected snapshot', () => {

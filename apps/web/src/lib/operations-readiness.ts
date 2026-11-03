@@ -1,7 +1,7 @@
 export type ConnectionState = 'loading' | 'unavailable' | 'helper-offline' | 'browser-unknown' | 'browser-offline' | 'connected';
 
 export function operationNeedsBrowser(capabilityId: string): boolean {
-  return !['start-browser', 'cdp-check', 'list-tabs'].includes(capabilityId);
+  return !['start-browser', 'cdp-check', 'list-tabs', 'close-browser'].includes(capabilityId);
 }
 
 export function connectionState(context: { helper: { is_online: boolean } | null; session?: { cdp_connected?: boolean } | null } | null, unavailable: boolean): ConnectionState {

@@ -23,6 +23,7 @@
     "import:legacy": "node --env-file-if-exists=.env.local scripts/import-legacy-knowledge.mjs",
     "test:parity": "node scripts/parity-headed.mjs",
     "test:e2e": "playwright test --project=headless",
+    "test:operations-ui": "node scripts/test-operations-ui.mjs",
     "test:e2e:headed": "playwright test --project=headed",
     "migrate:learning": "node migrate-learning-data.js",
     "release:helper": "npm run package:win --workspace=@quiztaker/helper"

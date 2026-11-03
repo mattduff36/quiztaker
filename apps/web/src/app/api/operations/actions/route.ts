@@ -78,8 +78,13 @@ export async function POST(request: Request) {
          where id = $1 and user_id = $2 and consumed = false`,
         [plan.planId, user.id],
       );
-      const job = await createJob(user.id, plan.planId);
-      return NextResponse.json({ plan, jobId: job.jobId });
+      try {
+        const job = await createJob(user.id, plan.planId);
+        return NextResponse.json({ plan, jobId: job.jobId });
+      } catch (error) {
+        if (error instanceof Error && /A job is already active/.test(error.message)) return NextResponse.json({ plan, waitingForJob: true });
+        throw error;
+      }
     }
     return NextResponse.json({ plan });
   } catch (error) {

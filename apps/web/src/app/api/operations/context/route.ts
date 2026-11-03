@@ -7,6 +7,7 @@ import { readPublicLlmConnection } from '@/lib/llm-provider';
 import { parityEnabled } from '@/lib/parity';
 import { getLatestHelperRelease } from '@/lib/releases';
 import { readRelevantJob, recoverHelperJobs } from '@/lib/job-recovery';
+import { enforceOperatorIdle, readOperatorActivity } from '@/lib/operator-activity';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,10 +48,11 @@ export async function GET() {
     });
   }
   const helperId = String(helper.id);
+  await enforceOperatorIdle(user.id,helperId);
   await recoverHelperJobs(user.id, helperId);
-  const [session, recentUrls, activeJob, captures] = await Promise.all([
+  const [session, recentUrls, activeJob, captures, activity] = await Promise.all([
     queryOne(
-      `select id, revision, cdp_connected, tabs, roster, detection
+      `select id, revision, cdp_connected, tabs, roster, detection, updated_at
        from browser_sessions
        where user_id = $1 and helper_id = $2 and closed_at is null
        order by updated_at desc limit 1`,
@@ -71,6 +73,7 @@ export async function GET() {
        order by captured_at desc limit 8`,
       [user.id],
     ),
+    readOperatorActivity(user.id,helperId),
   ]);
   const release = await getLatestHelperRelease().catch(() => null);
   const helperUpdate = describeHelperUpdate({
@@ -83,6 +86,7 @@ export async function GET() {
   });
   return NextResponse.json({
     helper,
+    operatorActivity: activity,
     helperUpdate,
     session,
     recentUrls,

@@ -5,6 +5,10 @@ import { AlertTriangle, Check, Download, LoaderCircle, Play, X } from 'lucide-re
 import { Panel } from '@/components/page-frame';
 import { GuidedRunner } from '@/components/guided-runner';
 import { connectionState, isWebUrl, operationNeedsBrowser, readJsonResponse } from '@/lib/operations-readiness';
+import { useOperatorActivity } from '@/components/use-operator-activity';
+import { BROWSER_REFRESH_MS, operationsPollDelay, SNAPSHOT_STALE_MS } from '@/lib/operations-policy';
+import type { OperatorActivity } from '@/lib/operator-activity';
+import { formatDisplayDate } from '@/lib/display-date';
 
 interface TabRow {
   targetId: string;
@@ -34,6 +38,7 @@ interface DetectionSnapshot {
 }
 
 interface ContextResponse {
+  operatorActivity?: OperatorActivity | null;
   helper: {
     id: string;
     device_name: string;
@@ -46,6 +51,7 @@ interface ContextResponse {
     id: string;
     revision: number;
     cdp_connected: boolean;
+    updated_at?: string;
     tabs: TabRow[];
     roster: { certTitle?: string; courses?: CourseRow[]; activities?: CourseRow[] } | null;
     detection: DetectionSnapshot | null;
@@ -75,6 +81,7 @@ interface Diagnosis {
 }
 
 interface PlanResponse {
+  capabilityId?: string;
   requiresBrowser?: boolean;
   planId: string;
   label: string;
@@ -90,6 +97,10 @@ interface PlanResponse {
 }
 
 export function OperationsClient(props: { helperId: string }) {
+  const activity = useOperatorActivity(props.helperId);
+  const [visible,setVisible] = useState(true);
+  const [refreshError,setRefreshError] = useState('');
+  const [lastChecked,setLastChecked] = useState<number|null>(null);
   const [contextError, setContextError] = useState('');
   const [pollError, setPollError] = useState('');
   const [context, setContext] = useState<ContextResponse | null>(null);
@@ -103,14 +114,20 @@ export function OperationsClient(props: { helperId: string }) {
   const [job, setJob] = useState<ContextResponse['activeJob']>(null);
   const [operationBusy, setBusy] = useState(false);
   const [guidedBusy, setGuidedBusy] = useState(false);
-  const busy = operationBusy || guidedBusy;
+  const busy = operationBusy || guidedBusy || activity.paused || !activity.ready;
   const [forceCloseOffer, setForceCloseOffer] = useState(false);
   const [updateNote, setUpdateNote] = useState('');
   const [updateBusy, setUpdateBusy] = useState(false);
   const [showManualDownload, setShowManualDownload] = useState(false);
   const contextRequest = useRef(0);
+  const loadingContext = useRef(false);
+  const browserProbe = useRef(0);
+  const active = job && ['queued', 'dispatched', 'running'].includes(job.status);
+  const backgroundRefresh = Boolean(active && job?.capability_id==='list-tabs' && !guidedBusy && !operationBusy);
 
   const load = useCallback(async () => {
+    if (loadingContext.current) return;
+    loadingContext.current=true;
     const requestId = ++contextRequest.current;
     try {
       const response = await fetch('/api/operations/context', { cache: 'no-store', signal: AbortSignal.timeout(15_000) });
@@ -118,22 +135,51 @@ export function OperationsClient(props: { helperId: string }) {
       if (!('helper' in value)) throw new Error('Connection status is unavailable. Retry in a moment.');
       if (requestId !== contextRequest.current) return;
       setContext(value);
+      activity.sync(value.operatorActivity);
+      setLastChecked(Date.now());
       setContextError('');
       setJob(value.activeJob ?? null);
     } catch (cause) {
       if (requestId !== contextRequest.current) return;
       setContextError(errorMessage(cause, 'Could not check the connection. Check your network and retry.'));
-    }
-  }, []);
+    } finally { loadingContext.current=false; }
+  }, [activity.sync]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => void load(), 3000);
+    const timer = window.setInterval(() => void load(), operationsPollDelay({active:Boolean(active)||guidedBusy,visible,paused:activity.paused,failed:Boolean(contextError)}));
     const kick = window.setTimeout(() => void load(), 0);
     return () => {
       window.clearInterval(timer);
       window.clearTimeout(kick);
     };
-  }, [load]);
+  }, [load,active,guidedBusy,visible,activity.paused,Boolean(contextError)]);
+
+  useEffect(()=>{
+    const changed=()=>{setVisible(document.visibilityState==='visible');if(document.visibilityState==='visible') {browserProbe.current=0;void load();}};
+    changed();document.addEventListener('visibilitychange',changed);window.addEventListener('focus',changed);
+    return()=>{document.removeEventListener('visibilitychange',changed);window.removeEventListener('focus',changed);};
+  },[load]);
+
+  const refreshBrowser = useCallback(async(force=false)=>{
+    if (!activity.ready || activity.paused || !visible || operationBusy || guidedBusy || active || !context?.helper?.is_online) return;
+    if(!force && Date.now()-browserProbe.current<BROWSER_REFRESH_MS)return;
+    browserProbe.current=Date.now();
+    try {
+      const response=await fetch('/api/operations/activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({helperId:props.helperId,action:'refresh',force}),signal:AbortSignal.timeout(15_000)});
+      await readJsonResponse(response,'Could not refresh browser tabs.');setRefreshError('');await load();
+    } catch(cause){setRefreshError(errorMessage(cause,'Could not refresh browser tabs. Check the helper and retry.'));}
+  },[activity.ready,activity.paused,visible,operationBusy,guidedBusy,active,context?.helper?.is_online,props.helperId,load]);
+
+  useEffect(()=>{
+    void refreshBrowser();
+    const timer=window.setInterval(()=>void refreshBrowser(),BROWSER_REFRESH_MS);
+    return()=>window.clearInterval(timer);
+  },[refreshBrowser]);
+  useEffect(()=>{
+    const focus=()=>{if(document.visibilityState==='visible')void refreshBrowser(true);};
+    window.addEventListener('focus',focus);document.addEventListener('visibilitychange',focus);
+    return()=>{window.removeEventListener('focus',focus);document.removeEventListener('visibilitychange',focus);};
+  },[refreshBrowser]);
 
   const jobId = job?.id;
   const jobStatus = job?.status;
@@ -170,7 +216,8 @@ export function OperationsClient(props: { helperId: string }) {
 
   const readiness = connectionState(context, Boolean(contextError));
   const helperReady = !contextError && context?.helper?.is_online === true;
-  const browserReady = readiness === 'connected';
+  const snapshotStale = Boolean(context?.session?.updated_at && Date.now()-Date.parse(context.session.updated_at)>SNAPSHOT_STALE_MS && !active && !guidedBusy);
+  const browserReady = readiness === 'connected' && !snapshotStale;
   const session = context?.session;
   const selected = session?.tabs?.find((tab) => tab.targetId === selectedTarget) ?? null;
   const update = context?.helperUpdate;
@@ -192,7 +239,7 @@ export function OperationsClient(props: { helperId: string }) {
   }, [selected, session]);
 
   async function run(capabilityId: string, capabilityInput: Record<string, unknown>, confirm: boolean) {
-    if (busy || (job && ['queued', 'dispatched', 'running'].includes(job.status))) return;
+    if ((capabilityId === 'close-browser' ? operationBusy : busy) || (job && ['queued', 'dispatched', 'running'].includes(job.status))) return;
     if (!helperReady) return setError('Connect the helper before sending an operation.');
     if (operationNeedsBrowser(capabilityId) && !browserReady) return setError('Connect the browser before sending this operation.');
     if (capabilityId === 'open-url' && !isWebUrl(String(capabilityInput.url ?? ''))) return setError('Enter a valid http:// or https:// URL.');
@@ -226,7 +273,7 @@ export function OperationsClient(props: { helperId: string }) {
         setOutput('');
         return;
       }
-      if (value.plan) setPendingPlan({ ...value.plan, requiresBrowser: operationNeedsBrowser(capabilityId) });
+      if (value.plan) setPendingPlan({ ...value.plan, capabilityId, requiresBrowser: operationNeedsBrowser(capabilityId) });
       else setError('The server did not return a plan or job. Retry the action.');
     } catch (cause) {
       setError(errorMessage(cause, 'The request failed. Check your network and retry.'));
@@ -236,7 +283,7 @@ export function OperationsClient(props: { helperId: string }) {
   }
 
   async function confirmPlan() {
-    if (!pendingPlan || busy || !helperReady || (pendingPlan.requiresBrowser !== false && !browserReady)) return;
+    if (!pendingPlan || (pendingPlan.capabilityId === 'close-browser' ? operationBusy : busy) || !helperReady || (pendingPlan.requiresBrowser !== false && !browserReady)) return;
     setBusy(true);
     try {
       const confirmation = await fetch(`/api/plans/${pendingPlan.planId}/confirm`, { method: 'POST' });
@@ -259,7 +306,7 @@ export function OperationsClient(props: { helperId: string }) {
   }
 
   async function dismissPlan() {
-    if (busy) return;
+    if (operationBusy) return;
     try {
       if (pendingPlan) {
         const response = await fetch(`/api/plans/${pendingPlan.planId}/cancel`, { method: 'POST' });
@@ -316,7 +363,7 @@ export function OperationsClient(props: { helperId: string }) {
   }
 
   async function endSession(forceClose: boolean) {
-    if (busy || !helperReady) return;
+    if (operationBusy || !helperReady) return;
     setBusy(true);
     setError('');
     try {
@@ -348,16 +395,16 @@ export function OperationsClient(props: { helperId: string }) {
     finally { setBusy(false); }
   }
 
-  const active = job && ['queued', 'dispatched', 'running'].includes(job.status);
-
   return (
     <div className="space-y-6">
       <section className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-slate-200 bg-white p-5" aria-labelledby="connection-title">
         <div className="min-w-0 flex-1" aria-live="polite">
-          <h2 id="connection-title" className="text-lg font-semibold text-slate-950">{connectionCopy[readiness].title}</h2>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{connectionCopy[readiness].detail}</p>
+          <h2 id="connection-title" className="text-lg font-semibold text-slate-950">{snapshotStale ? 'Checking the browser again' : connectionCopy[readiness].title}</h2>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{snapshotStale ? 'The previous tab snapshot is old. Vitriol is checking the current browser before allowing another run.' : connectionCopy[readiness].detail}</p>
+          <p className="mt-2 text-xs text-slate-500">{lastChecked ? 'Connection updates automatically' : 'Checking connection'}{activity.paused ? ' · session paused' : backgroundRefresh ? ' · updating course tabs' : active ? ' · following the current run' : ' · tabs update while the browser is free'}</p>
+          {session?.updated_at?<p className="mt-1 text-xs text-slate-500">Browser last checked {formatDisplayDate(session.updated_at)}</p>:null}
           {contextError ? <p className="mt-2 text-sm text-rose-800">{contextError}</p> : null}
-          {active ? <p className="mt-2 text-sm font-medium text-slate-700">Wait for the current job to finish before sending another operation.</p> : null}
+          {active&&!backgroundRefresh ? <p className="mt-2 text-sm font-medium text-slate-700">Wait for the current job to finish before sending another operation.</p> : null}
         </div>
         {readiness === 'unavailable' ? <Action primary disabled={busy} onClick={() => void load()}>Retry connection</Action>
           : readiness === 'helper-offline' ? <a href="/helper" className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800">Set up helper</a>
@@ -365,9 +412,13 @@ export function OperationsClient(props: { helperId: string }) {
           : readiness === 'browser-unknown' ? <Action primary disabled={!helperReady || busy || Boolean(active)} onClick={() => run('start-browser', { capabilityId: 'start-browser' }, false)}>Start browser</Action>
           : null}
       </section>
+      {activity.paused ? <section role="status" className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-amber-300 bg-amber-50 p-5 text-amber-950"><div><h2 className="font-semibold">Your session is paused</h2><p className="mt-1 max-w-2xl text-sm leading-6">Vitriol stops queuing steps and asks the helper to stop any current run. Your browser tabs, goal and conversation are kept. Resume when you are ready, then inspect the current page again.</p></div><button type="button" onClick={()=>void activity.resume()} className="min-h-11 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800">Resume session</button></section>
+        : activity.warning ? <section role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950"><p className="text-sm">Still there? Your session pauses in {Math.max(1,Math.ceil(activity.remainingMs/1000))} seconds without activity on this page.</p><button type="button" onClick={()=>void activity.resume()} className="min-h-11 rounded-md border border-amber-400 px-4 text-sm font-semibold">Keep working</button></section> : null}
+      {activity.error ? <p role="alert" className="text-sm text-rose-800">{activity.error} <button type="button" onClick={()=>void activity.resume()} className="underline underline-offset-4">Retry session connection</button></p> : null}
       {update?.needed ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-950"><span>A helper update is available{update.latestVersion ? `: v${update.latestVersion}` : ''}. Keep the helper running while it installs.</span><button type="button" disabled={busy || Boolean(active) || updateBusy} onClick={() => void requestHelperUpdate()} className="min-h-11 rounded-md bg-amber-900 px-4 py-2 font-semibold text-white disabled:opacity-40">{updateBusy ? 'Requesting update…' : 'Update helper'}</button>{updateNote ? <p className="w-full">{updateNote}</p> : null}</div> : null}
       <GuidedRunner helperId={props.helperId} session={session} selectedTarget={selectedTarget} onSelect={setSelectedTarget}
-        ready={browserReady && protocolReady && !operationBusy} active={Boolean(active)} onBusy={setGuidedBusy} onRefresh={load}
+        ready={browserReady && protocolReady && !operationBusy && activity.ready && !activity.paused && !backgroundRefresh} active={Boolean(active)&&!backgroundRefresh} refreshing={backgroundRefresh} onBusy={setGuidedBusy} onRefresh={load}
+        paused={activity.paused||!activity.ready} onPause={()=>void activity.pause()} connection={readiness} onConnect={()=>void run('start-browser',{capabilityId:'start-browser'},false)} onRefreshTabs={()=>void refreshBrowser(true)} refreshError={refreshError} snapshotStale={snapshotStale}
         lastJob={job} lastOutput={output} outputJobId={outputJobId} />
       {error ? <div role="alert" className="flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><AlertTriangle className="size-4" />{error}</div> : null}
       <details className="rounded-lg border border-slate-300 bg-slate-50"><summary className="cursor-pointer px-5 py-4 font-semibold text-slate-700">Advanced tools and run details{active ? ' · job running' : ''}</summary><div className="space-y-6 p-4 sm:p-5">
@@ -436,7 +487,7 @@ export function OperationsClient(props: { helperId: string }) {
             void run('open-url', { capabilityId: 'open-url', url: url.trim() }, false);
           }}>
             <label htmlFor="launch-url" className="block text-sm font-medium text-slate-700">Website URL</label>
-            <input id="launch-url" type="url" required disabled={!browserReady || !protocolReady || busy || Boolean(active)} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://" className="h-11 w-full rounded-md border border-slate-300 px-3" />
+            <input id="launch-url" type="url" required disabled={!helperReady || !protocolReady || operationBusy || Boolean(active)} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://" className="h-11 w-full rounded-md border border-slate-300 px-3" />
             <Action type="submit" primary disabled={!browserReady || !protocolReady || !isWebUrl(url) || busy || Boolean(active)}>Open URL</Action>
             {!browserReady ? <p className="text-sm text-slate-600">Connect the browser before opening a URL.</p> : !protocolReady ? <p className="text-sm text-slate-600">Update the helper to enable URL controls.</p> : null}
             <div className="max-h-48 space-y-2 overflow-auto">
@@ -475,12 +526,12 @@ export function OperationsClient(props: { helperId: string }) {
         </div>
       </Panel>
 
-      <Panel title="Auto-detect" meta={<button className="text-xs font-semibold text-cyan-800" disabled={!browserReady || !protocolReady || busy || Boolean(active)} onClick={() => run('detect', { capabilityId: 'detect', ...(targetInput ? { target: targetInput } : {}) }, true)}>Detect</button>}>
+      <Panel title="Auto-detect" meta={<button className="text-xs font-semibold text-cyan-800" disabled={!helperReady || !protocolReady || operationBusy || Boolean(active)} onClick={() => run('detect', { capabilityId: 'detect', ...(targetInput ? { target: targetInput } : {}) }, true)}>Detect</button>}>
         <DetectionPanel
           detection={session?.detection}
           targetInput={targetInput}
           learnerEnabled={context?.learnerEnabled === true}
-          disabled={!browserReady || !protocolReady || busy || Boolean(active)}
+          disabled={!helperReady || !protocolReady || operationBusy || Boolean(active)}
           onRun={run}
         />
       </Panel>
@@ -493,9 +544,9 @@ export function OperationsClient(props: { helperId: string }) {
       ) : null}
 
       <div className="flex flex-wrap justify-end gap-3 border-t border-slate-200 pt-5">
-        <button type="button" disabled={!browserReady || !protocolReady || busy || Boolean(active)} onClick={() => run('close-browser', { capabilityId: 'close-browser' }, false)} className="rounded-md border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700 disabled:opacity-40">Close browser</button>
-        <button type="button" className="rounded-md border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700" disabled={!helperReady || busy} onClick={() => endSession(false)}>End session</button>
-        {forceCloseOffer ? <button className="rounded-md bg-rose-700 px-4 py-2 text-sm font-semibold text-white" disabled={!helperReady || busy} onClick={() => endSession(true)}>Force close</button> : null}
+        <button type="button" disabled={!helperReady || !protocolReady || operationBusy || Boolean(active)} onClick={() => run('close-browser', { capabilityId: 'close-browser' }, false)} className="rounded-md border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700 disabled:opacity-40">Close browser</button>
+        <button type="button" className="rounded-md border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700" disabled={!helperReady || operationBusy} onClick={() => endSession(false)}>End session</button>
+        {forceCloseOffer ? <button className="rounded-md bg-rose-700 px-4 py-2 text-sm font-semibold text-white" disabled={!helperReady || operationBusy} onClick={() => endSession(true)}>Force close</button> : null}
       </div>
 
 
@@ -505,7 +556,7 @@ export function OperationsClient(props: { helperId: string }) {
           <div className="w-full max-w-xl rounded-lg bg-white p-6">
             <div className="flex items-start justify-between">
               <h2 className="text-xl font-semibold">{pendingPlan.label}</h2>
-              <button type="button" aria-label="Cancel plan" disabled={busy} onClick={() => void dismissPlan()}><X className="size-4" /></button>
+              <button type="button" aria-label="Cancel plan" disabled={operationBusy} onClick={() => void dismissPlan()}><X className="size-4" /></button>
             </div>
             {error ? <p role="alert" className="mt-3 text-sm text-rose-800">{error}</p> : null}
             <p className="mt-3 text-sm text-slate-600">Risk {pendingPlan.risk} · {pendingPlan.verifier}</p>
@@ -518,8 +569,8 @@ export function OperationsClient(props: { helperId: string }) {
             ) : null}
             <ul className="mt-3 list-disc pl-5 text-sm text-slate-600">{(pendingPlan.targets.length ? pendingPlan.targets : [{ title: 'Current browser context' }]).map((target) => <li key={target.title}>{target.title}</li>)}</ul>
             <div className="mt-5 flex justify-end gap-2">
-              <button type="button" disabled={busy} className="rounded-md border px-4 py-2 text-sm" onClick={() => void dismissPlan()}>Cancel</button>
-              <button type="button" disabled={busy || !helperReady || (pendingPlan.requiresBrowser !== false && !browserReady)} className="rounded-md bg-amber-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40" onClick={() => void confirmPlan()}>{busy ? <LoaderCircle className="size-4 animate-spin" /> : 'Confirm and queue'}</button>
+              <button type="button" disabled={operationBusy} className="rounded-md border px-4 py-2 text-sm" onClick={() => void dismissPlan()}>Cancel</button>
+              <button type="button" disabled={(pendingPlan.capabilityId === 'close-browser' ? operationBusy : busy) || !helperReady || (pendingPlan.requiresBrowser !== false && !browserReady)} className="rounded-md bg-amber-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40" onClick={() => void confirmPlan()}>{busy ? <LoaderCircle className="size-4 animate-spin" /> : 'Confirm and queue'}</button>
             </div>
           </div>
         </div>

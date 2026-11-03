@@ -21,6 +21,7 @@ import { recordLocalPausedQuestion, storedLearnerPauseScope } from '@/lib/learne
 import { TERMINAL_JOB_LOCK_SQL } from '@/lib/job-lock';
 import { recoverHelperJobs } from '@/lib/job-recovery';
 import { browserConnectionLost, invalidateBrowserConnection } from '@/lib/browser-connection';
+import { assertOperatorActive, enforceOperatorIdle } from '@/lib/operator-activity';
 
 interface JobRow extends Record<string, unknown> {
   id: string;
@@ -64,6 +65,7 @@ export async function createJob(userId: string, planId: string): Promise<{ jobId
   await recoverHelperJobs(userId, plan.helperId);
   const jobId = randomUUID();
   await withTransaction(async (sql) => {
+    if (plan.capabilityId !== 'close-browser') await assertOperatorActive(userId,plan.helperId,sql);
     // Serialize all queue requests for this helper, including separate browser tabs.
     const [helper] = await sql('select id from helpers where id = $1 and user_id = $2 and revoked_at is null for update', [plan.helperId, userId]);
     if (!helper) throw new Error('Helper is unavailable');
@@ -89,6 +91,7 @@ export async function createJob(userId: string, planId: string): Promise<{ jobId
 }
 
 export async function claimNextJob(helperId: string, userId: string): Promise<JobEnvelope | null> {
+  await enforceOperatorIdle(userId,helperId);
   await recoverHelperJobs(userId, helperId);
   const claimed = await queryOne<JobRow>(
     'select * from claim_next_helper_job($1::uuid, $2::text)',

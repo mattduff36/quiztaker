@@ -1,5 +1,29 @@
 # Hosted deployment and helper operations
 
+## Guided Operations and inactivity protection
+
+The course section guides connection, tab selection, the course goal and the
+current run. In-place refreshes preserve selection, input and focus. Visible
+idle pages poll context every 15 seconds; active runs every 3 seconds (job
+output every 2 seconds). Hidden or paused pages poll context every minute, and
+failed context requests back off to 30 seconds. Read-only browser tab checks
+run every 45 seconds only while no job is using the helper; a database
+reservation prevents duplicate checks from multiple Operations tabs. Returning
+to the page requests a fresh check. Old snapshots cannot authorise another run.
+
+Migration 0010_operator_activity adds the per-account/per-helper activity lease.
+Only actual user input renews it. At 28 minutes the page warns; after 30 minutes
+without input it pauses, cancels queued work and requests cancellation of active
+work. Browser tabs, credentials and learner conversation remain intact. Explicit
+Resume session is required; resuming does not replay cancelled jobs. Helper
+heartbeats and job admission enforce expiry even if the page is suspended or
+closed. An explicitly requested browser close remains available. All open
+Operations tabs share this state.
+
+Run npm run test:operations-ui for the offline desktop/mobile browser tests,
+including accelerated warning/pause/resume checks. Screenshots go into ignored
+test-results/operations-ui. No LMS, provider or production credentials are used.
+
 ## Automatic job recovery
 
 Heartbeats, Operations refreshes, job creation/polling and session ending reconcile

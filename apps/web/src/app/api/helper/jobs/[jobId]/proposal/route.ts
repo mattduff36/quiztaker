@@ -28,6 +28,7 @@ import {
   loadSecretLlmConnection,
 } from '@/lib/llm-provider';
 import { authenticateHelper } from '@/lib/security';
+import { enforceOperatorIdle, readOperatorActivity } from '@/lib/operator-activity';
 
 const control = z.object({
   id: z.string().max(8),
@@ -50,6 +51,8 @@ export async function POST(
 ) {
   const helper = await authenticateHelper(request);
   if (!helper) return NextResponse.json({ error: 'Unauthorized helper' }, { status: 401 });
+  await enforceOperatorIdle(helper.userId,helper.helperId);
+  if ((await readOperatorActivity(helper.userId,helper.helperId))?.paused) return NextResponse.json({stop:true,error:'Session paused after inactivity. Resume it in Operations.'});
   const { jobId } = await context.params;
   const job = await queryOne<{
     status: string;
