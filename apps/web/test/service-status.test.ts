@@ -1,10 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { serviceIndicators, servicePollDelay, type ServiceStatusSnapshot } from '../src/lib/service-status.js';
+import { browserStatusRelevant, serviceIndicators, servicePollDelay, type ServiceStatusSnapshot } from '../src/lib/service-status.js';
 
 const now = Date.parse('2026-11-03T18:00:00Z');
 const at = (age: number) => new Date(now - age).toISOString();
 const snapshot: ServiceStatusSnapshot = { checkedAt: at(0), helper: { online: true, lastSeenAt: at(10_000) }, browser: { connected: true, checkedAt: at(30_000) }, assistant: { ready: true, source: 'personal', provider: 'openai' } };
+
+test('browser indicator is limited to an active task or Operations browser session', () => {
+  assert.equal(browserStatusRelevant(null,'/settings'),false);
+  assert.equal(browserStatusRelevant(snapshot,'/'),false);
+  const session={...snapshot,activity:{session:true,task:false}};
+  assert.equal(browserStatusRelevant(session,'/'),true);
+  assert.equal(browserStatusRelevant(session,'/settings'),false);
+  assert.equal(browserStatusRelevant(session,'/history'),false);
+  assert.equal(browserStatusRelevant({...snapshot,activity:{session:false,task:true}},'/settings'),true);
+});
 
 test('fresh service evidence reports browser connection separately from assistant configuration', () => {
   const result = serviceIndicators({ snapshot, now });

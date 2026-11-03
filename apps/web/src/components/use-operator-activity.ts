@@ -9,6 +9,7 @@ export function useOperatorActivity(helperId: string) {
   const [ready,setReady] = useState(false), [paused,setPaused] = useState(false);
   const [remaining,setRemaining] = useState(OPERATOR_IDLE_MS), [error,setError] = useState('');
   const pausePending = useRef(false);
+  const controlLock=useRef(false); const [pending,setPending]=useState(false);
   const deadline = useRef(Date.now()+OPERATOR_IDLE_MS), isPaused = useRef(false), serverVersion = useRef(0);
   const sync = useCallback((value?: OperatorActivity | null) => {
     if (!value || (pausePending.current && !value.paused) || Date.parse(value.serverNow)<serverVersion.current) return;
@@ -24,9 +25,9 @@ export function useOperatorActivity(helperId: string) {
       sync(value); setError(''); return value;
     } catch (cause) {setError(cause instanceof Error?cause.message:'Could not update session protection.');return null;}
   },[helperId,sync]);
-  const pause = useCallback(async()=>{pausePending.current=true;isPaused.current=true;setPaused(true);try {await send('pause');} finally {pausePending.current=false;}},[send]);
+  const pause = useCallback(async()=>{if(controlLock.current)return;controlLock.current=true;setPending(true);pausePending.current=true;isPaused.current=true;setPaused(true);try {await send('pause');} finally {pausePending.current=false;controlLock.current=false;setPending(false);}},[send]);
   const expire = useCallback(async()=>{isPaused.current=true;setPaused(true);await send('check');},[send]);
-  const resume = useCallback(async()=>{await send('resume');},[send]);
+  const resume = useCallback(async()=>{if(controlLock.current)return;controlLock.current=true;setPending(true);try{await send('resume');}finally{controlLock.current=false;setPending(false);}},[send]);
   useEffect(()=>{
     void send('check');
     let lastPost=0, lastInput=0, trailing:ReturnType<typeof setTimeout>|undefined;
@@ -49,5 +50,5 @@ export function useOperatorActivity(helperId: string) {
     },1000);
     return()=>{clearInterval(timer);clearTimeout(trailing);events.forEach(name=>window.removeEventListener(name,activity));};
   },[send,expire]);
-  return {ready,paused,remainingMs:remaining,warning:!paused&&remaining<=OPERATOR_WARNING_MS,error,sync,pause,resume};
+  return {pending,ready,paused,remainingMs:remaining,warning:!paused&&remaining<=OPERATOR_WARNING_MS,error,sync,pause,resume};
 }

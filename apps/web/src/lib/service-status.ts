@@ -4,6 +4,12 @@ export interface ServiceStatusSnapshot {
   helper: { online: boolean; lastSeenAt: string | null } | null;
   browser: { connected: boolean; checkedAt: string | null } | null;
   assistant: { ready: boolean; source: string; provider: string | null };
+  activity?: { session: boolean; task: boolean };
+}
+
+/** Browser details belong to course work, rather than general site browsing. */
+export function browserStatusRelevant(snapshot: ServiceStatusSnapshot | null, pathname: string): boolean {
+  return snapshot?.activity?.task === true || (pathname === '/' && snapshot?.activity?.session === true);
 }
 
 export type ServiceTone = 'good' | 'warning' | 'bad' | 'unknown';

@@ -55,6 +55,8 @@ export function GuidedRunner(props: {
   onJob?: (job: {id: string;status: string;capability_id?: string}) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [stopPending,setStopPending]=useState(false);
+  const stopLock=useRef(false);
   const [stage, setStage] = useState('Ready when you are');
   const [message, setMessage] = useState('Choose the course tab. Vitriol will inspect it and decide how to proceed.');
   const [currentQuestion, setQuestion] = useState<Question | null>(null);
@@ -75,6 +77,7 @@ export function GuidedRunner(props: {
   const priorPage = useRef(props.selectedTarget);
   const locked = useRef(false);
   const stopped = useRef(false);
+  const cancellationRequested = useRef(false);
   const mounted = useRef(true);
   const runGeneration = useRef(0);
   const finalized = useRef(props.finalized);
@@ -114,7 +117,7 @@ export function GuidedRunner(props: {
   }, [busy, pauseTargetId, selectedTarget, onSelect]);
 
   useEffect(() => {
-    props.onStopControl?.(() => {stopped.current=true;runGeneration.current+=1;setStage('Stopping');setMessage('No further steps will be queued. Recording your task result.');});
+    props.onStopControl?.(() => {cancellationRequested.current=true;stopped.current=true;runGeneration.current+=1;setStage('Stopping');setMessage('No further steps will be queued. Recording your task result.');});
     return () => props.onStopControl?.(null);
   }, [props.onStopControl]);
 
@@ -163,7 +166,7 @@ export function GuidedRunner(props: {
   }
   useEffect(() => {
     if (!props.finalized) return;
-    stopped.current = true; runGeneration.current += 1; memoryRequest.current += 1;
+    cancellationRequested.current = true; stopped.current = true; runGeneration.current += 1; memoryRequest.current += 1;
     clearPageQuestion(); setGuidance(''); setRunOutput(''); setSettingsNeeded(false);
     objectiveEdited.current = false; setObjective('');
     setStage('Task recorded'); setMessage('Choose your next page and set a goal when you are ready.');
@@ -224,8 +227,11 @@ export function GuidedRunner(props: {
       if (!jobId) throw new Error('The browser refresh is still finishing. Try starting again.');
     }
     ownedJob.current = jobId;
-    // A stop can arrive while the queue request is in flight. Cancel that exact job.
-    if (stopped.current || !mounted.current) { await api(`/api/jobs/${jobId}`, undefined, 'DELETE'); checkStopped(); }
+    // Navigation stops this page's orchestration, not an acknowledged helper job.
+    if (cancellationRequested.current) { await api(`/api/jobs/${jobId}`, undefined, 'DELETE'); checkStopped(); }
+    if (!mounted.current) checkStopped();
+    // An explicit stop can arrive while the queue request is in flight.
+    if (stopped.current) { await api(`/api/jobs/${jobId}`, undefined, 'DELETE'); checkStopped(); }
     props.onJob?.({id:jobId,status:'queued',capability_id:capabilityId});
     return jobId;
   }
@@ -245,7 +251,7 @@ export function GuidedRunner(props: {
 
   async function start(quickReply?: string) {
     if (locked.current || !(pauseTab || selected) || !props.ready || props.active || props.paused || props.suspended || !objective.trim()) return;
-    locked.current = true; stopped.current = false;
+    locked.current = true; stopped.current = false; cancellationRequested.current = false;
     props.onTaskStart?.();
     finalized.current = false;
     const generation = ++runGeneration.current;
@@ -362,12 +368,14 @@ export function GuidedRunner(props: {
   }
 
   async function stop() {
-    stopped.current = true;
+    if(stopLock.current)return; stopLock.current=true;setStopPending(true);
+    cancellationRequested.current = true; stopped.current = true;
     setStage('Stopping'); setMessage('No further steps will be queued. Waiting for the helper to stop the current job.');
     if (ownedJob.current) {
       try { await api(`/api/jobs/${ownedJob.current}`, undefined, 'DELETE'); }
       catch { setMessage('The stop request could not be confirmed. Use Cancel in Advanced tools or stop the helper.'); }
-    }
+      finally {stopLock.current=false;setStopPending(false);}
+    } else {stopLock.current=false;setStopPending(false);}
   }
 
   useEffect(()=>{if((props.paused || props.suspended)&&busy)void stop();},[props.paused,props.suspended]);
@@ -381,14 +389,14 @@ export function GuidedRunner(props: {
     <ol aria-label="Course setup progress" className="grid grid-cols-2 gap-x-4 gap-y-3 border-y border-slate-200 py-4 sm:grid-cols-4">{['Connect browser','Choose course','Set a goal','Start and follow'].map((step,index)=><li key={step} aria-current={index===currentStep?'step':undefined} className={`flex items-center gap-2 text-sm ${index===currentStep?'font-semibold text-cyan-800':index<currentStep?'text-slate-700':'text-slate-500'}`}><span className={`flex size-6 shrink-0 items-center justify-center rounded-full text-xs ${index<currentStep?'bg-emerald-100 text-emerald-800':index===currentStep?'bg-cyan-100 text-cyan-900':'bg-slate-100 text-slate-500'}`}>{index<currentStep?<Check className="size-3.5"/>:index+1}</span>{step}</li>)}</ol>
     {!connected ? <div className="space-y-3" role="status"><h3 className="font-semibold text-slate-950">{props.connection==='helper-offline'?'Connect your Windows helper first':props.snapshotStale?'Let’s check your browser again':'Start your course browser'}</h3><p className="max-w-2xl text-sm leading-6 text-slate-600">{props.connection==='helper-offline'?'Open Vitriol Helper on this PC. Once it is online, the course controls will become available.':'Use the browser window opened by Vitriol for your course. Sign in there if asked, then come back and choose the course tab below.'}</p>{props.connection==='helper-offline'?<a href="/helper" className="inline-flex min-h-11 items-center rounded-md bg-slate-950 px-4 text-sm font-semibold text-white">Open helper setup</a>:<button type="button" disabled={busy||props.active||props.paused||props.suspended} onClick={props.snapshotStale?props.onRefreshTabs:props.onConnect} className="min-h-11 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white disabled:opacity-40">{props.snapshotStale?'Check browser now':'Connect browser'}</button>}</div>:null}
     <div className="grid gap-6 lg:grid-cols-2">
-    <div className="space-y-2"><div className="flex items-center justify-between gap-3"><label htmlFor="guided-course-tab" className="text-sm font-semibold text-slate-800">Choose your course tab</label><button type="button" onClick={props.onRefreshTabs} disabled={!connected||busy||props.active||props.paused||props.suspended} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-semibold text-cyan-800 hover:bg-cyan-50 disabled:opacity-40"><RefreshCw className="size-3.5"/>Refresh tabs</button></div>
+    <div className="space-y-2"><div className="flex items-center justify-between gap-3"><label htmlFor="guided-course-tab" className="text-sm font-semibold text-slate-800">Choose your course tab</label><button type="button" onClick={props.onRefreshTabs} disabled={!connected||busy||props.active||props.paused||props.suspended||props.refreshing} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-semibold text-cyan-800 hover:bg-cyan-50 disabled:opacity-40"><RefreshCw className={`size-3.5 ${props.refreshing ? 'animate-spin' : ''}`}/>{props.refreshing ? 'Refreshing tabs…' : 'Refresh tabs'}</button></div>
       <select id="guided-course-tab" aria-label="Course tab" value={props.selectedTarget} disabled={!connected || busy || props.active || props.paused || props.suspended} onChange={(event) => { props.onSelect(event.target.value); clearPageQuestion(); setStage('Ready when you are'); setMessage('Your course is selected. Check the goal, then start.'); }} className="min-h-12 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm font-normal focus-visible:outline-2 focus-visible:outline-cyan-700">
         <option value="">Choose the course you opened</option>{courseTabs.map((tab) => <option key={tab.targetId} value={tab.targetId}>{tab.title || 'Untitled page'} · tab {tab.index+1}</option>)}
       </select>
       {selected?<p className="break-all text-xs leading-5 text-slate-500">{new URL(selected.url).origin}</p>:<p className="text-xs leading-5 text-slate-600">{connected&&courseTabs.length===0?'No course page is open yet. Open it in the Vitriol browser, then refresh these tabs.':'Only website tabs are shown. If your course is missing, open it in the Vitriol browser and refresh.'}</p>}
       {props.refreshError?<p role="alert" className="text-sm text-rose-800">{props.refreshError}</p>:null}
     </div>
-    <div className="space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={busy || props.active || props.paused || props.suspended} onChange={event => { setMode(event.target.value as 'read' | 'quiz'); clearPageQuestion(); }} className="min-h-12 rounded-md border border-slate-300 bg-white px-3 font-normal"><option value="read">Read course material</option><option value="quiz">Take the quiz</option></select></label>
+    <div hidden={!selected || courseTabs.length===0} className="space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={busy || props.active || props.paused || props.suspended} onChange={event => { setMode(event.target.value as 'read' | 'quiz'); clearPageQuestion(); }} className="min-h-12 rounded-md border border-slate-300 bg-white px-3 font-normal"><option value="read">Read course material</option><option value="quiz">Take the quiz</option></select></label>
     <label className="grid gap-2 text-sm font-semibold text-slate-800">What would you like to achieve?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setObjective(event.target.value.slice(0, OBJECTIVE_LIMIT)); }} disabled={busy || props.active || props.paused || props.suspended} maxLength={OBJECTIVE_LIMIT} rows={3} placeholder="For example: read this module, then help me with its quiz." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6 focus-visible:outline-2 focus-visible:outline-cyan-700" /><span className="text-xs font-normal text-slate-600">Collected course material stays available across pages. Check your goal when changing pages.</span></label></div>
     </div>
     {!question ? <div role="status" aria-live="polite" className="border-t border-slate-200 pt-5"><p className="font-semibold text-slate-950">{props.paused?'Waiting for your session to resume':props.refreshing?'Updating your course tabs':stage}</p><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{props.paused?'Use Resume session above. Your goal, replies and browser tabs are kept.':!connected?'Connect the helper and browser to continue.':!selected?'Choose your course tab above. Vitriol will read the page and explain the next step.':message}</p></div> : null}
@@ -412,8 +420,8 @@ export function GuidedRunner(props: {
       </> : null}
     </section> : null}
     <div className="flex flex-wrap items-center gap-3">
-      {(!question?.model || showReplyField || busy) ? <button type="button" onClick={() => void start()} disabled={!props.ready || !(pauseTab || selected) || !objective.trim() || busy || props.active || props.paused || props.suspended || Boolean(question?.model && !answer.trim())} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}{busy ? 'Working…' : question?.model ? 'Send answer and continue' : question?.next || 'Inspect and start'}</button> : null}
-      {busy ? <button type="button" onClick={() => void stop()} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold"><Square className="size-4" />Stop</button> : null}
+      {(selected || busy || question) && (!question?.model || showReplyField || busy) ? <button type="button" onClick={() => void start()} disabled={!props.ready || !(pauseTab || selected) || !objective.trim() || busy || props.active || props.paused || props.suspended || Boolean(question?.model && !answer.trim())} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}{busy ? 'Working…' : question?.model ? 'Send answer and continue' : question?.next || 'Inspect and start'}</button> : null}
+      {busy ? <button type="button" disabled={stopPending} aria-busy={stopPending} onClick={() => void stop()} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold"><Square className="size-4" />{stopPending ? 'Requesting stop…' : 'Stop'}</button> : null}
       {settingsNeeded ? <a href="/settings" className="font-semibold text-cyan-800 underline">Connect or test AI in Settings</a> : null}
     </div>
     {currentMemory?.id ? <div className="space-y-3 border-t border-slate-200 pt-5">

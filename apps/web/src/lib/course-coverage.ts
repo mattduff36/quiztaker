@@ -14,6 +14,19 @@ const bounded = (text: string) => text.replace(/\s+/g, ' ').trim().slice(0, 160)
 export function coverageSource(raw: string): string | null {
   try { const url = new URL(raw); return /^https?:$/.test(url.protocol) && !url.username && !url.password ? `${url.origin}${url.pathname}`.slice(0, 500) : null; } catch { return null; }
 }
+// Coverage describes authored course material, not the portal chrome or an assessment.
+function materialLabel(raw: string): boolean {
+  const label = normalize(raw);
+  return Boolean(label) && !/^(?:achieve your potential(?: canonhub)?|canonhub|online course session expired|session (?:expired|has expired)|examination instructions?|exam instructions?|test disclaimer|test results?(?: .*)?|scores? by section|select the branch(?: .*)?|your topics|your playlists|overdue|create (?:a )?playlist|dashboard|home|log ?in|sign in|assessments?|examinations?|evaluations?|tests?|results?|reviews?|review answers|knowledge checks?|quiz(?:zes)?|start (?:test|exam|assessment)|submit(?: answers)?|next|previous|back|menu|navigation|search|help|settings|logout|log out)$/.test(label);
+}
+function materialSource(source: string): boolean {
+  const url = new URL(source);
+  return url.pathname !== '/' && !/(?:^|\/)(?:dashboard|portal|home|login|signin|sign-in|auth|sso|tests?|assessments?|exams?|examinations?|evaluations?|results?|reviews?|test-results|session-expired)(?:[/.;]|$)/i.test(url.pathname)
+    && !/(?:^|\.)(?:login\d*|auth|sso)\./i.test(url.hostname);
+}
+function materialSection(section: { heading: string; text: string }): boolean {
+  return materialLabel(section.heading) && !/^(?:online course )?session (?:has )?expired\b|^examination instructions\b|^test disclaimer\b/i.test(section.text.trim());
+}
 function topicMatches(heading: string, title: string): boolean {
   const a = normalize(heading), b = normalize(title);
   return a === b || (b.length >= 9 && a.endsWith(b)) || (a.length >= 9 && b.endsWith(a));
@@ -32,17 +45,19 @@ export function coverageSections(text: string): Array<{ source: string; heading:
 /** Inventory means observed menu/topic labels; an excerpt means some material, never complete learning. */
 export function mergeCourseCoverage(previous: CourseCoverage | undefined, outline: { url: string; title: string; topics: string[] }, observedText: string, retainedTexts: string[], at: string): CourseCoverage | null {
   const source = coverageSource(outline.url);
-  if (!source) return null;
-  const inventory = [...new Map(outline.topics.slice(0, 60).map(title => [normalize(title), bounded(title)])).values()].filter(Boolean);
-  const topics: CoverageTopic[] = (previous?.topics || []).map(topic => ({ ...topic }));
+  if (!source || !materialSource(source) || !materialLabel(outline.title)) return null;
+  // Never carry flags or labels across sources, including old malformed metadata.
+  const priorCoverage = previous && coverageSource(previous.source) === source ? previous : undefined;
+  const inventory = [...new Map(outline.topics.filter(materialLabel).slice(0, 60).map(title => [normalize(title), bounded(title)])).values()];
+  const topics: CoverageTopic[] = (priorCoverage?.topics || []).filter(topic => materialLabel(topic.title)).map(topic => ({ ...topic }));
   for (const title of inventory) {
     const prior = topics.find(topic => topicMatches(topic.title, title));
     if (prior) prior.title = title;
     else if (topics.length < 60) topics.push({ title, collectedChars: 0 });
   }
-  const observed = coverageSections(observedText).filter(section => section.source === source && section.text.length > 0);
-  const collected = retainedTexts.flatMap(coverageSections).filter(section => section.source === source && section.text.length >= 80);
-  if (!inventory.length && !previous?.inventoryObserved) for (const section of [...observed, ...collected]) {
+  const observed = coverageSections(observedText).filter(section => section.source === source && section.text.length > 0 && materialSection(section));
+  const collected = retainedTexts.flatMap(coverageSections).filter(section => section.source === source && section.text.length >= 80 && materialSection(section));
+  if (!inventory.length && !priorCoverage?.inventoryObserved) for (const section of [...observed, ...collected]) {
     if (section.heading && !topics.some(topic => topicMatches(section.heading, topic.title)) && topics.length < 60) topics.push({ title: section.heading, collectedChars: 0 });
   }
   for (const topic of topics) {
@@ -52,12 +67,14 @@ export function mergeCourseCoverage(previous: CourseCoverage | undefined, outlin
     if (material) { topic.visitedAt ||= at; topic.collectedAt ||= at; }
     topic.collectedChars = Math.max(topic.collectedChars || 0, material?.text.length || 0);
   }
-  return { source, title: bounded(outline.title) || previous?.title || 'Course material', inventoryObserved: inventory.length > 0 || previous?.inventoryObserved === true, topics: topics.slice(0, 60), updatedAt: at };
+  if (!topics.length) return null;
+  return { source, title: bounded(outline.title), inventoryObserved: inventory.length > 0 || (priorCoverage?.inventoryObserved === true && topics.length > 0), topics: topics.slice(0, 60), updatedAt: at };
 }
 
 async function retainedCourseTexts(userId: string, query: SqlQuery): Promise<string[]> {
-  const rows = await query<{ materials: Array<{ text?: string }> }>(`select materials from learner_sessions where user_id = $1 order by updated_at desc limit 1`, [userId]);
-  return (rows[0]?.materials || []).slice(-64).map(item => String(item.text || '').slice(0, 8000));
+  const rows = await query<{ materials: Array<{ text?: string }> }>(`select materials from learner_sessions where user_id = $1 order by updated_at desc limit 32`, [userId]);
+  // Bounded account history; source matching happens before any coverage is credited.
+  return rows.flatMap(row => (row.materials || []).slice(-64).map(item => String(item.text || '').slice(0, 8000)));
 }
 
 export async function recordCourseCoverage(input: { userId: string; attemptId: string; snapshot: CoverageSnapshot }, deps = defaultDeps()): Promise<void> {
@@ -66,7 +83,7 @@ export async function recordCourseCoverage(input: { userId: string; attemptId: s
   const retained = await retainedCourseTexts(input.userId, deps.query);
   for (const outline of outlines) {
     const source = coverageSource(outline.url);
-    if (!source) continue;
+    if (!source || !materialSource(source) || !materialLabel(outline.title)) continue;
     const fingerprint = createHash('sha256').update(source).digest('hex').slice(0, 32);
     await deps.transaction(async query => {
       await query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`course-coverage:${input.userId}:${fingerprint}`]);

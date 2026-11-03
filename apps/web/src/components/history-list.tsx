@@ -3,6 +3,7 @@
 import { parseAsString, useQueryState } from 'nuqs';
 import { Search } from 'lucide-react';
 import { formatDisplayDate } from '@/lib/display-date';
+import { historyResult } from '@/lib/history-result';
 
 interface HistoryRow {
   id: number;
@@ -14,15 +15,6 @@ interface HistoryRow {
   payload?: { outputUrl?: string; diagnosis?: { likelyCause?: { label?: string } } } | null;
 }
 
-interface SessionRow {
-  id: string;
-  status: string;
-  started_at: string;
-  ended_at: string | null;
-  recap: { items?: number; courses?: number; error?: string };
-  needs_review: Array<{ title?: string; result?: string }>;
-}
-
 interface JobRow {
   id: string;
   capability_id: string;
@@ -32,9 +24,8 @@ interface JobRow {
   created_at: string;
 }
 
-export function HistoryList({ rows, sessions = [], jobs = [] }: {
+export function HistoryList({ rows, jobs = [] }: {
   rows: HistoryRow[];
-  sessions?: SessionRow[];
   jobs?: JobRow[];
 }) {
   const [query, setQuery] = useQueryState('q', parseAsString.withDefault(''));
@@ -42,23 +33,11 @@ export function HistoryList({ rows, sessions = [], jobs = [] }: {
   const normalized = query.trim().toLowerCase();
   const visibleRows = rows.filter((row) => (
     (!kind || row.kind === kind) &&
-    (!normalized || `${row.title} ${row.result} ${row.detail} ${row.kind}`.toLowerCase().includes(normalized))
+    (!normalized || `${row.title} ${historyResult(row.result,row.payload)} ${row.detail} ${row.kind}`.toLowerCase().includes(normalized))
   ));
   const kinds = [...new Set(rows.map((row) => row.kind))];
   return (
     <div>
-      {sessions.length ? (
-        <div className="mb-5 grid gap-3 md:grid-cols-2">
-          {sessions.map((session) => (
-            <article key={session.id} className="rounded-lg border border-slate-300 bg-white p-4 text-sm">
-              <p className="font-semibold text-slate-950">Session {session.status}</p>
-              <p className="mt-1 text-slate-500">{formatDisplayDate(session.started_at)}{session.ended_at ? ` – ${formatDisplayDate(session.ended_at)}` : ''}</p>
-              <p className="mt-2 text-slate-600">{session.recap?.courses ?? 0} courses in {session.recap?.items ?? 0} events{session.recap?.error ? ` · ${session.recap.error}` : ''}</p>
-              {session.needs_review?.length ? <p className="mt-2 text-amber-800">{session.needs_review.length} items need review</p> : null}
-            </article>
-          ))}
-        </div>
-      ) : null}
       {jobs.length ? (
         <details className="mb-5 overflow-hidden rounded-lg border border-slate-300 bg-white">
           <summary className="cursor-pointer px-5 py-3 text-sm font-semibold text-slate-800">Detailed automation logs</summary>
@@ -99,7 +78,7 @@ export function HistoryList({ rows, sessions = [], jobs = [] }: {
               {row.payload?.diagnosis?.likelyCause?.label ? <p className="mt-1 text-sm text-amber-800">{row.payload.diagnosis.likelyCause.label}</p> : null}
               {row.payload?.outputUrl ? <a className="mt-1 inline-block text-sm font-semibold text-cyan-800" href={row.payload.outputUrl}>Artifact</a> : null}
             </div>
-            <p className="text-sm font-semibold text-slate-700 md:text-right">{row.result}</p>
+            <p className="text-sm font-semibold text-slate-700 md:text-right">{historyResult(row.result,row.payload)}</p>
           </article>
         )) : <p className="p-8 text-sm text-slate-500">No matching history events.</p>}
       </div>

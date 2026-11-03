@@ -1,12 +1,14 @@
 'use client';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { serviceIndicators, servicePollDelay, type ServiceStatusSnapshot, type ServiceTone } from '@/lib/service-status';
+import { browserStatusRelevant, serviceIndicators, servicePollDelay, type ServiceStatusSnapshot, type ServiceTone } from '@/lib/service-status';
 
 const dots: Record<ServiceTone, string> = { good: 'bg-emerald-600', warning: 'bg-amber-600', bad: 'bg-rose-600', unknown: 'bg-slate-400' };
 
 export function ServiceStatusBar() {
+  const pathname = usePathname();
   const [snapshot, setSnapshot] = useState<ServiceStatusSnapshot | null>(null);
   const [failed, setFailed] = useState(false);
   const [offline, setOffline] = useState(false);
@@ -57,7 +59,7 @@ export function ServiceStatusBar() {
     };
   }, []);
 
-  const indicators = serviceIndicators({ snapshot, now, failed, offline });
+  const indicators = serviceIndicators({ snapshot, now, failed, offline }).filter(item => item.id !== 'browser' || browserStatusRelevant(snapshot, pathname));
   return (
     <nav aria-label="Service status" className="sticky top-0 z-20 max-w-full overflow-x-auto border-b border-slate-200 bg-white px-5 sm:px-8 lg:px-12">
       <ul className="flex w-max min-w-full items-center gap-5 text-xs text-slate-700" aria-live="polite" aria-atomic="true">

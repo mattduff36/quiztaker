@@ -48,6 +48,72 @@ test('coverage bounds and deduplicates inventory without claiming learned or com
   assert.doesNotMatch(html, /60 learned|100%|Complete/);
 });
 
+test('course coverage rejects portal, expired sessions, assessment and results inventory', () => {
+  for (const title of ['Achieve your potential: CanonHub', 'Online course session expired', 'Examination Instructions']) {
+    assert.equal(mergeCourseCoverage(undefined, { ...outline, title }, excerpt('Paper types'), [excerpt('Paper types')], at), null);
+  }
+  for (const path of ['/dashboard', '/Tests/index.html', '/Evaluations/2427', '/results', '/auth/login']) {
+    assert.equal(mergeCourseCoverage(undefined, { ...outline, url: `https://canon.example${path}` }, '', [], at), null);
+  }
+  const junk = ['Test Results - Matthew Duffill', 'Scores By Section', 'Select the Branch that you want to play further', 'Your topics', 'Your playlists', 'Overdue', 'Create playlist', 'Examination Instructions', 'Test disclaimer', 'Evaluations', 'Tests'];
+  assert.equal(mergeCourseCoverage(undefined, { ...outline, topics: junk }, '', junk.map(heading => excerpt(heading)), at), null);
+  const clean = mergeCourseCoverage(undefined, { ...outline, url: 'https://canon.example/publications/2427/course_en/index.html', topics: [...junk, 'Test print troubleshooting', 'Paper production'] }, '', [], at)!;
+  assert.deepEqual(clean.topics.map(topic => topic.title), ['Test print troubleshooting', 'Paper production']);
+  assert.equal(clean.topics[0].collectedAt, undefined);
+  assert.ok(mergeCourseCoverage(undefined, { ...outline, url: 'https://canon.example/lesson' }, '', [], at));
+});
+
+test('saved polluted labels disappear and source-mismatched old coverage cannot confer credit', () => {
+  const previous: CourseCoverage = { source, title: outline.title, inventoryObserved: true, updatedAt: at, topics: [
+    { title: 'Your topics', collectedChars: 900, collectedAt: at, visitedAt: at },
+    { title: 'Paper types', collectedChars: 180, collectedAt: at, visitedAt: at },
+  ] };
+  const clean = mergeCourseCoverage(previous, { ...outline, topics: previous.topics.map(topic => topic.title) }, '', [], at)!;
+  assert.deepEqual(clean.topics.map(topic => topic.title), ['Paper types']);
+  assert.equal(clean.topics[0].collectedAt, at);
+  const unrelated = mergeCourseCoverage(previous, { ...outline, url: 'https://canon.example/lesson' }, '', [excerpt('Paper types')], at)!;
+  assert.ok(unrelated.topics.every(topic => !topic.visitedAt && !topic.collectedAt));
+  const error = `[Source: ${source} | Paper types | scroll 0]\nOnline course session expired ${'Please sign in again. '.repeat(12)}`;
+  const uncollected = mergeCourseCoverage(undefined, outline, error, [error], at)!;
+  assert.ok(uncollected.topics.every(topic => !topic.visitedAt && !topic.collectedAt));
+});
+
+test('read cleans historic metadata without deleting artifacts and retains source-bound earlier sessions', async () => {
+  const polluted: CourseCoverage = { source, title: 'Paper theory', inventoryObserved: true, updatedAt: at, topics: [
+    { title: 'Your playlists', collectedChars: 100, collectedAt: at }, { title: 'Paper types', collectedChars: 0 },
+  ] };
+  const queries: string[] = [];
+  const query: SqlQuery = async <T>(sql: string, values: unknown[] = []) => {
+    queries.push(sql);
+    assert.equal(values[0], 'owner');
+    if (sql.includes('from learner_sessions')) return [
+      { materials: [{ text: excerpt('Paper types', 'https://canon.example/other-lesson') }] },
+      { materials: [{ text: excerpt('Paper types') }] },
+    ] as T[];
+    if (sql.includes('from strategies')) return [{ id: 'one', evidence: polluted }, { id: 'two', evidence: { ...polluted, title: 'Achieve your potential: CanonHub' } }] as T[];
+    throw new Error(`Unexpected mutation ${sql}`);
+  };
+  const courses = await readCourseCoverage('owner', { query, transaction: fn => fn(query), now: () => new Date(at) });
+  assert.equal(courses.length, 1);
+  assert.deepEqual(courses[0].topics.map(topic => topic.title), ['Paper types']);
+  assert.ok(courses[0].topics[0].collectedAt);
+  assert.match(queries.find(sql => sql.includes('from learner_sessions'))!, /user_id = \$1.*limit 32/);
+  assert.equal(polluted.topics.length, 2);
+});
+
+test('record does not persist portal or assessment-only snapshots', async () => {
+  const query: SqlQuery = async <T>(sql: string) => {
+    if (sql.includes('from learner_sessions') || sql.includes('pg_advisory') || sql.includes('select id, evidence')) return [] as T[];
+    throw new Error(`Unexpected coverage write ${sql}`);
+  };
+  const deps: CoverageDeps = { query, transaction: fn => fn(query), now: () => new Date(at) };
+  await recordCourseCoverage({ userId: 'owner', attemptId: 'junk', snapshot: { outlines: [
+    { ...outline, title: 'Achieve your potential: CanonHub' },
+    { ...outline, url: 'https://canon.example/Tests/2427' },
+    { ...outline, topics: ['Test Results - Matthew Duffill', 'Scores By Section'] },
+  ] } }, deps);
+});
+
 test('persistence query harness keeps sources and retained material scoped to their owner', async () => {
   const rows = new Map<string, CourseCoverage>();
   const materials = new Map<string, Array<{ text: string }>>();

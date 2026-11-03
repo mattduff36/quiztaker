@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateHelper } from '@/lib/security';
 import { queryRows } from '@/lib/db';
+import { historyResult } from '@/lib/history-result';
 
 const historyEvent = z.object({
   sourceId: z.string().min(1).max(500),
@@ -74,7 +75,7 @@ export async function POST(request: Request) {
           source_id: item.sourceId,
           kind: item.kind,
           title: item.title,
-          result: item.result,
+          result: historyResult(item.result,item.payload),
           detail: item.detail,
           occurred_at: item.occurredAt,
           payload: item.payload,

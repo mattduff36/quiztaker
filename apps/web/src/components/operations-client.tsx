@@ -124,6 +124,10 @@ export function OperationsClient(props: { helperId: string }) {
   const [outputJobId, setOutputJobId] = useState('');
   const [job, setJob] = useState<ContextResponse['activeJob']>(null);
   const [operationBusy, setBusy] = useState(false);
+  const [contextBusy, setContextBusy] = useState(true);
+  const [refreshPending, setRefreshPending] = useState(false);
+  const [refreshJobId, setRefreshJobId] = useState<string | null>(null);
+  const [actionLabel, setActionLabel] = useState('Sending request…');
   const [guidedBusy, setGuidedBusy] = useState(false);
   const [finishedTask, setFinishedTask] = useState<{jobId: string; result: 'completed' | 'failed'; stopping: boolean} | null>(null);
   const [taskReset, setTaskReset] = useState(0);
@@ -152,7 +156,7 @@ export function OperationsClient(props: { helperId: string }) {
 
   const load = useCallback(async () => {
     if (loadingContext.current) return;
-    loadingContext.current=true;
+    loadingContext.current=true; setContextBusy(true);
     const requestId = ++contextRequest.current;
     try {
       const response = await fetch('/api/operations/context', { cache: 'no-store', signal: AbortSignal.timeout(15_000) });
@@ -175,7 +179,7 @@ export function OperationsClient(props: { helperId: string }) {
     } catch (cause) {
       if (requestId !== contextRequest.current) return;
       setContextError(errorMessage(cause, 'Could not check the connection. Check your network and retry.'));
-    } finally { loadingContext.current=false; }
+    } finally { loadingContext.current=false; setContextBusy(false); }
   }, [activity.sync]);
 
   useEffect(() => { void load(); }, [load]);
@@ -194,22 +198,37 @@ export function OperationsClient(props: { helperId: string }) {
   },[load]);
 
   const refreshBrowser = useCallback(async(force=false)=>{
-    if ((!force && (awaitingQuestion || finishedTask)) || refreshLock.current || actionLock.current || guidedLock.current || updateBusy || !activity.ready || activity.paused || !visible || operationBusy || guidedBusy || active || replacingHelper || !context?.helper?.is_online) return;
+    if ((!force && (!context?.session?.cdp_connected || awaitingQuestion)) || refreshLock.current || refreshPending || actionLock.current || guidedLock.current || updateBusy || !activity.ready || activity.paused || !visible || operationBusy || guidedBusy || active || replacingHelper || !context?.helper?.is_online) return;
     if(!force && Date.now()-browserProbe.current<BROWSER_REFRESH_MS)return;
     browserProbe.current=Date.now();
-    refreshLock.current=true;
+    refreshLock.current=true; setRefreshPending(true);
     try {
       const response=await fetch('/api/operations/activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({helperId:props.helperId,action:'refresh',force}),signal:AbortSignal.timeout(15_000)});
-      await readJsonResponse(response,'Could not refresh browser tabs.');setRefreshError('');await load();
-    } catch(cause){setRefreshError(errorMessage(cause,'Could not refresh browser tabs. Check the helper and retry.'));}
+      const value=await readJsonResponse<{status?:string;jobId?:string}>(response,'Could not refresh browser tabs.');
+      setRefreshJobId(value.jobId ?? null); if (!value.jobId) setRefreshPending(false);
+      setRefreshError('');await load();
+    } catch(cause){setRefreshPending(false);setRefreshError(errorMessage(cause,'Could not refresh browser tabs. Check the helper and retry.'));}
     finally { refreshLock.current=false; }
-  },[awaitingQuestion,activity.ready,activity.paused,visible,operationBusy,guidedBusy,active,replacingHelper,updateBusy,finishedTask,context?.helper?.is_online,props.helperId,load]);
+  },[refreshPending,awaitingQuestion,activity.ready,activity.paused,visible,operationBusy,guidedBusy,active,replacingHelper,updateBusy,finishedTask,context?.helper?.is_online,context?.session?.cdp_connected,props.helperId,load]);
 
   useEffect(()=>{
     void refreshBrowser();
     const timer=window.setInterval(()=>void refreshBrowser(),BROWSER_REFRESH_MS);
     return()=>window.clearInterval(timer);
   },[refreshBrowser]);
+
+  useEffect(() => {
+    if (!refreshJobId) return;
+    let disposed=false, inFlight=false;
+    const check=async()=>{if(disposed||inFlight)return;inFlight=true;try {
+      const response=await fetch(`/api/jobs/${refreshJobId}`,{cache:'no-store',signal:AbortSignal.timeout(15_000)});
+      if(response.status===404||response.status===410){if(!disposed){setRefreshPending(false);setRefreshJobId(null);setRefreshError('The browser check is no longer available. Check the browser again.');}return;}
+      const value=await readJsonResponse<{job: {status:string}}>(response,'Could not check browser refresh.');
+      if (!disposed && !isRunningJob(value.job)) {setRefreshPending(false);setRefreshJobId(null);void load();}
+    } catch(cause) {if(!disposed){setRefreshError(errorMessage(cause,'Could not check browser refresh.'));}}finally{inFlight=false;}};
+    void check(); const timer=window.setInterval(()=>void check(),2000);
+    return()=>{disposed=true;window.clearInterval(timer);};
+  },[refreshJobId,load]);
 
   const jobId = job?.id;
   const jobStatus = job?.status;
@@ -246,7 +265,10 @@ export function OperationsClient(props: { helperId: string }) {
 
   const readiness = connectionState(context, Boolean(contextError));
   const helperReady = !contextError && context?.helper?.is_online === true;
-  const snapshotStale = Boolean(context?.session?.updated_at && Date.now()-Date.parse(context.session.updated_at)>SNAPSHOT_STALE_MS && !active && !guidedBusy);
+  const snapshotStale = readiness === 'connected' && (!context?.session?.updated_at || !Number.isFinite(Date.parse(context.session.updated_at)) || Date.now()-Date.parse(context.session.updated_at)>SNAPSHOT_STALE_MS) && !foregroundActive && !guidedBusy;
+  const normalCourseVisible = readiness === 'connected' && !snapshotStale && !replacingHelper;
+  const hasCourseTab = Boolean(context?.session?.tabs?.some(tab=>/^https?:\/\//.test(tab.url)));
+  const canEndBrowser = helperReady && readiness === 'connected' && !replacingHelper;
   const browserReady = readiness === 'connected' && !snapshotStale;
   const session = context?.session;
   const selected = session?.tabs?.find((tab) => tab.targetId === selectedTarget) ?? null;
@@ -274,7 +296,7 @@ export function OperationsClient(props: { helperId: string }) {
     if (operationNeedsBrowser(capabilityId) && !browserReady) return setError('Connect the browser before sending this operation.');
     if (capabilityId === 'open-url' && !isWebUrl(String(capabilityInput.url ?? ''))) return setError('Enter a valid http:// or https:// URL.');
     actionLock.current = true; contextRequest.current += 1;
-    setBusy(true);
+    setBusy(true); setActionLabel(capabilityId === 'start-browser' ? 'Starting browser…' : 'Sending request…');
     setError('');
     try {
       const response = await fetch('/api/operations/actions', {
@@ -342,7 +364,8 @@ export function OperationsClient(props: { helperId: string }) {
   }
 
   async function dismissPlan() {
-    if (operationBusy) return;
+    if (actionLock.current) return;
+    actionLock.current=true;setBusy(true);setActionLabel('Cancelling plan…');
     try {
       if (pendingPlan) {
         const response = await fetch(`/api/plans/${pendingPlan.planId}/cancel`, { method: 'POST' });
@@ -350,6 +373,7 @@ export function OperationsClient(props: { helperId: string }) {
       }
       setPendingPlan(null);
     } catch (cause) { setError(errorMessage(cause, 'Could not cancel the plan. Check your network and retry.')); }
+    finally {actionLock.current=false;setBusy(false);}
   }
 
   function openHelperDownload(installerAvailable: boolean) {
@@ -387,7 +411,7 @@ export function OperationsClient(props: { helperId: string }) {
         return;
       }
       if (value.status === 'queued') {
-        setUpdateNote(`The helper is downloading v${value.version}. It will close, install the update, and open again.`);
+        setUpdateNote(`Update v${value.version} is queued. Waiting for the helper to report progress.`);
         await load();
         return;
       }
@@ -404,7 +428,7 @@ export function OperationsClient(props: { helperId: string }) {
     if (actionLock.current) return;
     actionLock.current = true; contextRequest.current += 1;
     stopGuided.current?.();
-    setBusy(true);
+    setBusy(true); setActionLabel('Ending browser session…');
     setError('');
     try {
     const response = await fetch('/api/operations/actions', {
@@ -428,7 +452,7 @@ export function OperationsClient(props: { helperId: string }) {
     const jobId = job.id;
     actionLock.current = true;
     stopGuided.current?.();
-    setBusy(true); setError('');
+    setBusy(true); setActionLabel('Recording task result…'); setError('');
     try {
       const response = await fetch('/api/operations/tasks/finish', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({helperId:props.helperId,jobId,result}),signal:AbortSignal.timeout(20_000)});
       const value = await readJsonResponse<{status: 'completed' | 'failed' | 'stopping'}>(response,'Could not record the task result. Retry when connected.');
@@ -445,7 +469,7 @@ export function OperationsClient(props: { helperId: string }) {
     if (actionLock.current || (!recovery && busy)) return;
     actionLock.current = true; contextRequest.current += 1;
     if(options.method==='DELETE')stopGuided.current?.();
-    setBusy(true);
+    setBusy(true); setActionLabel('Sending request…');
     setError('');
     try {
       const response = await fetch(url, options);
@@ -467,37 +491,41 @@ export function OperationsClient(props: { helperId: string }) {
         }}>
           {(['normal', 'advanced'] as const).map(mode => <button key={mode} type="button" role="tab" id={`${viewId}-${mode}-tab`} aria-controls={`${viewId}-${mode}-panel`} aria-selected={view === mode} tabIndex={view === mode ? 0 : -1} onClick={() => setView(mode)} className={`min-h-11 border-b-2 px-1 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 ${view === mode ? 'border-cyan-700 text-cyan-900' : 'border-transparent text-slate-600 hover:text-slate-950'}`}>{mode === 'normal' ? 'Normal' : 'Advanced'}</button>)}
         </div>
-        {activity.ready && !activity.paused ? <button type="button" onClick={() => void activity.pause()} className="min-h-11 rounded-md px-3 text-sm font-medium text-slate-700 hover:bg-white focus-visible:outline-2 focus-visible:outline-cyan-700">Pause session</button> : null}
+        {activity.ready && !activity.paused ? <button type="button" disabled={activity.pending} aria-busy={activity.pending} onClick={() => void activity.pause()} className="min-h-11 rounded-md px-3 text-sm font-medium text-slate-700 hover:bg-white focus-visible:outline-2 focus-visible:outline-cyan-700">{activity.pending ? 'Pausing…' : 'Pause session'}</button> : null}
       </div>
       <section className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-slate-200 bg-white p-5" aria-labelledby="connection-title">
         <div className="min-w-0 flex-1" aria-live="polite">
-          <h2 id="connection-title" className="text-lg font-semibold text-slate-950">{replacingHelper ? 'Helper update in progress' : snapshotStale ? 'Checking the browser again' : connectionCopy[readiness].title}</h2>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{replacingHelper ? 'The helper may disconnect while the installer replaces it. Wait for it to reconnect; your browser and course stay open.' : snapshotStale ? 'The previous tab snapshot is old. Vitriol is checking the current browser before allowing another run.' : connectionCopy[readiness].detail}</p>
+          <h2 id="connection-title" className="text-lg font-semibold text-slate-950">{replacingHelper ? 'Helper update in progress' : snapshotStale ? (refreshPending || backgroundRefresh ? 'Checking the browser again' : 'Browser check needed') : connectionCopy[readiness].title}</h2>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{replacingHelper ? 'The helper may disconnect while the installer replaces it. Wait for it to reconnect; your browser and course stay open.' : snapshotStale ? (refreshPending || backgroundRefresh ? 'Waiting for the helper to report current browser tabs.' : 'The previous tab snapshot is old. Check the browser before allowing another run.') : connectionCopy[readiness].detail}</p>
           <p className="mt-2 text-xs text-slate-500">{lastChecked ? 'Connection updates automatically' : 'Checking connection'}{activity.paused ? ' · session paused' : backgroundRefresh ? ' · updating course tabs' : active ? ' · following the current run' : ' · tabs update while the browser is free'}</p>
           {session?.updated_at?<p className="mt-1 text-xs text-slate-500">Browser last checked {formatDisplayDate(session.updated_at)}</p>:null}
           {contextError ? <p className="mt-2 text-sm text-rose-800">{contextError}</p> : null}
           {active&&!backgroundRefresh ? <p className="mt-2 text-sm font-medium text-slate-700">Wait for the current job to finish before sending another operation.</p> : null}
         </div>
-        {replacingHelper ? null : readiness === 'unavailable' ? <Action primary disabled={busy} onClick={() => void load()}>Retry connection</Action>
+        {replacingHelper ? null : readiness === 'unavailable' ? <Action primary disabled={contextBusy} onClick={() => void load()}>{contextBusy ? 'Checking connection…' : 'Retry connection'}</Action>
           : readiness === 'helper-offline' ? <a href="/helper" className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800">Set up helper</a>
-          : readiness === 'browser-offline' ? <Action primary disabled={!helperReady || busy || Boolean(active)} onClick={() => run('start-browser', { capabilityId: 'start-browser' }, false)}>Start browser</Action>
-          : readiness === 'browser-unknown' ? <Action primary disabled={!helperReady || busy || Boolean(active)} onClick={() => run('start-browser', { capabilityId: 'start-browser' }, false)}>Start browser</Action>
-          : null}
+          : readiness === 'browser-offline' ? <Action primary disabled={!helperReady || busy || Boolean(active)} onClick={() => run('start-browser', { capabilityId: 'start-browser' }, true)}>Start browser</Action>
+          : readiness === 'browser-unknown' ? <Action primary disabled={!helperReady || busy || Boolean(active)} onClick={() => run('start-browser', { capabilityId: 'start-browser' }, true)}>Start browser</Action>
+          : snapshotStale ? <Action primary disabled={busy || active || refreshPending} onClick={()=>void refreshBrowser(true)}>{refreshPending ? 'Checking browser…' : 'Check browser now'}</Action> : null}
       </section>
-      {activity.paused ? <section role="status" className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-amber-300 bg-amber-50 p-5 text-amber-950"><div><h2 className="font-semibold">Your session is paused</h2><p className="mt-1 max-w-2xl text-sm leading-6">Vitriol stops queuing steps and asks the helper to stop any current run. Your browser tabs, goal and conversation are kept. Resume when you are ready, then inspect the current page again.</p></div><button type="button" onClick={()=>void activity.resume()} className="min-h-11 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800">Resume session</button></section>
-        : activity.warning ? <section role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950"><p className="text-sm">Still there? Your session pauses in {Math.max(1,Math.ceil(activity.remainingMs/1000))} seconds without activity on this page.</p><button type="button" onClick={()=>void activity.resume()} className="min-h-11 rounded-md border border-amber-400 px-4 text-sm font-semibold">Keep working</button></section> : null}
-      {activity.error ? <p role="alert" className="text-sm text-rose-800">{activity.error} <button type="button" onClick={()=>void activity.resume()} className="underline underline-offset-4">Retry session connection</button></p> : null}
+      {activity.pending ? <p role="status" aria-busy="true" className="text-sm text-slate-700">Updating session protection…</p> : null}
+      {activity.paused ? <section role="status" className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-amber-300 bg-amber-50 p-5 text-amber-950"><div><h2 className="font-semibold">Your session is paused</h2><p className="mt-1 max-w-2xl text-sm leading-6">Vitriol stops queuing steps and asks the helper to stop any current run. Your browser tabs, goal and conversation are kept. Resume when you are ready, then inspect the current page again.</p></div><button type="button" disabled={activity.pending} aria-busy={activity.pending} onClick={()=>void activity.resume()} className="min-h-11 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800">{activity.pending ? 'Resuming…' : 'Resume session'}</button></section>
+        : activity.warning ? <section role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950"><p className="text-sm">Still there? Your session pauses in {Math.max(1,Math.ceil(activity.remainingMs/1000))} seconds without activity on this page.</p><button type="button" disabled={activity.pending} aria-busy={activity.pending} onClick={()=>void activity.resume()} className="min-h-11 rounded-md border border-amber-400 px-4 text-sm font-semibold">{activity.pending ? 'Resuming…' : 'Keep working'}</button></section> : null}
+      {refreshError && !normalCourseVisible ? <p role="alert" className="text-sm text-rose-800">{refreshError}</p> : null}
+      {finishedTask && !normalCourseVisible && !foregroundActive && !awaitingQuestion && view === 'normal' ? <p role="status" className="text-sm text-slate-700">Marked {finishedTask.result} by you. Reconnect when you are ready for another task.</p> : null}
+      {activity.error ? <p role="alert" className="text-sm text-rose-800">{activity.error} <button type="button" disabled={activity.pending} aria-busy={activity.pending} onClick={()=>void activity.resume()} className="underline underline-offset-4">{activity.pending ? 'Reconnecting…' : 'Retry session connection'}</button></p> : null}
       {update?.needed || update?.progressLabel ? <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-950"><div><p>{update.progressLabel || `A helper update is available${update.latestVersion ? `: v${update.latestVersion}` : ''}.`}{update.phaseVersion ? ` · v${update.phaseVersion}` : ''}</p>{update.phaseUpdatedAt ? <p className="mt-1 text-xs">Last reported {formatDisplayDate(update.phaseUpdatedAt)}{replacingHelper && Date.now()-Date.parse(update.phaseUpdatedAt)>10*60_000 ? ' · Still waiting for a new report. Check that the helper is running; no completion has been confirmed.' : ''}</p> : null}{replacingHelper ? <p className="mt-1 text-xs">Course starts are paused while the helper is replaced. Your browser, goal and conversation are kept.</p> : null}{update.error ? <p className="mt-2">{update.error}</p> : null}</div>{update.needed ? <button type="button" disabled={operationBusy || guidedBusy || Boolean(active) || updateBusy || replacingHelper} onClick={() => void requestHelperUpdate()} className="min-h-11 rounded-md bg-amber-900 px-4 py-2 font-semibold text-white disabled:opacity-40">{updateBusy ? 'Requesting update…' : replacingHelper ? 'Updating helper…' : 'Update helper'}</button> : null}{updateNote ? <p className="w-full">{updateNote}</p> : null}{showManualDownload || (update.error && update.mode === "queue") ? <a className="font-semibold underline" href={`/helper/download?asset=${update.installerAvailable ? "installer" : "archive"}`}>Download the installer</a> : null}</div> : null}
-      <section aria-labelledby="current-task-title" className="space-y-3 rounded-lg border border-slate-200 bg-white p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 id="current-task-title" className="font-semibold text-slate-950">Current task</h2><p role="status" className="mt-1 text-sm leading-6 text-slate-600">{finishedTask ? `Marked ${finishedTask.result} by you.${finishedTask.stopping ? ' Waiting for the current helper job to stop.' : ' You can choose a page and set a new goal.'}` : isTaskJob(job) ? describeTaskJob(job) : 'Choose a course and goal to begin.'}</p></div><button type="button" disabled={operationBusy} onClick={()=>void endSession(false)} className="min-h-11 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 disabled:opacity-40">End browser session</button>{forceCloseOffer ? <button type="button" disabled={operationBusy} onClick={()=>void endSession(true)} className="min-h-11 rounded-md bg-rose-700 px-4 text-sm font-semibold text-white disabled:opacity-40">Force close browser</button> : null}</div>
+      {(foregroundActive || awaitingQuestion || (normalCourseVisible && (isTaskJob(job) || finishedTask)) || view === 'advanced') ? <section aria-labelledby="current-task-title" className="space-y-3 rounded-lg border border-slate-200 bg-white p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 id="current-task-title" className="font-semibold text-slate-950">Current task</h2><p role="status" className="mt-1 text-sm leading-6 text-slate-600">{finishedTask ? `Marked ${finishedTask.result} by you.${finishedTask.stopping ? ' Waiting for the current helper job to stop.' : ' You can choose a page and set a new goal.'}` : isTaskJob(job) ? describeTaskJob(job) : 'Choose a course and goal to begin.'}</p></div><button type="button" disabled={operationBusy || !canEndBrowser} onClick={()=>void endSession(false)} className="min-h-11 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 disabled:opacity-40">End browser session</button>{forceCloseOffer ? <button type="button" disabled={operationBusy} onClick={()=>void endSession(true)} className="min-h-11 rounded-md bg-rose-700 px-4 text-sm font-semibold text-white disabled:opacity-40">Force close browser</button> : null}</div>
         {isTaskJob(job) && !finishedTask ? <><p className="text-xs leading-5 text-slate-600">Record your assessment of this task. This does not change or verify the course result in the learning portal.</p><div className="flex flex-wrap gap-3"><button type="button" disabled={operationBusy} onClick={()=>void finishTask('completed')} className="min-h-11 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-800 disabled:opacity-40">Mark complete</button><button type="button" disabled={operationBusy} onClick={()=>void finishTask('failed')} className="min-h-11 rounded-md border border-rose-300 px-4 text-sm font-semibold text-rose-800 disabled:opacity-40">Mark failed</button></div></> : null}
-      </section>
+      </section> : canEndBrowser ? <div className="flex justify-end"><button type="button" disabled={operationBusy || !canEndBrowser} onClick={()=>void endSession(false)} className="min-h-11 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 disabled:opacity-40">End browser session</button></div> : null}
+      {(operationBusy || refreshPending || (active && !guidedBusy)) ? <p role="status" aria-busy="true" className="flex items-center gap-2 text-sm text-slate-700"><LoaderCircle className="size-4 animate-spin"/>{operationBusy ? actionLabel : refreshPending ? 'Waiting for the helper to check browser tabs…' : job?.status === 'queued' ? 'Queued — waiting for the helper…' : 'Waiting for the current helper job…'}</p> : null}
       <div role="tabpanel" id={`${viewId}-normal-panel`} aria-labelledby={`${viewId}-normal-tab`} hidden={view !== 'normal'}>
-      <GuidedRunner helperId={props.helperId} session={session} selectedTarget={selectedTarget} onSelect={setSelectedTarget}
-        ready={browserReady && protocolReady && !operationBusy && activity.ready && !activity.paused && !replacingHelper && !updateBusy} active={foregroundActive} refreshing={backgroundRefresh} onBusy={onGuidedBusy} onRefresh={load}
-        suspended={replacingHelper || updateBusy || operationBusy} paused={activity.paused||!activity.ready} connection={readiness} onConnect={()=>void run('start-browser',{capabilityId:'start-browser'},false)} onRefreshTabs={()=>void refreshBrowser(true)} refreshError={refreshError} snapshotStale={snapshotStale}
+      <div hidden={!normalCourseVisible}><GuidedRunner helperId={props.helperId} session={session} selectedTarget={selectedTarget} onSelect={setSelectedTarget}
+        ready={browserReady && protocolReady && !operationBusy && activity.ready && !activity.paused && !replacingHelper && !updateBusy} active={foregroundActive} refreshing={backgroundRefresh || refreshPending} onBusy={onGuidedBusy} onRefresh={load}
+        suspended={replacingHelper || updateBusy || operationBusy} paused={activity.paused||!activity.ready} connection={readiness} onConnect={()=>void run('start-browser',{capabilityId:'start-browser'},true)} onRefreshTabs={()=>void refreshBrowser(true)} refreshError={refreshError} snapshotStale={snapshotStale}
         lastJob={job} lastOutput={output} outputJobId={outputJobId} taskReset={taskReset} finalized={Boolean(finishedTask)} onStopControl={registerGuidedStop} onAwaitingQuestion={setAwaitingQuestion} onTaskStart={()=>{dismissedTask.current=finishedTask?.jobId ?? null;setFinishedTask(null);contextRequest.current+=1;}} onJob={(next)=>{contextRequest.current+=1;setJob(current=>({...next,capability_id:next.capability_id ?? (current?.id===next.id ? current.capability_id : undefined)}));}} />
-      <CourseCoverage courses={context?.courseCoverage || []} />
+      {hasCourseTab ? <CourseCoverage courses={context?.courseCoverage || []} /> : null}</div>
       </div>
       {error ? <div role="alert" className="flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><AlertTriangle className="size-4" />{error}</div> : null}
       <div role="tabpanel" id={`${viewId}-advanced-panel`} aria-labelledby={`${viewId}-advanced-tab`} hidden={view !== 'advanced'}>
@@ -536,7 +564,7 @@ export function OperationsClient(props: { helperId: string }) {
             <summary className="cursor-pointer text-sm font-medium text-slate-700">Browser connection tools</summary>
             <div className="mt-3 flex flex-wrap gap-2">
               <Action disabled={!helperReady || !protocolReady || busy || Boolean(active)} onClick={() => run('cdp-check', { capabilityId: 'cdp-check' }, true)}>Check browser connection</Action>
-              {browserReady ? <Action disabled={!helperReady || busy || Boolean(active)} onClick={() => run('start-browser', { capabilityId: 'start-browser' }, false)}>Reconnect browser</Action> : null}
+              {browserReady ? <Action disabled={!helperReady || busy || Boolean(active)} onClick={() => run('start-browser', { capabilityId: 'start-browser' }, true)}>Reconnect browser</Action> : null}
             </div>
           </details>
         </Panel>

@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 
 export default async function HistoryPage() {
   const user = await requireAuthenticatedUser();
-  const [data, sessions, jobs] = await Promise.all([
+  const [data, jobs] = await Promise.all([
     queryRows<{
       id: number;
       kind: string;
@@ -40,21 +40,6 @@ export default async function HistoryPage() {
     ),
     queryRows<{
       id: string;
-      status: string;
-      started_at: string;
-      ended_at: string | null;
-      recap: { items?: number; courses?: number; error?: string };
-      needs_review: Array<{ title?: string; result?: string }>;
-    }>(
-      `select id, status, started_at, ended_at, recap, needs_review
-       from operator_sessions
-       where user_id = $1
-       order by started_at desc
-       limit 20`,
-      [user.id],
-    ),
-    queryRows<{
-      id: string;
       capability_id: string;
       status: string;
       output_url: string | null;
@@ -75,7 +60,7 @@ export default async function HistoryPage() {
   return (
     <AppShell email={user.email}>
       <PageFrame eyebrow="Audit trail" title="History" description="Courses, activities, verification, sessions, diagnoses, and artifact links from the paired helper.">
-        <HistoryList rows={data} sessions={sessions} jobs={jobs} />
+        <HistoryList rows={data} jobs={jobs} />
       </PageFrame>
     </AppShell>
   );

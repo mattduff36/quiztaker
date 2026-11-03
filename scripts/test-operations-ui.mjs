@@ -20,8 +20,8 @@ import{OperationsClient}from ${JSON.stringify(join(root,'apps/web/src/components
 import{HelperOnboarding}from ${JSON.stringify(join(root,'apps/web/src/components/helper-onboarding.tsx').replaceAll('\\','/'))};
 import{ReviewList}from ${JSON.stringify(join(root,'apps/web/src/components/review-list.tsx').replaceAll('\\','/'))};
 import{AppShell}from ${JSON.stringify(join(root,'apps/web/src/components/app-shell.tsx').replaceAll('\\','/'))};
-createRoot(document.getElementById('root')!).render(<AppShell email="operator@example.invalid"><div className="fixture">{location.pathname==='/setup-test'?<><HelperOnboarding download={{status:'unavailable',url:null}} connection={{state:'not-paired'}}/><ReviewList reviews={[{id:'review-1',type:'test',title:'Review example',detail:'Review this item',next_action:'Retry the page',created_at:new Date().toISOString()}]}/></>:<OperationsClient helperId="${helperId}"/>}</div></AppShell>);`);
-await writeFile(join(temp,'navigation.ts'),`export const useRouter=()=>({refresh:()=>{}});`);
+function Fixture(){const[away,setAway]=React.useState(false);return <AppShell email="operator@example.invalid"><div className="fixture">{location.pathname==='/setup-test'?<><HelperOnboarding download={{status:'unavailable',url:null}} connection={{state:'not-paired'}}/><ReviewList reviews={[{id:'review-1',type:'test',title:'Review example',detail:'Review this item',next_action:'Retry the page',created_at:new Date().toISOString()}]}/></>:away?<p>Another page</p>:<><button onClick={()=>setAway(true)}>Navigate fixture away</button><OperationsClient helperId="${helperId}"/></>}</div></AppShell>};createRoot(document.getElementById('root')!).render(<Fixture/>);`);
+await writeFile(join(temp,'navigation.ts'),`export const useRouter=()=>({refresh:()=>{}}); export const usePathname=()=>location.pathname;`);
 await build({plugins:[{name:'test-router',setup(build){build.onResolve({filter:/^next\/navigation$/},()=>({path:join(temp,'navigation.ts')}));}}],entryPoints:[join(temp,'entry.tsx')],outfile:join(temp,'app.js'),bundle:true,format:'iife',platform:'browser',jsx:'automatic',tsconfig:join(root,'apps/web/tsconfig.json'),define:{'process.env.NODE_ENV':'"test"','process.env':'{}'}});
 const css=await postcss([tailwind({base:join(root,'apps/web')})]).process(await readFile(join(root,'apps/web/src/app/globals.css'),'utf8'),{from:join(root,'apps/web/src/app/globals.css')});
 await writeFile(join(temp,'app.css'),css.css+'\n:root{--font-plex:Arial}body{margin:0}.fixture{max-width:1120px;margin:auto;padding:24px}');
@@ -29,7 +29,7 @@ await writeFile(join(temp,'app.css'),css.css+'\n:root{--font-plex:Arial}body{mar
 function state(){return{last:null,paused:false,online:true,connected:true,updatePhase:null,refreshes:0,checks:0,statusFailed:false,statusStale:false,activityPosts:0,pausePosts:0,jobs:new Map(),latest:null,serial:0,selected:null,blocked:false,retries:0,task:null,finishPosts:0,questionOutput:'',pairPosts:0,holdCapability:null};}
 function reply(path,method,body,now,s){
   const activity=()=>({paused:s.paused,lastActivityAt:new Date(s.last??now).toISOString(),expiresAt:new Date((s.last??now)+1_800_000).toISOString(),serverNow:new Date(now).toISOString()});
-  const session=()=>({id:'22222222-2222-4222-8222-222222222222',revision:1,cdp_connected:s.connected,updated_at:new Date(now).toISOString(),tabs:[{targetId:'course',index:0,title:'Xerox course overview',url:'https://example.invalid/course',fingerprint:'course-fingerprint'},{targetId:'blank',index:1,title:'Blank tab',url:'about:blank',fingerprint:'blank'}],roster:null,detection:null});
+  const session=()=>s.noSession?null:({id:'22222222-2222-4222-8222-222222222222',revision:1,cdp_connected:s.connected,updated_at:new Date(now-(s.stale?120_000:0)).toISOString(),tabs:[...(!s.noCourse?[{targetId:'course',index:0,title:'Xerox course overview',url:'https://example.invalid/course',fingerprint:'course-fingerprint'}]:[]),{targetId:'blank',index:1,title:'Blank tab',url:'about:blank',fingerprint:'blank'}],roster:null,detection:null});
   function makeJob(capability){const id=`job-${++s.serial}`;const job={id,status:capability==='list-tabs'||capability===s.holdCapability?'running':'completed',capability_id:capability,outcome:{verified:true,status:'verified'},result:{ok:true,result:capability==='detect'?{detection:{detected:'server-assessment',tabIdx:0,url:'https://example.invalid/course',fingerprint:'course-fingerprint',detail:'Open a course page before attempting a final assessment.'}}:{}}};s.jobs.set(id,job);s.latest=job;return id;}
   if(path==='/api/helper/pair'){if(s.pairPosts++===0)return{__status:503,error:'Pairing is temporarily unavailable.'};return{code:'ABCD1234',expiresAt:new Date(now+2000).toISOString(),controlPlaneUrl:'https://example.invalid'};}
   if(path==='/api/reviews/review-1/resolve')return{__status:503,error:'Unavailable'};
@@ -39,16 +39,17 @@ function reply(path,method,body,now,s){
     else if(body.action==='pause'){s.paused=true;s.pausePosts++;}
     else if(now-s.last>=1_800_000)s.paused=true;
     if(body.action==='activity'){s.activityPosts++;if(!s.paused)s.last=now;}
-    if(body.action==='refresh'){if(s.paused)return{status:'skipped'};s.refreshes++;return{status:'queued',jobId:makeJob('list-tabs')};}
+    if(body.action==='refresh'){if(s.refreshError)return{__status:503,error:'Browser refresh unavailable.'};if(s.paused)return{status:'skipped'};s.refreshes++;return{status:'queued',jobId:makeJob('list-tabs')};}
     return activity();
   }
-  if(path==='/api/operations/context'){s.checks++;return{helper:{id:helperId,device_name:'Test PC',version:'1.0.19',protocol_version:2,is_online:s.online},helperUpdate:s.updatePhase?{needed:true,protocolBlocked:false,currentVersion:'1.0.19',latestVersion:'1.0.21',installerAvailable:true,canSelfUpdate:true,mode:'queue',requestedVersion:'1.0.21',error:null,phase:s.updatePhase,phaseVersion:'1.0.21',phaseUpdatedAt:new Date(now).toISOString(),inProgress:true,progressLabel:'Installing · waiting for the helper to reconnect'}:undefined,courseCoverage:[{source:'https://example.invalid/course',title:'Paper theory',inventoryObserved:true,updatedAt:new Date(now).toISOString(),topics:[{title:'Paper production',visitedAt:new Date(now).toISOString(),collectedAt:new Date(now).toISOString(),collectedChars:400},{title:'Paper types',visitedAt:new Date(now).toISOString(),collectedChars:0},{title:'Paper storage',collectedChars:0}]}],operatorActivity:s.last===null?null:activity(),session:session(),activeJob:s.latest,latestTask:s.task,captures:[],recentUrls:[],learnerEnabled:true};}
+  if(path==='/api/operations/context'){s.checks++;return{helper:s.unpaired?null:{id:helperId,device_name:'Test PC',version:'1.0.19',protocol_version:2,is_online:s.online},helperUpdate:s.updatePhase?{needed:true,protocolBlocked:false,currentVersion:'1.0.19',latestVersion:'1.0.21',installerAvailable:true,canSelfUpdate:true,mode:'queue',requestedVersion:'1.0.21',error:null,phase:s.updatePhase,phaseVersion:'1.0.21',phaseUpdatedAt:new Date(now).toISOString(),inProgress:true,progressLabel:'Installing · waiting for the helper to reconnect'}:undefined,courseCoverage:[{source:'https://example.invalid/course',title:'Paper theory',inventoryObserved:true,updatedAt:new Date(now).toISOString(),topics:[{title:'Paper production',visitedAt:new Date(now).toISOString(),collectedAt:new Date(now).toISOString(),collectedChars:400},{title:'Paper types',visitedAt:new Date(now).toISOString(),collectedChars:0},{title:'Paper storage',collectedChars:0}]}],operatorActivity:s.last===null?null:activity(),session:session(),activeJob:s.latest,latestTask:s.task,captures:[],recentUrls:[],learnerEnabled:true};}
   if(path==='/api/operations/tasks/finish'){
     s.finishPosts++;const task=s.jobs.get(body.jobId);task.status=body.result;task.outcome={status:`operator-${body.result}`,verified:false,operatorResolution:{result:body.result,requestedAt:new Date(now).toISOString(),resolvedAt:new Date(now).toISOString(),reportedBy:'operator'}};s.task=task;return{ok:true,status:body.result,jobId:task.id};
   }
-  if(path==='/api/services/status')return s.statusFailed?{__status:503,error:'Service status is unavailable.'}:{checkedAt:new Date(now).toISOString(),helper:{online:s.online,lastSeenAt:new Date(now).toISOString()},browser:{connected:s.connected,checkedAt:new Date(now-(s.statusStale?120_000:0)).toISOString()},assistant:{ready:true,source:'personal',provider:'openai'}};
+  if(path==='/api/services/status')return s.statusFailed?{__status:503,error:'Service status is unavailable.'}:{checkedAt:new Date(now).toISOString(),activity:{session:!s.paused&&s.online&&s.connected&&!s.noSession,task:Boolean(s.task&&['queued','running','dispatched'].includes(s.task.status))},helper:{online:s.online,lastSeenAt:new Date(now).toISOString()},browser:{connected:s.connected&&!s.noSession,checkedAt:new Date(now-(s.statusStale?120_000:0)).toISOString()},assistant:{ready:true,source:'personal',provider:'openai'}};
   if(path.startsWith('/api/operations/learning'))return{id:null,objective:null,history:[]};
   if(path==='/api/operations/actions'){
+    if(body.capabilityId==='start-browser'){s.startConfirm=body.confirm;s.starts=(s.starts||0)+1;if(s.actionError)return{__status:503,error:'Start unavailable.'};return{jobId:makeJob('start-browser')};}
     if(body.capabilityId==='detect'&&!s.blocked){s.blocked=true;makeJob('list-tabs');return{plan:{planId:'detect-plan'},waitingForJob:true};}
     return{jobId:makeJob(body.capabilityId)};
   }
@@ -70,12 +71,77 @@ const server=createServer(async(req,res)=>{
 });
 for(let attempt=0;attempt<10;attempt++){
   try{await new Promise((done,reject)=>{server.once('error',reject);server.listen(30000+Math.floor(Math.random()*20000),'127.0.0.1',()=>{server.removeListener('error',reject);done();});});break;}
-  catch(error){if(error.code!=='EADDRINUSE'||attempt===9)throw error;}
+  catch(error){if(!['EADDRINUSE','EACCES'].includes(error.code)||attempt===9)throw error;}
 }
 const url=`http://127.0.0.1:${server.address().port}`;
 const browser=await chromium.launch({channel:'chrome',headless:true});
 let passed=false;
 try{
+  // Stage matrix uses isolated offline fixtures, including delayed requests and remounts.
+  for(const viewport of [{width:1365,height:1000},{width:390,height:844}]) {
+    for(const scenario of ['loading','unpaired','offline','absent','disconnected','stale','no-course','blank-goal','start-error','start-pending']) {
+      const page=await browser.newPage({viewport}); const fixture=state();
+      Object.assign(fixture,scenario==='unpaired'?{unpaired:true}:scenario==='offline'?{online:false}:scenario==='absent'?{noSession:true}:scenario==='disconnected'||scenario.startsWith('start-')?{connected:false}:scenario==='stale'?{stale:true,paused:true}:scenario==='no-course'?{noCourse:true}:{});
+      let release;const held=new Promise(done=>{release=done;});let actions=0;
+      await page.route('**/api/**',async route=>{
+        const req=route.request(),path=new URL(req.url()).pathname,body=req.postDataJSON()||{};
+        if(scenario==='loading'&&path==='/api/operations/context')await held;
+        if(path==='/api/operations/actions'){actions++;if(scenario==='start-pending')await held;}
+        if(scenario==='start-error')fixture.actionError=true;
+        const result=reply(path,req.method(),body,Date.now(),fixture),{__status,...json}=result;
+        await route.fulfill({status:__status||200,json});
+      });
+      await page.goto(url);
+      if(['loading','unpaired','offline','absent','disconnected','stale'].includes(scenario)) {
+        await expect(page.getByRole('heading',{name:'Work on a course',exact:true})).toBeHidden();
+        await expect(page.getByText('Course material checklist',{exact:true})).toBeHidden();
+      }
+      if(scenario==='loading') {await expect(page.getByRole('heading',{name:'Checking connection…',exact:true})).toBeVisible();release();}
+      if(scenario==='unpaired'||scenario==='offline')await expect(page.getByRole('link',{name:'Set up helper',exact:true})).toBeVisible();
+      if(scenario==='absent'||scenario==='disconnected')await expect(page.getByRole('button',{name:'Start browser',exact:true})).toBeEnabled();
+      if(scenario==='stale'){await expect(page.getByRole('heading',{name:'Browser check needed',exact:true})).toBeVisible();expect(fixture.refreshes).toBe(0);}
+      if(scenario==='no-course'){await expect(page.getByText('No course page is open yet.',{exact:false})).toBeVisible();await expect(page.getByRole('textbox',{name:/What would you like to achieve/})).toBeHidden();}
+      if(scenario==='blank-goal'){await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');await page.getByRole('textbox',{name:/What would you like to achieve/}).fill('');await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeDisabled();}
+      if(scenario.startsWith('start-')) {
+        await page.getByRole('button',{name:'Start browser',exact:true}).click();
+        if(scenario==='start-pending') {
+          await expect(page.getByText('Starting browser…',{exact:true})).toBeVisible();
+          await page.getByRole('button',{name:'Start browser',exact:true}).dispatchEvent('click');
+          expect(actions).toBe(1);release();
+          await expect.poll(()=>fixture.starts).toBe(1);expect(fixture.startConfirm).toBe(true);
+          await expect(page.getByRole('dialog')).toHaveCount(0);
+          await page.reload();await expect(page.getByRole('heading',{name:'Work on a course',exact:true})).toBeHidden();expect(fixture.starts).toBe(1);
+        }else await expect(page.getByRole('alert')).toContainText('Start unavailable.');
+      }
+      if(['offline','absent','no-course','stale','start-pending'].includes(scenario))await page.screenshot({path:join(artifacts,`${viewport.width}-${scenario}.png`),fullPage:true});
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      await page.close();
+    }
+    console.log(`PASS ${viewport.width}px progressive stage matrix, delayed start duplicate guard, error and remount.`);
+  }
+  for(const explicitlyStop of [false,true]) {
+    const page=await browser.newPage();const fixture=state();fixture.paused=true;
+    let release;const held=new Promise(done=>{release=done;});let queued=0,deletes=0;
+    await page.route('**/api/**',async route=>{
+      const req=route.request(),path=new URL(req.url()).pathname,body=req.postDataJSON()||{};
+      if(path==='/api/operations/actions'&&body.capabilityId==='list-tabs'){queued++;await held;}
+      if(path.startsWith('/api/jobs/')&&req.method()==='DELETE')deletes++;
+      const result=reply(path,req.method(),body,Date.now(),fixture),{__status,...json}=result;
+      await route.fulfill({status:__status||200,json});
+    });
+    await page.goto(url);await page.getByRole('button',{name:'Resume session',exact:true}).click();
+    await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');
+    await page.getByRole('textbox',{name:/What would you like to achieve/}).fill('Read this course');
+    await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
+    await expect.poll(()=>queued).toBe(1);
+    if(explicitlyStop)await page.getByRole('button',{name:'Stop',exact:true}).click();
+    await page.getByRole('button',{name:'Navigate fixture away',exact:true}).click();release();
+    await expect.poll(()=>fixture.jobs.size).toBeGreaterThan(0);
+    if(explicitlyStop)await expect.poll(()=>deletes).toBe(1);
+    else {await page.waitForTimeout(100);expect(deletes).toBe(0);}
+    await page.close();
+  }
+  console.log('PASS navigation preserves acknowledged jobs; explicit Stop survives pending queue and navigation.');
   for(const viewport of [{width:1365,height:1000},{width:390,height:844}]){
     const page=await browser.newPage({viewport});
     const errors=[];page.on('pageerror',error=>errors.push(error.message));
@@ -119,19 +185,19 @@ try{
     fixture.updatePhase='installing';fixture.online=false;
     await page.clock.fastForward(16_000);
     await expect(page.getByText('Installing · waiting for the helper to reconnect · v1.0.21',{exact:true})).toBeVisible();
-    await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeDisabled();
+    await expect(page.getByRole('heading',{name:'Work on a course',exact:true})).toBeHidden();
     const probesDuringUpdate=fixture.refreshes;
     await page.clock.fastForward(46_000);
     expect(fixture.refreshes).toBe(probesDuringUpdate);
     await advanced.click();
-    await expect(page.getByRole('button',{name:'End browser session',exact:true})).toBeEnabled();
+    await expect(page.getByRole('button',{name:'End browser session',exact:true})).toBeDisabled();
     await page.screenshot({path:join(artifacts,viewport.width>500?'desktop-update.png':'mobile-update.png'),fullPage:true});
     await normal.click();
-    await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
+    await expect(goal).toBeHidden();
     fixture.updatePhase=null;fixture.online=true;
     await page.clock.fastForward(16_000);
     await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
-    const jobsBeforeSwitch=fixture.serial;
+    const jobsBeforeSwitch=[...fixture.jobs.values()].filter(job=>job.capability_id!=='list-tabs').length;
     await advanced.click();
     await expect(advanced).toHaveAttribute('aria-selected','true');
     await expect(goal).toBeHidden();
@@ -142,7 +208,7 @@ try{
     await expect(normal).toHaveAttribute('aria-selected','true');
     await expect(normal).toBeFocused();
     await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
-    expect(fixture.serial).toBe(jobsBeforeSwitch);
+    expect([...fixture.jobs.values()].filter(job=>job.capability_id!=='list-tabs').length).toBe(jobsBeforeSwitch);
     await goal.focus();
     await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
     const before=fixture.refreshes;
@@ -203,15 +269,16 @@ try{
     await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
     await page.getByRole('button',{name:'Pause session',exact:true}).click();
     fixture.online=false;
+    await page.clock.fastForward(61_000);
     await expect(page.getByRole('heading',{name:'Your session is paused',exact:true})).toBeVisible();
-    await expect(page.getByRole('button',{name:'Paper storage',exact:true})).toBeDisabled();
+    await expect(page.getByRole('button',{name:'Paper storage',exact:true})).toBeHidden();
     await expect(page.getByRole('button',{name:'Mark complete',exact:true})).toBeEnabled();
     await expect(page.getByRole('button',{name:'Mark failed',exact:true})).toBeEnabled();
     await page.getByRole('button',{name:'Mark complete',exact:true}).click();
     await expect(page.getByText(/Marked completed by you/)).toBeVisible();
-    await expect(goal).toHaveValue('');
+    await expect(goal).toBeHidden();
     await expect(page.getByText('Which module should I read next?',{exact:true})).toHaveCount(0);
-    await expect(page.getByRole('button',{name:'End browser session',exact:true})).toBeEnabled();
+    await expect(page.getByRole('button',{name:'End browser session',exact:true})).toBeHidden();
     expect(fixture.finishPosts).toBe(1);
     await page.clock.fastForward(60_000);
     expect(fixture.refreshes).toBe(refreshesWithQuestion);

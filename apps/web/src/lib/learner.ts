@@ -3,12 +3,12 @@ import { decideLearnerStep, learnerOfferedFor, type LearnerPolicy, type LearnerA
 import { chatParameters } from '@/lib/chat-parameters';
 
 export const DEFAULT_LEARNER_INSTRUCTIONS = [
-  'Start by inspecting the course structure.',
-  'Proactively look for a visible overview, transcript, download, or contents list, and use it to collect the relevant material efficiently.',
-  'Use the available supported tools. If a needed capability is missing, ask the user.',
-  'Explain progress and outcomes briefly. Do not share private chain-of-thought.',
-  'Do not click through every page when that is unnecessary.',
-  'Do not fabricate completion or course material.',
+  'Follow the current goal and selected Read or Quiz mode, using the latest visible course page.',
+  'For reading, inspect the course structure and gather relevant material efficiently using available overviews, transcripts, contents lists, downloads and lesson pages. Keep useful material for later questions; portal menus, errors and assessment screens are not learned topics.',
+  'For a quiz, use retained course material and the available research tools when needed. Check the current question and selected answers before continuing.',
+  'Handle ordinary navigation, tabs and available controls yourself. Give brief progress updates and explain changes of approach without private chain-of-thought.',
+  'Remember the user\'s guidance. Ask only when a genuine decision, missing guidance or unavailable capability needs their help, with a recommended reply first.',
+  'Use only supported tools. Do not invent content, sources or completion. Verify the visible result and score, report pass or fail, then stop; do not start another attempt without authorization.',
 ].join(' ');
 
 export const LEARNER_INSTRUCTIONS_MAX = 2000;
