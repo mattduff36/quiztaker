@@ -169,7 +169,7 @@ export function GuidedRunner(props: {
     cancellationRequested.current = true; stopped.current = true; runGeneration.current += 1; memoryRequest.current += 1;
     clearPageQuestion(); setGuidance(''); setRunOutput(''); setSettingsNeeded(false);
     objectiveEdited.current = false; setObjective('');
-    setStage('Task recorded'); setMessage('Choose your next page and set a goal when you are ready.');
+    setStage(props.taskReset ? 'Task recorded' : 'Ready'); setMessage('Choose your next page and set a goal when you are ready.');
   }, [props.taskReset, props.finalized]);
 
   useEffect(() => {

@@ -3,6 +3,7 @@ import test from 'node:test';
 import {historyResult} from '../src/lib/history-result';
 
 test('legacy object badges recover the final status from retained evidence',()=>{
+  assert.equal(historyResult('[object Object]',{result:{kind:'2004',before:{success:'',completion:'incomplete'},after:{success:'passed',score_raw:'100',completion:'completed'}}}),'passed');
   assert.equal(historyResult('[object Object]',{result:{before:{lesson_status:'incomplete'},after:{'cmi.core.lesson_status':'passed'}}}),'passed');
   assert.equal(historyResult({before:{status:'passed'},after:{status:'failed'}}),'failed');
   assert.equal(historyResult('[object Object]',{result:{after:{completion_status:'completed'}}}),'completed');

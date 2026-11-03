@@ -15,7 +15,7 @@ export function historyResult(value: unknown, payload?: unknown): string {
     seen.add(input);
     const row=input as Record<string,unknown>;
     // Final state wins over a previous/initial state in legacy SCORM receipts.
-    for(const key of ['after','lesson_status','cmi.core.lesson_status','success_status','cmi.success_status','completion_status','cmi.completion_status','status','outcome','result','status_set']) {
+    for(const key of ['after','lesson_status','cmi.core.lesson_status','success_status','cmi.success_status','success','completion_status','cmi.completion_status','completion','status','outcome','result','status_set']) {
       const result=read(row[key],depth+1);if(result)return result;
     }
     if(typeof row.passed==='boolean')return row.passed?'Passed':'Failed';
