@@ -81,6 +81,7 @@ try{
   for(const viewport of [{width:1365,height:1000},{width:390,height:844}]) {
     for(const scenario of ['loading','unpaired','offline','absent','disconnected','stale','no-course','blank-goal','old-finished','old-finished-start','start-error','start-pending']) {
       const page=await browser.newPage({viewport}); const fixture=state();
+      if(scenario==='old-finished-start'){await page.clock.install();fixture.holdCapability='start-browser';}
       Object.assign(fixture,scenario==='unpaired'?{unpaired:true}:scenario==='offline'?{online:false}:scenario==='absent'?{noSession:true}:scenario==='disconnected'||scenario.startsWith('start-')?{connected:false}:scenario==='stale'?{stale:true,paused:true}:scenario==='no-course'?{noCourse:true}:{});
       if(scenario.startsWith('old-finished')){fixture.task={id:'old-task',status:'completed',capability_id:'quiz-learn',outcome:{operatorResolution:{result:'completed',requestedAt:new Date().toISOString(),resolvedAt:new Date().toISOString()}}};fixture.jobs.set('old-task',fixture.task);if(scenario==='old-finished-start')fixture.connected=false;}
       let release;const held=new Promise(done=>{release=done;});let actions=0;
@@ -104,7 +105,7 @@ try{
       if(scenario==='no-course'){await expect(page.getByText('No course page is open yet.',{exact:false})).toBeVisible();await expect(page.getByRole('textbox',{name:/What would you like to achieve/})).toBeHidden();}
       if(scenario==='blank-goal'){await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');await page.getByRole('textbox',{name:/What would you like to achieve/}).fill('');await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeDisabled();}
       if(scenario==='old-finished'){await expect(page.getByRole('heading',{name:'Work on a course',exact:true})).toBeVisible();await expect(page.getByRole('heading',{name:'Current task',exact:true})).toBeHidden();await expect(page.getByText(/Marked completed by you/)).toBeHidden();await expect(page.getByText('Task recorded',{exact:true})).toBeHidden();}
-      if(scenario==='old-finished-start'){await page.getByRole('button',{name:'Start browser',exact:true}).click();await expect.poll(()=>fixture.starts).toBe(1);await expect(page.getByText(/Marked completed by you/)).toBeHidden();await expect(page.getByRole('heading',{name:'Current task',exact:true})).toBeHidden();}
+      if(scenario==='old-finished-start'){await page.getByRole('button',{name:'Start browser',exact:true}).click();await expect.poll(()=>fixture.starts).toBe(1);await page.clock.fastForward(31_000);await expect(page.getByText(/Marked completed by you/)).toBeHidden();await expect(page.getByRole('heading',{name:'Current task',exact:true})).toBeHidden();}
       if(scenario.startsWith('start-')) {
         await page.getByRole('button',{name:'Start browser',exact:true}).click();
         if(scenario==='start-pending') {
