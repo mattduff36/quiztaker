@@ -1,7 +1,7 @@
 # Future development
 
-The owner approved implementing the two items below in the combined development
-pass on 3 November 2026. They are no longer deferred. Propose each newly discovered
+The two items below shipped in helper/site1.0.21 on 3 November 2026.
+They are no longer pending. Propose each newly discovered
 idea to the owner and record their decision before implementing it.
 
 ## Course coverage checklist

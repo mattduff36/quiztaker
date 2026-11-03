@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Check, Clipboard, Download, LoaderCircle, Play, RefreshCw } from 'lucide-react';
 import { productName } from '@/lib/brand';
+import { readJsonResponse } from '@/lib/operations-readiness';
 import { formatDisplayDate } from '@/lib/display-date';
 
 interface PairingDetails {
@@ -51,42 +52,50 @@ const connectionStyles = {
 export function HelperOnboarding({ connection, download }: HelperOnboardingProps) {
   const router = useRouter();
   const [pairing, setPairing] = useState<PairingDetails | null>(null);
-  const [hasRequestedDownload, setHasRequestedDownload] = useState(false);
+  const [error, setError] = useState('');
+  const [now, setNow] = useState(Date.now());
   const [isCodeCopied, setIsCodeCopied] = useState(false);
   const [isCreatingCode, startCreatingCode] = useTransition();
-  const [, startStatusRefresh] = useTransition();
+  const [isRefreshing, startStatusRefresh] = useTransition();
   const copyTimer = useRef<number | null>(null);
   const isPaired = connection.state !== 'not-paired';
   const shouldRefresh = pairing !== null || isPaired;
-  const helperLaunchUrl = pairing
+  const pairingExpired = Boolean(pairing && Date.parse(pairing.expiresAt) <= now);
+  const helperLaunchUrl = pairing && !pairingExpired
     ? `vitriol-helper://pair?code=${encodeURIComponent(pairing.code)}&controlPlaneUrl=${encodeURIComponent(pairing.controlPlaneUrl)}`
     : '';
 
   useEffect(() => {
     if (!shouldRefresh) return;
     const interval = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return;
+      if (document.visibilityState !== 'visible' || isRefreshing) return;
       startStatusRefresh(() => router.refresh());
-    }, 3_000);
+    }, !isPaired && pairing ? 3_000 : connection.state === 'online' ? 15_000 : 10_000);
     return () => window.clearInterval(interval);
-  }, [router, shouldRefresh]);
+  }, [router, shouldRefresh, isRefreshing, isPaired, Boolean(pairing), connection.state]);
+
+  useEffect(() => { if (!pairing) return; const timer=window.setInterval(()=>setNow(Date.now()),1000); return()=>window.clearInterval(timer); }, [pairing]);
+  useEffect(() => () => { if(copyTimer.current)window.clearTimeout(copyTimer.current); }, []);
 
   function createCode() {
     startCreatingCode(async () => {
-      const response = await fetch('/api/helper/pair', { method: 'POST' });
-      const value = await response.json() as Partial<PairingDetails>;
+      setError('');
+      try {
+      const response = await fetch('/api/helper/pair', { method: 'POST', signal: AbortSignal.timeout(15000) });
+      const value = await readJsonResponse<Partial<PairingDetails>>(response,'Could not create a pairing code. Retry when connected.');
       if (response.ok && value.code && value.expiresAt && value.controlPlaneUrl) {
         setPairing({
           code: value.code,
           expiresAt: value.expiresAt,
           controlPlaneUrl: value.controlPlaneUrl,
         });
-      }
+      } else { throw new Error('The pairing code response was incomplete. Retry.'); }
+      } catch(cause) {setError(cause instanceof Error ? cause.message : 'Could not create a pairing code. Retry when connected.');}
     });
   }
 
   async function copyCode(value: string) {
-    await navigator.clipboard.writeText(value);
+    try { await navigator.clipboard.writeText(value); } catch { setError('Could not copy the code. Select and copy it manually.'); return; }
     setIsCodeCopied(true);
     if (copyTimer.current) window.clearTimeout(copyTimer.current);
     copyTimer.current = window.setTimeout(() => setIsCodeCopied(false), 1_600);
@@ -95,6 +104,7 @@ export function HelperOnboarding({ connection, download }: HelperOnboardingProps
   return (
     <>
       <ConnectionStatus connection={connection} />
+      {error ? <p role="alert" className="mb-5 text-sm text-rose-800">{error}</p> : null}
       <div className="grid gap-5 lg:grid-cols-3">
         <Step number="01" title="Download">
           <p className="text-sm leading-6 text-slate-600">Download the browser-friendly ZIP, extract it, and run the MSI inside.</p>
@@ -103,7 +113,6 @@ export function HelperOnboarding({ connection, download }: HelperOnboardingProps
               <a
                 href={download.url}
                 download
-                onClick={() => setHasRequestedDownload(true)}
                 className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-700"
               >
                 <Download className="size-4" />
@@ -130,7 +139,7 @@ export function HelperOnboarding({ connection, download }: HelperOnboardingProps
                 <p className="mt-1 text-xs text-emerald-700">Last heartbeat {formatDate(connection.lastSeenAt)}</p>
               </div>
             </div>
-          ) : pairing ? (
+          ) : pairing && !pairingExpired ? (
             <div className="mt-1">
               <p className="text-xs text-slate-500">Enter this one-time code in the helper:</p>
               <button
@@ -146,19 +155,18 @@ export function HelperOnboarding({ connection, download }: HelperOnboardingProps
                 <CopyIndicator isCopied={isCodeCopied} />
               </button>
               <p className="mt-2 text-xs text-slate-500">Expires {formatDate(pairing.expiresAt)}</p>
+              <button type="button" disabled={isCreatingCode} onClick={createCode} className="mt-3 min-h-11 text-sm font-semibold text-cyan-800 underline">Generate a new code</button>
             </div>
           ) : (
             <>
               <p id="step-two-instructions" className="text-sm leading-6 text-slate-600">
-                {hasRequestedDownload
-                  ? 'Generate a short-lived code before starting the helper.'
-                  : 'Download the helper in Step 1 to unlock code generation.'}
+                {pairingExpired ? 'Your pairing code has expired. Generate a new code to continue.' : 'Already installed? Generate a pairing code, then start the helper. Otherwise, download and install it first.'}
               </p>
               <div className="mt-auto pt-5">
                 <button
                   type="button"
                   onClick={createCode}
-                  disabled={!hasRequestedDownload || isCreatingCode}
+                  disabled={isCreatingCode}
                   aria-describedby="step-two-instructions"
                   className="inline-flex items-center gap-2 rounded-md bg-cyan-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:hover:bg-slate-200"
                 >
@@ -184,7 +192,7 @@ export function HelperOnboarding({ connection, download }: HelperOnboardingProps
             <p className="text-sm leading-6 text-slate-600">
               The helper is paired but offline. Start Vitriol Helper again; it will reuse the saved pairing automatically.
             </p>
-          ) : pairing ? (
+          ) : pairing && !pairingExpired ? (
             <>
               <p className="text-sm leading-6 text-slate-600">
                 Launch the installed helper. It will pair automatically with <span className="font-semibold text-slate-950">{pairing.controlPlaneUrl}</span>.

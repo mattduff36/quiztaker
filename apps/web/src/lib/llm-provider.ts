@@ -69,9 +69,6 @@ export type DeploymentLearner = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
-  cursorApiKey?: string;
-  nodeEnv?: string;
-  vercel?: string;
 };
 
 type PublicRow = {
@@ -183,9 +180,6 @@ export function sanitizeLlmConnection(row: PublicRow | null, deployment: Deploym
   }
   const ready = learnerIsEnabled({
     learnerApiKey: deployment.apiKey,
-    cursorApiKey: deployment.cursorApiKey,
-    nodeEnv: deployment.nodeEnv,
-    vercel: deployment.vercel,
   });
   if (!ready) return { source: 'none', ready: false, provider: null, model: null, hasKey: false };
   return {
@@ -397,9 +391,6 @@ export function currentDeployment(): DeploymentLearner {
     apiKey: env.LEARNER_API_KEY,
     baseUrl: env.LEARNER_BASE_URL,
     model: env.LEARNER_MODEL,
-    cursorApiKey: env.CURSOR_API_KEY,
-    nodeEnv: process.env.NODE_ENV,
-    vercel: process.env.VERCEL,
   };
 }
 

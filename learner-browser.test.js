@@ -2,16 +2,72 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
 const { readSnapshot, applyAction, localActionAllowed, pageShowsPass, sameLearnerView } = require('./pw-learn-quiz');
+const { recognizeQuizResult } = require('./lib/quiz-result');
 
-async function act(page, name, mode = 'read', choice = false, retryState) {
+async function act(page, name, mode = 'read', choice = false) {
   const view = await readSnapshot(page, mode);
   const target = (choice ? view.snapshot.choices : view.snapshot.buttons).find(control => control.name === name);
   assert.ok(target, `Observed control: ${name}`);
   const action = { action: choice ? 'answer-select' : 'click', targetId: target.id };
   assert.equal(localActionAllowed(action, view.snapshot, mode), true);
-  await applyAction(page, action, view.snapshot, view.handles, mode, retryState);
+  await applyAction(page, action, view.snapshot, view.handles, mode);
   return view;
 }
+
+test('Canon visible result recognition ignores hidden, reverse-side and stale course evidence', async () => {
+  const browser = await chromium.launch({channel:'chrome',headless:true});
+  try {
+    const page = await browser.newPage({viewport:{width:1000,height:850}});
+    const summary = '<h1>Test Results - Example Learner</h1><table><tr><td>Questions on Test</td><td>20</td></tr><tr><td>Questions Correct</td><td>15</td></tr><tr><td>Questions Incorrect</td><td>5</td></tr><tr><td>Percent Correct</td><td>75%</td></tr><tr><td>Passing Score</td><td>70%</td></tr><tr><td>Pass/Fail:</td><td>Passed</td></tr><tr><td>Overall Score</td><td>75%(15 out of20)</td></tr></table>';
+    await page.setContent(`<h1>Current course</h1><div hidden>${summary}</div><div style="transform:rotateY(180deg);backface-visibility:hidden">${summary}</div><div style="opacity:0">${summary}</div>`);
+    let {snapshot} = await readSnapshot(page,'quiz');
+    snapshot.text += '\nRetained memory: You passed this quiz';
+    assert.equal(recognizeQuizResult(snapshot),null);
+    await page.setContent('<iframe style="width:900px;height:700px"></iframe>');
+    await page.frames()[1].setContent(summary);
+    snapshot = (await readSnapshot(page,'quiz')).snapshot;
+    assert.equal(pageShowsPass(snapshot),true);
+    assert.equal(recognizeQuizResult(snapshot).scorePercent,75);
+    assert.equal(recognizeQuizResult(snapshot).questionsCorrect,15);
+    assert.equal(Object.hasOwn(JSON.parse(JSON.stringify(snapshot)),'resultViews'),false);
+    await page.frames()[1].locator('td').filter({hasText:/^Passed$/}).evaluate(el=>el.textContent='Failed');
+    assert.equal(recognizeQuizResult((await readSnapshot(page,'quiz')).snapshot).status,'failed');
+    await page.locator('iframe').evaluate(el=>el.style.cssText+=';transform:rotateY(180deg);backface-visibility:hidden');
+    assert.equal(recognizeQuizResult((await readSnapshot(page,'quiz')).snapshot),null);
+    await page.locator('iframe').evaluate(el=>el.style.cssText='width:900px;height:700px;opacity:0');
+    assert.equal(recognizeQuizResult((await readSnapshot(page,'quiz')).snapshot),null);
+  } finally { await browser.close(); }
+});
+
+test('learner process ends visible pass or fail before requesting any model action or retry', async () => {
+  const net = require('node:net');
+  const {spawn} = require('node:child_process');
+  const server = net.createServer();
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const port = server.address().port;
+  await new Promise(resolve=>server.close(resolve));
+  const browser = await chromium.launch({channel:'chrome',headless:true,args:[`--remote-debugging-port=${port}`]});
+  try {
+    const page = await browser.newPage();
+    for (const status of ['Passed','Failed']) {
+      await page.setContent(`<h1>Test Results</h1><p>Pass/Fail: ${status}</p><p>Percent Correct75%</p><p>Passing Score70%</p><button onclick="document.body.textContent='UNEXPECTED RETRY'">Retake quiz</button>`);
+      const run = await new Promise((resolve,reject)=>{
+        const child=spawn(process.execPath,['pw-learn-quiz.js','0'],{cwd:__dirname,env:{...process.env,VITRIOL_LEARNER_MODE:'quiz',PLAYWRIGHT_CDP_URL:`http://127.0.0.1:${port}`},stdio:['pipe','pipe','pipe']});
+        let output='';let error='';
+        const timer=setTimeout(()=>{child.kill();reject(new Error('Terminal result waited for a model response'));},15000);
+        child.stdout.on('data',chunk=>output+=chunk);child.stderr.on('data',chunk=>error+=chunk);
+        child.on('error',reject);child.on('exit',code=>{clearTimeout(timer);resolve({code,output,error});});
+      });
+      assert.equal(run.code,status==='Passed'?0:1,run.error);
+      assert.doesNotMatch(run.output,/LEARNER_SNAPSHOT|LEARNER_QUESTION|repeated unchanged/);
+      const payload=JSON.parse(run.output.match(/^AUTOMATION_RESULT (.+)$/m)[1]);
+      assert.equal(payload.quizResult.status,status.toLowerCase());
+      assert.equal(payload.quizResult.scorePercent,75);
+      assert.equal(payload.completed,status==='Passed'?1:0);
+      assert.match(await page.locator('body').innerText(),/Test Results/);
+    }
+  } finally {await browser.close();}
+});
 
 test('real browser reads nested course cards, collapse panels, icon modals and later long-page material', async () => {
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -424,32 +480,18 @@ test('observed no-op JavaScript anchors open course panels and popups; arbitrary
   } finally { await browser.close(); }
 });
 
-test('a failed result can retake, answer, submit and visibly pass; repeated retries are bounded', async () => {
+test('a failed result preserves feedback and refuses automatic retake', async () => {
   const browser = await chromium.launch({channel:'chrome',headless:true});
   try {
     const page = await browser.newPage();
-    await page.setContent(`<h1>Quiz result</h1><div id="result">You did not pass. Review feedback: use the retained amber calibration fact.<button onclick="this.parentElement.hidden=true;document.querySelector('#question').hidden=false">Retake quiz</button></div>
-      <form id="question" hidden onsubmit="event.preventDefault();this.hidden=true;document.querySelector('#summary').hidden=false"><label><input type="radio" name="answer" value="amber">Amber</label><label><input type="radio" name="answer" value="blue">Blue</label><input type="submit" value="Next »"></form>
-      <div id="summary" hidden><button onclick="document.body.innerHTML='<h1>Quiz result</h1><p>You passed this quiz. Your score: 100%</p>'">Submit quiz</button></div>`);
-    const failure = await readSnapshot(page,'quiz');
-    assert.match(failure.snapshot.text,/did not pass.*Review feedback/s);
-    assert.equal(pageShowsPass(failure.snapshot),false);
-    const budget = {count:0};
-    // Deterministic fixture decisions use actual observed controls. The same
-    // apply path and per-job budget are used by the runtime after proposals.
-    await act(page,'Retake quiz','quiz',false,budget);
-    await act(page,'Amber','quiz',true,budget);
-    await act(page,'Next »','quiz',false,budget);
-    await act(page,'Submit quiz','quiz',false,budget);
-    assert.equal(pageShowsPass((await readSnapshot(page,'quiz')).snapshot),true);
-    assert.equal(budget.count,1);
-
-    await page.setContent(`<p>You did not pass. Feedback remains available.</p><button onclick="document.querySelector('#attempts').textContent=String(Number(document.querySelector('#attempts').textContent)+1)">Retry quiz</button><output id="attempts">0</output>`);
-    const limit = {count:0};
-    await act(page,'Retry quiz','quiz',false,limit);
-    await act(page,'Retry quiz','quiz',false,limit);
-    await assert.rejects(act(page,'Retry quiz','quiz',false,limit),error=>error.code==='LEARNER_RETRY_LIMIT');
-    assert.equal(await page.locator('#attempts').textContent(),'2');
-    assert.equal(pageShowsPass((await readSnapshot(page,'quiz')).snapshot),false);
-  } finally { await browser.close(); }
+    await page.setContent(`<h1>Quiz result</h1><p>You did not pass. Review feedback: use the retained amber calibration fact.</p><button onclick="document.body.textContent='Unexpected retake'">Retake quiz</button>`);
+    const view = await readSnapshot(page,'quiz');
+    const target=view.snapshot.buttons.find(control=>control.name==='Retake quiz');
+    const action={action:'click',targetId:target.id};
+    assert.equal(recognizeQuizResult(view.snapshot).status,'failed');
+    assert.match(recognizeQuizResult(view.snapshot).evidence[0],/amber calibration fact/);
+    assert.equal(localActionAllowed(action,view.snapshot,'quiz'),false);
+    await assert.rejects(applyAction(page,action,view.snapshot,view.handles,'quiz'),/not allowed/);
+    assert.match(await page.locator('body').innerText(),/did not pass/);
+  } finally {await browser.close();}
 });

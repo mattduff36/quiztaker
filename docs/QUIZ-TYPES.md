@@ -220,9 +220,9 @@ Ordered from fastest / most-common to slowest / rarest.
   assessment. The first live page for this variant has not been recorded yet.
 - **Strategy** — `quiz-learn` / `pw-learn-quiz.js <tabIdx>`. One confirmed plan
   allows at most 20 steps. The helper sends a page snapshot to the control
-  plane. A local development server calls Cursor when `CURSOR_API_KEY` is set
-  and does not call Gemini for that step. Hosted runs call an OpenAI-compatible
-  model only when `LEARNER_API_KEY` is set. The model may return `click` on a
+  plane. It uses the user's configured personal OpenAI, Gemini or OpenRouter
+  connection, or the inherited OpenAI-compatible HTTP provider when
+  `LEARNER_API_KEY` is set. The model may return `click` on a
   navigation control, `answer-select`,
   `scroll`, `wait`, `capture`, or `verify`. A pass is recorded only when the
   page text itself shows it. Submit, finish, exit, and grade are rejected.
@@ -499,9 +499,11 @@ selections survived sign-in recovery; inspect the checked states before
 re-entering answers. The owner requires normal-user operation through the UI,
 with Vitriol using its own learning/research; do not feed it answers extracted
 from internal logs. A `Pass/Fail: Passed` results table with a score below100%
-currently falls through automatic learner verification; the operator verified
-the visible result and paused the session. Fix that recognizer in a later
-batch; do not retake a visibly passed assessment to satisfy internal status.
+fell through automatic learner verification in helper1.0.21; the operator
+verified the visible result and paused the session. Helper1.0.22 recognizes
+the named Canon result table and records the real score/counts automatically.
+Visible pass or fail ends the run immediately, with no implicit retake.
+Do not retake a visibly passed assessment to satisfy internal status.
 
 Observed on 3 November with helper 1.0.21: checked-state observations let the
 learner select answers once, handle multiple selections and advance through a

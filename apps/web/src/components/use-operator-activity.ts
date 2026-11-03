@@ -8,9 +8,10 @@ import type { OperatorActivity } from '@/lib/operator-activity';
 export function useOperatorActivity(helperId: string) {
   const [ready,setReady] = useState(false), [paused,setPaused] = useState(false);
   const [remaining,setRemaining] = useState(OPERATOR_IDLE_MS), [error,setError] = useState('');
+  const pausePending = useRef(false);
   const deadline = useRef(Date.now()+OPERATOR_IDLE_MS), isPaused = useRef(false), serverVersion = useRef(0);
   const sync = useCallback((value?: OperatorActivity | null) => {
-    if (!value || Date.parse(value.serverNow)<serverVersion.current) return;
+    if (!value || (pausePending.current && !value.paused) || Date.parse(value.serverNow)<serverVersion.current) return;
     serverVersion.current=Date.parse(value.serverNow);
     const left=Math.max(0,Date.parse(value.expiresAt)-Date.parse(value.serverNow));
     deadline.current=Date.now()+left; isPaused.current=value.paused;
@@ -23,7 +24,7 @@ export function useOperatorActivity(helperId: string) {
       sync(value); setError(''); return value;
     } catch (cause) {setError(cause instanceof Error?cause.message:'Could not update session protection.');return null;}
   },[helperId,sync]);
-  const pause = useCallback(async()=>{isPaused.current=true;setPaused(true);await send('pause');},[send]);
+  const pause = useCallback(async()=>{pausePending.current=true;isPaused.current=true;setPaused(true);try {await send('pause');} finally {pausePending.current=false;}},[send]);
   const expire = useCallback(async()=>{isPaused.current=true;setPaused(true);await send('check');},[send]);
   const resume = useCallback(async()=>{await send('resume');},[send]);
   useEffect(()=>{

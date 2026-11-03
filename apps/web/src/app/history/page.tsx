@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 
 export default async function HistoryPage() {
   const user = await requireAuthenticatedUser();
-  const [data, sessions, jobs, attempts] = await Promise.all([
+  const [data, sessions, jobs] = await Promise.all([
     queryRows<{
       id: number;
       kind: string;
@@ -24,7 +24,10 @@ export default async function HistoryPage() {
       occurred_at: string;
       payload: { outputUrl?: string; diagnosis?: { likelyCause?: { label?: string } } } | null;
     }>(
-      `select id, kind, title, result, detail, occurred_at, payload
+      `select id, kind, title, result, detail, occurred_at,
+         coalesce(payload,'{}'::jsonb) || jsonb_build_object('outputUrl',
+           (select '/api/artifacts/'||a.id::text||'/url' from artifacts a
+            where a.user_id=history_events.user_id and a.storage_url=history_events.payload->>'outputUrl' limit 1)) as payload
        from history_events
        where user_id = $1
        order by occurred_at desc
@@ -54,39 +57,21 @@ export default async function HistoryPage() {
       diagnosis: { likelyCause?: { label?: string; recommendation?: string } } | null;
       created_at: string;
     }>(
-      `select jobs.id, jobs.capability_id, jobs.status, jobs.output_url, jobs.diagnosis, jobs.created_at
+      `select jobs.id, jobs.capability_id, jobs.status,
+         case when output.id is not null then '/api/artifacts/'||output.id::text||'/url' else null end as output_url,
+         jobs.diagnosis, jobs.created_at
        from jobs
+       left join lateral (select id from artifacts where artifacts.job_id=jobs.id and artifacts.user_id=jobs.user_id and artifacts.storage_url=jobs.output_url limit 1) output on true
        where jobs.user_id = $1
        order by jobs.created_at desc
        limit 40`,
       [user.id],
     ),
-    queryRows<{
-      attempt_id: string;
-      occurred_at: string;
-      data: { outcome?: string; verified?: boolean; status?: string; diagnosis?: { likelyCause?: { label?: string } } };
-    }>(
-      `select attempt_id, occurred_at, data
-       from attempt_events
-       where user_id = $1 and event = 'attempt-finished'
-       order by occurred_at desc
-       limit 100`,
-      [user.id],
-    ),
   ]);
-  const attemptRows = attempts.map((attempt, index) => ({
-    id: -1 - index,
-    kind: 'attempt',
-    title: attempt.attempt_id,
-    result: attempt.data?.verified ? `${attempt.data.outcome || 'finished'} (verified)` : String(attempt.data?.outcome || 'unknown'),
-    detail: attempt.data?.diagnosis?.likelyCause?.label || attempt.data?.status || '',
-    occurred_at: attempt.occurred_at,
-    payload: attempt.data,
-  }));
   return (
     <AppShell email={user.email}>
       <PageFrame eyebrow="Audit trail" title="History" description="Courses, activities, verification, sessions, diagnoses, and artifact links from the paired helper.">
-        <HistoryList rows={[...attemptRows, ...data]} sessions={sessions} jobs={jobs} />
+        <HistoryList rows={data} sessions={sessions} jobs={jobs} />
       </PageFrame>
     </AppShell>
   );

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assertLearnerDetectionMatch, LEARNER_SYSTEM_PROMPT, learnerGuidanceText, learnerIsEnabled, learnerModelChain, learnerPrefersCursor, requestLearnerDecision } from '../src/lib/learner.js';
+import { assertLearnerDetectionMatch, LEARNER_SYSTEM_PROMPT, learnerGuidanceText, learnerIsEnabled, learnerModelChain, requestLearnerDecision } from '../src/lib/learner.js';
 
 const snapshot = {
   buttons: [{ id: 'b1', name: 'Next' }],
@@ -120,54 +120,9 @@ test('learner tries the next model when the first is busy', async () => {
   assert.deepEqual(result.action, { action: 'wait', ms: 500 });
 });
 
-test('local development prefers Cursor and hosted runs do not', () => {
-  assert.equal(learnerPrefersCursor({
-    nodeEnv: 'development',
-    cursorApiKey: 'cursor-key',
-  }), true);
-  assert.equal(learnerPrefersCursor({
-    nodeEnv: 'development',
-    vercel: '1',
-    cursorApiKey: 'cursor-key',
-  }), false);
-  assert.equal(learnerPrefersCursor({
-    nodeEnv: 'production',
-    cursorApiKey: 'cursor-key',
-  }), false);
-  assert.equal(learnerIsEnabled({ nodeEnv: 'development', cursorApiKey: 'cursor-key' }), true);
-  assert.equal(learnerIsEnabled({ nodeEnv: 'production', learnerApiKey: 'gemini-key' }), true);
-  assert.equal(learnerIsEnabled({ nodeEnv: 'production' }), false);
-});
-
-test('learner uses Cursor and does not call Gemini', async () => {
-  let calls = 0;
-  const result = await requestLearnerDecision({
-    apiKey: 'gemini-key',
-    snapshot,
-    fetchImpl: async () => {
-      calls += 1;
-      return new Response('unused', { status: 500 });
-    },
-    cursor: async () => ({ action: { action: 'wait', ms: 500 } }),
-  });
-  assert.equal(calls, 0);
-  assert.deepEqual(result.action, { action: 'wait', ms: 500 });
-});
-
-test('learner stops when Cursor fails instead of spending Gemini', async () => {
-  let calls = 0;
-  const result = await requestLearnerDecision({
-    apiKey: 'gemini-key',
-    snapshot,
-    fetchImpl: async () => {
-      calls += 1;
-      return new Response('unused', { status: 500 });
-    },
-    cursor: async () => { throw new Error('Cursor learner did not start'); },
-  });
-  assert.equal(calls, 0);
-  assert.equal(result.stop, true);
-  assert.match(result.error || '', /did not start/);
+test('inherited learner requires its configured HTTP provider key', () => {
+  assert.equal(learnerIsEnabled({learnerApiKey:'provider-key'}),true);
+  assert.equal(learnerIsEnabled({}),false);
 });
 
 test('learner sends bounded guidance and an ask-user example', async () => {

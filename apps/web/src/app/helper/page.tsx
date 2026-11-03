@@ -40,7 +40,7 @@ export default async function HelperPage() {
       <PageFrame
         eyebrow="Local execution"
         title="Windows helper"
-        description="The helper makes outbound HTTPS requests only. CDP, cookies, screenshots, and the interactive Chrome profile remain on your PC."
+        description="The helper makes outbound HTTPS requests only. Browser control, sign-in cookies, and the interactive Chrome profile remain on your PC. Course captures and private artifacts can be uploaded to the control plane."
       >
         <HelperOnboarding
           download={{

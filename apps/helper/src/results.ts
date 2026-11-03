@@ -12,13 +12,26 @@ export function structuredResult(
     return { ...resultEnvelope(capabilityId, code === 0, { browserSession }) };
   }
   if (capabilityId === 'quiz-learn') {
+    let quizResult: Record<string,unknown> | undefined;
+    try {
+      const raw=JSON.parse([...output.matchAll(/^AUTOMATION_RESULT (.+)$/gm)].at(-1)?.[1]||'null')?.quizResult;
+      if(raw&&['passed','failed'].includes(raw.status)) {
+        quizResult={status:raw.status};
+        for(const field of ['scorePercent','passingScorePercent','questionsTotal','questionsCorrect','questionsIncorrect']) {
+          const value=raw[field];
+          if(typeof value==='number'&&Number.isFinite(value)&&value>=0&&(field.endsWith('Percent')?value<=100:Number.isInteger(value)&&value<=10_000))quizResult[field]=value;
+        }
+        if(Array.isArray(raw.evidence))quizResult.evidence=raw.evidence.filter((v:unknown)=>typeof v==='string').slice(0,4).map((v:string)=>v.slice(0,2400));
+      }
+    } catch { /* Only the current executor's bounded structured result is retained. */ }
     const marker = [...output.matchAll(/^LEARNER_TABS (.+)$/gm)].at(-1)?.[1];
     try {
       const tabs: unknown = marker ? JSON.parse(marker) : null;
       if (Array.isArray(tabs) && tabs.every((tab) => tab && Number.isInteger(tab.idx) && typeof tab.url === 'string' && typeof tab.title === 'string')) {
-        return { ...resultEnvelope(capabilityId, code === 0, { browserSession: replaceBrowserSession(tabs) }) };
+        return { ...resultEnvelope(capabilityId, code === 0, { browserSession: replaceBrowserSession(tabs), ...(quizResult?{quizResult}:{}) }) };
       }
     } catch { /* Invalid evidence must not change the current browser session. */ }
+    if(quizResult)return {...resultEnvelope(capabilityId,code===0,{quizResult})};
   }
   if (capabilityId === 'cdp-check') {
     const connected = Boolean((parsed as { ok?: boolean } | null)?.ok);

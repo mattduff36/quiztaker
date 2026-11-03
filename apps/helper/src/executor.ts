@@ -204,6 +204,11 @@ function attachLearnerBridge(
         return;
       }
       const decision = await propose(JSON.parse(json) as unknown);
+      // The operator may pause/finish while the hosted model is answering.
+      if (await isCancellationRequested?.()) {
+        writeLearnerLine(child, 'LEARNER_STOP cancelled');
+        return;
+      }
       if (!decision.action || decision.stop) {
         writeLearnerLine(child, `LEARNER_STOP ${oneLine(decision.error || 'stopped')}`);
         return;

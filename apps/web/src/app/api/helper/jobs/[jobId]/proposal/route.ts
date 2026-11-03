@@ -3,12 +3,10 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { queryOne, withTransaction } from '@/lib/db';
 import { getServerEnv } from '@/lib/env';
-import { askCursorLearner } from '@/lib/cursor-learner';
 import {
   LEARNER_MAX_STEPS,
   learnerGuidanceText,
   learnerModelChain,
-  learnerPrefersCursor,
   requestLearnerDecision,
   withStandingInstructions,
   type LearnerAction,
@@ -66,13 +64,14 @@ export async function POST(
   const { jobId } = await context.params;
   const job = await queryOne<{
     status: string;
+    cancel_requested: boolean;
     capability_id: string;
     attempt_id: string;
     constraints: { mode?: unknown; maxSteps?: number; submissionAuthorized?: boolean } | null;
     input: { mode?: unknown; guidance?: unknown; conversationId?: unknown } | null;
     browser_session_id: string | null;
   }>(
-    `select jobs.status, jobs.capability_id, plans.attempt_id, plans.constraints, plans.input,
+    `select jobs.status, jobs.cancel_requested, jobs.capability_id, plans.attempt_id, plans.constraints, plans.input,
             plans.browser_session_id
      from jobs
      join plans on plans.id = jobs.plan_id
@@ -82,7 +81,7 @@ export async function POST(
   if (!job || job.capability_id !== 'quiz-learn') {
     return NextResponse.json({ error: 'Job not found' }, { status: 404 });
   }
-  if (!['queued', 'dispatched', 'running'].includes(job.status)) {
+  if (job.cancel_requested || !['queued', 'dispatched', 'running'].includes(job.status)) {
     return NextResponse.json({ stop: true, error: 'The learner job is not running' });
   }
   let policy;
@@ -143,12 +142,13 @@ export async function POST(
   }
   const maxSteps = Math.min(LEARNER_MAX_STEPS, Number(job.constraints?.maxSteps ?? LEARNER_MAX_STEPS));
   const reserved = await withTransaction(async (sql) => {
-    await sql(
-      `select id from jobs
+    const [current] = await sql<{status:string;cancel_requested:boolean}>(
+      `select status,cancel_requested from jobs
        where id = $1 and helper_id = $2 and user_id = $3
-       for update`,
+       for no key update`,
       [jobId, helper.helperId, helper.userId],
     );
+    if(!current || current.cancel_requested || !['queued','dispatched','running'].includes(current.status))return false;
     const rows = await sql<{ count: string }>(
       `select count(*)::text as count
        from attempt_events
@@ -183,17 +183,11 @@ export async function POST(
       await queryOne(`insert into attempt_events (user_id, attempt_id, event, data) values ($1,$2,'learner-tools',$3::jsonb) returning id`,
         [helper.userId,job.attempt_id,JSON.stringify({jobId,evidence:personal.evidence})]);
     }
-    return finishLearnerDecision(conversation, helper.userId, helper.helperId, incoming, personal.ok
+    return finishLearnerDecision(jobId, conversation, helper.userId, helper.helperId, incoming, personal.ok
       ? { action: personal.action }
       : { stop: true, error: personal.error });
   }
   const env = getServerEnv();
-  const cursorKey = env.CURSOR_API_KEY;
-  const preferCursor = learnerPrefersCursor({
-    nodeEnv: process.env.NODE_ENV,
-    vercel: process.env.VERCEL,
-    cursorApiKey: cursorKey,
-  });
   const decision = await requestLearnerDecision({
     apiKey: env.LEARNER_API_KEY,
     baseUrl: env.LEARNER_BASE_URL,
@@ -205,11 +199,9 @@ export async function POST(
     }),
     snapshot: modelSnapshot,
     policy,
-    cursor: preferCursor && cursorKey
-      ? (current) => askCursorLearner({ apiKey: cursorKey, model: env.CURSOR_MODEL, snapshot: current, policy })
-      : undefined,
   });
   return finishLearnerDecision(
+    jobId,
     conversation,
     helper.userId,
     helper.helperId,
@@ -235,12 +227,16 @@ function storedConversation(
 }
 
 async function finishLearnerDecision(
+  jobId: string,
   conversation: { id: string | null; browserSessionId: string },
   userId: string,
   helperId: string,
   observed: { title?: string; url?: string; text?: string },
   decision: { action?: LearnerAction; stop?: boolean; error?: string },
 ) {
+  return withTransaction(async sql => {
+  const [current]=await sql<{status:string;cancel_requested:boolean}>(`select status,cancel_requested from jobs where id=$1 and user_id=$2 and helper_id=$3 for no key update`,[jobId,userId,helperId]);
+  if(!current || current.cancel_requested || !['queued','dispatched','running'].includes(current.status)) return NextResponse.json({stop:true,error:'This task has stopped. No further browser action is allowed.'});
   if (conversation.id) {
     try {
       const saved = await recordLearnerTurn({
@@ -250,7 +246,7 @@ async function finishLearnerDecision(
         conversationId: conversation.id,
         observed,
         decision,
-      });
+      }, {query:sql,transaction:fn=>fn(sql)});
       if (!saved) return NextResponse.json({ stop: true, error: 'Learner memory could not be saved' });
     } catch {
       return NextResponse.json({ stop: true, error: 'Learner memory could not be saved' });
@@ -258,4 +254,5 @@ async function finishLearnerDecision(
   }
   if (decision.action && !decision.stop) return NextResponse.json({ action: decision.action });
   return NextResponse.json({ stop: true, error: decision.error || 'Learner stopped' });
+  });
 }

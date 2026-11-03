@@ -234,8 +234,8 @@ details in `docs/RUNBOOK.md`. Key entry points:
 - `pw-slickquiz-solve.js` — solves a SlickQuiz-powered course exam by lifting
   the client-side `quizJSON` answer key. Only needed if you cannot use the
   SCORM API cheat (kept as a fallback).
-- `pw-course-fast-complete.js` — earlier single-course version of the fast
-  complete. Superseded by `pw-scorm-complete.js` (which also handles 2004).
+- Superseded fast-complete and viewport duplicates have been removed. Use
+  `pw-scorm-complete.js` and `pw-fit-tab.js`; cancel work through the helper.
 
 ---
 

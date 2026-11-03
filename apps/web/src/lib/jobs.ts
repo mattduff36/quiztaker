@@ -24,6 +24,7 @@ import { recoverHelperJobs } from '@/lib/job-recovery';
 import { browserConnectionLost, invalidateBrowserConnection } from '@/lib/browser-connection';
 import { assertOperatorActive, enforceOperatorIdle } from '@/lib/operator-activity';
 import { recordPlayerJobOutcome } from '@/lib/player-knowledge';
+import { taskStillStopping } from '@/lib/task-completion';
 
 interface JobRow extends Record<string, unknown> {
   id: string;
@@ -84,10 +85,14 @@ export async function createJob(userId: string, planId: string): Promise<{ jobId
   await withTransaction(async (sql) => {
     if (plan.capabilityId !== 'close-browser') await assertOperatorActive(userId,plan.helperId,sql);
     // Serialize all queue requests for this helper, including separate browser tabs.
-    const [helper] = await sql(`select id, update_requested_version, update_error, update_phase
+    const [helper] = await sql(`select id, active_job_id, last_seen_at, update_requested_version, update_error, update_phase
       from helpers where id = $1 and user_id = $2 and revoked_at is null for update`, [plan.helperId, userId]);
     if (!helper) throw new Error('Helper is unavailable');
     assertHelperUpdateAllowsJob(plan.capabilityId, helper);
+    if(helper.active_job_id && plan.capabilityId!=='close-browser') {
+      const [owner]=await sql<{id:string;outcome:unknown}>('select id,outcome from jobs where id=$1 and user_id=$2 and helper_id=$3',[helper.active_job_id,userId,plan.helperId]);
+      if(owner&&taskStillStopping(owner,helper))throw new Error('The previous task is stopping. Wait for the helper to finish before starting another task.');
+    }
     const [active] = await sql("select id from jobs where helper_id = $1 and user_id = $2 and status in ('queued', 'dispatched', 'running') limit 1", [plan.helperId, userId]);
     if (active && plan.capabilityId !== 'close-browser') throw new Error('A job is already active. Wait for it to finish or cancel it first.');
     const capabilityInput = rawPlan!.input as Record<string, unknown> | undefined;
@@ -219,14 +224,14 @@ export async function recordJobEvent(
     [job.plan_id, job.user_id],
   );
   const probeOnly = ['list-tabs', 'cdp-check', 'cert-status', 'detect', 'cert-dry-run', 'tab-inspect', 'fit-tab', 'start-browser', 'close-browser', 'open-url', 'learn-capture'].includes(job.capability_id);
-  await transaction(async (sql) => {
+  const ingested = await transaction(async (sql) => {
   const locked = await sql<{ status: string }>(
     // No job key changes here. FOR UPDATE would block heartbeat's FK KEY SHARE
     // while heartbeat holds helpers, creating a jobs -> helpers -> jobs cycle.
     TERMINAL_JOB_LOCK_SQL,
     [jobId, helperId, userId],
   );
-  if (!locked[0] || ['completed', 'failed', 'cancelled', 'helper-offline', 'awaiting-input'].includes(locked[0].status)) return;
+  if (!locked[0] || ['completed', 'failed', 'cancelled', 'helper-offline', 'awaiting-input'].includes(locked[0].status)) return false;
   const artifact = await storeJobOutput(userId, jobId, output);
   await sql(
     `insert into job_events (user_id, job_id, sequence, event, data, occurred_at)
@@ -348,7 +353,9 @@ export async function recordJobEvent(
       diagnosis,
     });
   }
+  return true;
   });
+  if(!ingested)return;
   if (job.capability_id === 'quiz-learn' && input.event !== 'cancelled') {
     await recordPlayerJobOutcome({ userId, attemptId: job.attempt_id, jobId, status, verified: outcome.verified,
       noProgress: output.includes('This action has not changed the page.') })

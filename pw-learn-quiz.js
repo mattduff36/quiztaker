@@ -12,8 +12,8 @@
 // and never a successful completion. The same action and target on an unchanged
 // view stops after three attempts and asks the operator to resume. Guidance is
 // not a shell argument.
-// Quiz jobs allow at most two observed Retake/Retry actions; failed-result
-// snapshots are retained before those actions, and only visible passes finish.
+// Current visible pass/fail results end the attempt before another model call
+// or repeated-action prompt, preserving the observed score and feedback.
 // Hidden persistent slides never consume the visible-control scan budget;
 // transformed-away flipcard faces and hidden headings are not observations.
 // Read-only DOM family markers support source-linked player knowledge; they
@@ -28,11 +28,10 @@
 const readline = require('node:readline');
 const { chromium } = require('playwright');
 const { observePlayerEvidence } = require('./lib/player-evidence');
+const { recognizeQuizResult, quizResultPayload } = require('./lib/quiz-result');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 const MAX_STEPS = 80;
-const MAX_QUIZ_RETRIES = 2;
-const RETRY_LABEL = /\b(retake|retry)\b/i;
 const SUBMIT_LABEL = /\b(submit|finish|end test|end quiz|grade)\b/i;
 const UNSAFE_LABEL = /\b(log\s*out|sign\s*out|sign\s*in|log\s*in|password|account|payment|purchase|buy|delete|remove|unsubscribe|exit|close browser)\b/i;
 const ASSESSMENT_START_LABEL = /\b(?:(?:start|begin|launch|take)(?:\s+the)?\s+(?:test|quiz|assessment)|retake|retry)\b/i;
@@ -41,8 +40,6 @@ const OPEN_TOPIC_LABEL = /^Open topic: .{1,140}$/;
 const COURSE_INTERACTION_LABEL = /^Course interaction: \d+_\d+_click_?\d+$/;
 const REPEATED_VIEW_LIMIT = 3;
 const REPEATED_VIEW_OPTION = 'Done, resume now';
-const PASS_EVIDENCE = /\byou (?:have )?passed\b|\b(?:result|status):\s*passed\b|\byour score:\s*100\s*%/i;
-const FAIL_EVIDENCE = /\bnot (?:\w+\s+){0,3}pass(?:ed)?\b|\b(did not pass|haven't passed|failed|unsuccessful|not successful)\b/i;
 const ALLOWED = new Set(['click', 'answer-select', 'select-tab', 'scroll', 'find-text', 'wait', 'capture', 'verify', 'ask-user']);
 const observationState = new WeakMap();
 const MAX_CAPTURE_DATA_URL = 900_000;
@@ -60,10 +57,7 @@ function parseLearnQuizArgs(argv) {
 }
 
 function pageShowsPass(snapshot) {
-  const text = `${snapshot?.title || ''}\n${snapshot?.text || ''}`;
-  if (snapshot?.choices?.length) return false;
-  if (FAIL_EVIDENCE.test(text)) return false;
-  return PASS_EVIDENCE.test(text);
+  return recognizeQuizResult(snapshot)?.status === 'passed';
 }
 
 function parseAskUser(action) {
@@ -155,6 +149,7 @@ function localActionAllowed(action, snapshot, mode = 'read') {
     if (!target) return false;
     if (action.action === 'answer-select' && target.checked === true) return false;
     if (action.action === 'click') {
+      if (mode === 'quiz' && recognizeQuizResult(snapshot)) return false;
       if (UNSAFE_LABEL.test(target.name)) return false;
       const radios = (snapshot.choices || []).filter(choice => /^c\d+$/.test(choice.id));
       if (mode === 'quiz' && /^next(?: page| slide)?[ »›→]*$/i.test(target.name.trim()) && /\bQuestion\s+\d+\s+of\s+\d+\b/i.test(snapshot.text || '')
@@ -412,14 +407,38 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
 
 async function readSnapshot(page, mode = 'read') {
   const sections = [];
+  const resultViews = [];
   for (const frame of await visibleFrames(page)) {
     try {
+      let exposed = true;
+      for (let child = frame; child.parentFrame(); child = child.parentFrame()) {
+        const element = await child.frameElement();
+        exposed = await element.evaluate(el => {
+          const r = el.getBoundingClientRect();
+          if (!(r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth)) return false;
+          for (let face = el; face; face = face.parentElement) {
+            const style = getComputedStyle(face);
+            if (Number(style.opacity) === 0) return false;
+            if (style.backfaceVisibility !== 'hidden') continue;
+            let matrix = new DOMMatrix();
+            for (let node = face; node; node = node.parentElement) {
+              const transform = getComputedStyle(node).transform;
+              if (transform !== 'none') matrix = new DOMMatrix(transform).multiply(matrix);
+            }
+            if (matrix.m33 < -0.001) return false;
+          }
+          return true;
+        });
+        if (!exposed) break;
+      }
+      if (!exposed) continue;
       const observed = await frame.evaluate(() => {
         const visible = (el, inViewport = true) => {
           const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
           if (!r.width || !r.height || s.display === 'none' || s.visibility === 'hidden' || !el.getClientRects().length) return false;
           if (inViewport && !(r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth)) return false;
           for (let face = el; face; face = face.parentElement) {
+            if (Number(getComputedStyle(face).opacity) === 0) return false;
             if (getComputedStyle(face).backfaceVisibility !== 'hidden') continue;
             let matrix = new DOMMatrix();
             for (let node = face; node; node = node.parentElement) {
@@ -444,6 +463,7 @@ async function readSnapshot(page, mode = 'read') {
         return { heading: heading?.textContent?.trim() || document.title, text: lines.join('\n'), position: Math.round(scrollY), end: scrollY + innerHeight >= document.documentElement.scrollHeight - 2 };
       });
       if (!observed.text.trim()) continue;
+      resultViews.push(observed.text);
       const source = frame.url().split(/[?#]/)[0].slice(0, 500);
       sections.push(`[Source: ${source} | ${observed.heading || ''} | scroll ${observed.position}${observed.end ? ' | end of page' : ''}]\n${observed.text}`);
     } catch {
@@ -475,8 +495,7 @@ async function readSnapshot(page, mode = 'read') {
   const state=observationFor(page);
   const image=state.imageUrl===page.url()?state.image:undefined;
   delete state.image;delete state.imageUrl;
-  return {
-    snapshot: {
+  const snapshot = {
       title: (await page.title().catch(() => '')).slice(0,200),
       url: page.url().slice(0,500),
       text: `${await observePlayerEvidence(page)}\n${state.feedback?`Tool feedback: ${state.feedback}\n`:''}${sections.map(section => section.slice(0, Math.floor(7400 / Math.max(1, sections.length)))).join('\n')}`.slice(0, 8000),
@@ -485,9 +504,11 @@ async function readSnapshot(page, mode = 'read') {
       tabs,
       ...(image?{image}:{}),
       ...(outlines.length?{outlines}:{}),
-    },
-    handles,
   };
+  // Raw live text is local verification evidence, not additional provider
+  // context. Exclude it from JSON and never populate it from course memory.
+  Object.defineProperty(snapshot, 'resultViews', {value: resultViews});
+  return {snapshot, handles};
 }
 
 function sameLearnerView(before, after) {
@@ -544,7 +565,7 @@ function createActionReader() {
   };
 }
 
-async function applyAction(page, action, snapshot, handles, mode = 'read', retryState = { count: 0 }) {
+async function applyAction(page, action, snapshot, handles, mode = 'read') {
   if (!localActionAllowed(action, snapshot, mode)) throw new Error('Learner action is not allowed');
   const state=observationFor(page);delete state.feedback;
   if (action.action === 'select-tab') {
@@ -580,14 +601,6 @@ async function applyAction(page, action, snapshot, handles, mode = 'read', retry
   const target = [...(snapshot.buttons || []), ...(snapshot.choices || [])].find(item => item.id === action.targetId);
   if (!await handle.isVisible() || !await handle.isEnabled() || await accessibleName(handle) !== target?.name) throw new Error('Learner target changed');
   if (action.action === 'click') {
-    if (mode === 'quiz' && RETRY_LABEL.test(target.name)) {
-      if (retryState.count >= MAX_QUIZ_RETRIES) {
-        const error = new Error('Quiz retry limit reached');
-        error.code = 'LEARNER_RETRY_LIMIT';
-        throw error;
-      }
-      retryState.count += 1;
-    }
     if (await handle.evaluate(dkiInformationIcon).catch(() => null)) {
       if (!await handle.isVisible() || !await handle.isEnabled()) throw new Error('Learner target changed');
       // Pointer movement creates a covering rollover image on these DKI icons.
@@ -606,8 +619,8 @@ async function emitQuestion(payload, snapshot, browser) {
   finish(false, LEARNER_NEEDS_INPUT);
 }
 
-function finish(completed, reason) {
-  const payload = completed
+function finish(completed, reason, result) {
+  const payload = result ? quizResultPayload(result) : completed
     ? { completed: 1, total: 1 }
     : { completed: 0, total: 1, failures: [{ title: 'quiz-learn', reason: reason || 'learner-stopped' }] };
   console.log(`AUTOMATION_RESULT ${JSON.stringify(payload)}`);
@@ -629,12 +642,17 @@ async function main() {
     }
     reader = createActionReader();
     let repeatState = null;
-    const retryState = { count: 0 };
     for (let step = 1; step <= MAX_STEPS; step += 1) {
       const { snapshot, handles } = await readSnapshot(page, mode);
       console.log(`LEARNER_PROGRESS ${JSON.stringify({ message: `Reading ${snapshot.title || 'the current course page'}.` })}`);
-      if (mode === 'quiz' && pageShowsPass(snapshot)) { finish(true); return; }
+      const result = mode === 'quiz' ? recognizeQuizResult(snapshot) : null;
+      if (result) { finish(result.status === 'passed', undefined, result); return; }
       const action = await reader.request(snapshot);
+      // The result can arrive while the provider is deciding. Re-observe even
+      // for verify/ask-user so a terminal view wins before action/repeat guards.
+      const current = await readSnapshot(page, mode);
+      const currentResult = mode === 'quiz' ? recognizeQuizResult(current.snapshot) : null;
+      if (currentResult) { finish(currentResult.status === 'passed', undefined, currentResult); return; }
       if (!localActionAllowed(action, snapshot, mode)) {
         finish(false, 'rejected-action');
         return;
@@ -651,7 +669,6 @@ async function main() {
       let view = snapshot;
       let viewHandles = handles;
       if (action.action !== 'verify') {
-        const current = await readSnapshot(page, mode);
         if (!sameLearnerView(snapshot, current.snapshot)) {
           console.log(`Learner step ${step}: page changed while deciding; inspecting again`);
           continue;
@@ -675,13 +692,7 @@ async function main() {
         return;
       }
       const popup = action.action === 'click' ? page.waitForEvent('popup', { timeout: 2500 }).catch(() => null) : null;
-      let switched;
-      try { switched = await applyAction(page, action, view, viewHandles, mode, retryState); }
-      catch (error) {
-        if (error.code !== 'LEARNER_RETRY_LIMIT') throw error;
-        await emitQuestion({question:'Two quiz retries have been started in this run and the feedback has been retained. What should I review or change before another attempt?'}, view, browser);
-        return;
-      }
+      const switched = await applyAction(page, action, view, viewHandles, mode);
       if (switched) page = switched;
       const opened = popup ? await popup : null;
       if (opened) {

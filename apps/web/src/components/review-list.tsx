@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useTransition } from 'react';
+import { useState, useTransition } from 'react';
 import { Check, LoaderCircle } from 'lucide-react';
 
 interface Review {
@@ -15,19 +15,24 @@ interface Review {
 
 export function ReviewList({ reviews }: { reviews: Review[] }) {
   const router = useRouter();
+  const [error, setError] = useState('');
   const [isPending, startTransition] = useTransition();
   function resolveReview(reviewId: string) {
     startTransition(async () => {
-      await fetch(`/api/reviews/${reviewId}/resolve`, {
+      setError('');
+      try {
+      const response = await fetch(`/api/reviews/${reviewId}/resolve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ resolution: 'Resolved from the hosted Learning view.' }),
       });
+      if (!response.ok) throw new Error('Could not resolve this review. Retry when connected.');
       router.refresh();
+      } catch (cause) {setError(cause instanceof Error ? cause.message : 'Could not resolve this review. Retry when connected.');}
     });
   }
   if (!reviews.length) return <p className="p-6 text-sm text-slate-500">No open reviews.</p>;
-  return reviews.map((review) => (
+  return <>{error ? <p role="alert" className="px-5 pt-4 text-sm text-rose-800">{error}</p> : null}{reviews.map((review) => (
     <article key={review.id} className="flex gap-4 border-b border-slate-200 p-5 last:border-0">
       <div className="min-w-0 flex-1">
         <p className="font-mono text-[10px] uppercase tracking-wider text-amber-700">{review.type}</p>
@@ -43,5 +48,5 @@ export function ReviewList({ reviews }: { reviews: Review[] }) {
         Resolve
       </button>
     </article>
-  ));
+  ))}</>;
 }

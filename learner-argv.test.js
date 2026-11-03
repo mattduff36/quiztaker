@@ -84,7 +84,7 @@ test('page evidence decides a pass instead of the model', () => {
   assert.equal(pageShowsPass({ text: 'Successful completion requires 80%' }), false);
   assert.equal(pageShowsPass({ text: 'Progress 100%' }), false);
   assert.equal(pageShowsPass({ title: 'Result', text: 'You passed this quiz' }), true);
-  assert.equal(pageShowsPass({ text: 'Your score: 100%' }), true);
+  assert.equal(pageShowsPass({ text: 'Your score: 100%' }), false);
 });
 
 

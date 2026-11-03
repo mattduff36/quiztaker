@@ -24,9 +24,6 @@ const deployment = {
   apiKey: 'deployment-key-should-not-leak',
   baseUrl: 'https://api.openai.com/v1',
   model: 'gpt-4o-mini',
-  cursorApiKey: 'cursor-key-should-not-leak',
-  nodeEnv: 'production',
-  vercel: '1',
 };
 
 function successResponse(content: string, status = 200): Response {

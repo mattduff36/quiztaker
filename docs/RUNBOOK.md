@@ -41,7 +41,6 @@ researched, and answered fresh. Only per-attempt logs accumulate going forward.
 | `pw-quiz-prior.js` | Look up prior picks + confidence for a stem (the current question by default). |
 | `pw-quiz-checkboxes.js` | Legacy helper for listing all checkbox states. |
 | `pw-screenshot.js`, `pw-page-text.js`, `pw-click.js`, `pw-goto.js` | Generic Playwright helpers. |
-| `kill-quiz-procs.js` | Kill stray Node quiz processes. |
 | `data/runs/<attemptId>/answers.jsonl` | One JSON row per question: stem, options, picks, confidence, reasoning. |
 | `data/runs/<attemptId>/q<NN>.png` / `.txt` | Per-question screenshot + visible text dump. |
 | `data/runs/<attemptId>/meta.json` | Attempt metadata: started/finished/score/pass. |

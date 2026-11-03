@@ -9,6 +9,7 @@ import { getLatestHelperRelease } from '@/lib/releases';
 import { readRelevantJob, recoverHelperJobs } from '@/lib/job-recovery';
 import { enforceOperatorIdle, readOperatorActivity } from '@/lib/operator-activity';
 import { readCourseCoverage } from '@/lib/course-coverage';
+import { readLatestTask } from '@/lib/task-completion';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,7 +53,7 @@ export async function GET() {
   const helperId = String(helper.id);
   await enforceOperatorIdle(user.id,helperId);
   await recoverHelperJobs(user.id, helperId);
-  const [session, recentUrls, activeJob, captures, activity] = await Promise.all([
+  const [session, recentUrls, activeJob, captures, activity, latestTask] = await Promise.all([
     queryOne(
       `select id, revision, cdp_connected, tabs, roster, detection, updated_at
        from browser_sessions
@@ -76,6 +77,7 @@ export async function GET() {
       [user.id],
     ),
     readOperatorActivity(user.id,helperId),
+    readLatestTask(user.id,helperId),
   ]);
   const release = await getLatestHelperRelease().catch(() => null);
   const helperUpdate = describeHelperUpdate({
@@ -97,6 +99,7 @@ export async function GET() {
     session,
     recentUrls,
     activeJob,
+    latestTask,
     captures,
     parityEnabled: parityEnabled(),
     ...llm,

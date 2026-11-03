@@ -17,17 +17,22 @@ const helperId='11111111-1111-4111-8111-111111111111';
 await writeFile(join(temp,'entry.tsx'),`import React from ${JSON.stringify(join(root,'node_modules/react/index.js').replaceAll('\\','/'))};
 import{createRoot}from ${JSON.stringify(join(root,'node_modules/react-dom/client.js').replaceAll('\\','/'))};
 import{OperationsClient}from ${JSON.stringify(join(root,'apps/web/src/components/operations-client.tsx').replaceAll('\\','/'))};
+import{HelperOnboarding}from ${JSON.stringify(join(root,'apps/web/src/components/helper-onboarding.tsx').replaceAll('\\','/'))};
+import{ReviewList}from ${JSON.stringify(join(root,'apps/web/src/components/review-list.tsx').replaceAll('\\','/'))};
 import{AppShell}from ${JSON.stringify(join(root,'apps/web/src/components/app-shell.tsx').replaceAll('\\','/'))};
-createRoot(document.getElementById('root')!).render(<AppShell email="operator@example.invalid"><div className="fixture"><OperationsClient helperId="${helperId}"/></div></AppShell>);`);
-await build({entryPoints:[join(temp,'entry.tsx')],outfile:join(temp,'app.js'),bundle:true,format:'iife',platform:'browser',jsx:'automatic',tsconfig:join(root,'apps/web/tsconfig.json'),define:{'process.env.NODE_ENV':'"test"','process.env':'{}'}});
+createRoot(document.getElementById('root')!).render(<AppShell email="operator@example.invalid"><div className="fixture">{location.pathname==='/setup-test'?<><HelperOnboarding download={{status:'unavailable',url:null}} connection={{state:'not-paired'}}/><ReviewList reviews={[{id:'review-1',type:'test',title:'Review example',detail:'Review this item',next_action:'Retry the page',created_at:new Date().toISOString()}]}/></>:<OperationsClient helperId="${helperId}"/>}</div></AppShell>);`);
+await writeFile(join(temp,'navigation.ts'),`export const useRouter=()=>({refresh:()=>{}});`);
+await build({plugins:[{name:'test-router',setup(build){build.onResolve({filter:/^next\/navigation$/},()=>({path:join(temp,'navigation.ts')}));}}],entryPoints:[join(temp,'entry.tsx')],outfile:join(temp,'app.js'),bundle:true,format:'iife',platform:'browser',jsx:'automatic',tsconfig:join(root,'apps/web/tsconfig.json'),define:{'process.env.NODE_ENV':'"test"','process.env':'{}'}});
 const css=await postcss([tailwind({base:join(root,'apps/web')})]).process(await readFile(join(root,'apps/web/src/app/globals.css'),'utf8'),{from:join(root,'apps/web/src/app/globals.css')});
 await writeFile(join(temp,'app.css'),css.css+'\n:root{--font-plex:Arial}body{margin:0}.fixture{max-width:1120px;margin:auto;padding:24px}');
 
-function state(){return{last:null,paused:false,online:true,connected:true,updatePhase:null,refreshes:0,checks:0,statusFailed:false,statusStale:false,activityPosts:0,pausePosts:0,jobs:new Map(),latest:null,serial:0,selected:null,blocked:false,retries:0};}
+function state(){return{last:null,paused:false,online:true,connected:true,updatePhase:null,refreshes:0,checks:0,statusFailed:false,statusStale:false,activityPosts:0,pausePosts:0,jobs:new Map(),latest:null,serial:0,selected:null,blocked:false,retries:0,task:null,finishPosts:0,questionOutput:'',pairPosts:0,holdCapability:null};}
 function reply(path,method,body,now,s){
   const activity=()=>({paused:s.paused,lastActivityAt:new Date(s.last??now).toISOString(),expiresAt:new Date((s.last??now)+1_800_000).toISOString(),serverNow:new Date(now).toISOString()});
   const session=()=>({id:'22222222-2222-4222-8222-222222222222',revision:1,cdp_connected:s.connected,updated_at:new Date(now).toISOString(),tabs:[{targetId:'course',index:0,title:'Xerox course overview',url:'https://example.invalid/course',fingerprint:'course-fingerprint'},{targetId:'blank',index:1,title:'Blank tab',url:'about:blank',fingerprint:'blank'}],roster:null,detection:null});
-  function makeJob(capability){const id=`job-${++s.serial}`;const job={id,status:capability==='list-tabs'?'running':'completed',capability_id:capability,outcome:{verified:true,status:'verified'},result:{ok:true,result:capability==='detect'?{detection:{detected:'server-assessment',tabIdx:0,url:'https://example.invalid/course',fingerprint:'course-fingerprint',detail:'Open a course page before attempting a final assessment.'}}:{}}};s.jobs.set(id,job);s.latest=job;return id;}
+  function makeJob(capability){const id=`job-${++s.serial}`;const job={id,status:capability==='list-tabs'||capability===s.holdCapability?'running':'completed',capability_id:capability,outcome:{verified:true,status:'verified'},result:{ok:true,result:capability==='detect'?{detection:{detected:'server-assessment',tabIdx:0,url:'https://example.invalid/course',fingerprint:'course-fingerprint',detail:'Open a course page before attempting a final assessment.'}}:{}}};s.jobs.set(id,job);s.latest=job;return id;}
+  if(path==='/api/helper/pair'){if(s.pairPosts++===0)return{__status:503,error:'Pairing is temporarily unavailable.'};return{code:'ABCD1234',expiresAt:new Date(now+2000).toISOString(),controlPlaneUrl:'https://example.invalid'};}
+  if(path==='/api/reviews/review-1/resolve')return{__status:503,error:'Unavailable'};
   if(path==='/api/operations/activity'){
     if(s.last===null)s.last=now;
     if(body.action==='resume'){s.paused=false;s.last=now;}
@@ -37,7 +42,10 @@ function reply(path,method,body,now,s){
     if(body.action==='refresh'){if(s.paused)return{status:'skipped'};s.refreshes++;return{status:'queued',jobId:makeJob('list-tabs')};}
     return activity();
   }
-  if(path==='/api/operations/context'){s.checks++;return{helper:{id:helperId,device_name:'Test PC',version:'1.0.19',protocol_version:2,is_online:s.online},helperUpdate:s.updatePhase?{needed:true,protocolBlocked:false,currentVersion:'1.0.19',latestVersion:'1.0.21',installerAvailable:true,canSelfUpdate:true,mode:'queue',requestedVersion:'1.0.21',error:null,phase:s.updatePhase,phaseVersion:'1.0.21',phaseUpdatedAt:new Date(now).toISOString(),inProgress:true,progressLabel:'Installing · waiting for the helper to reconnect'}:undefined,courseCoverage:[{source:'https://example.invalid/course',title:'Paper theory',inventoryObserved:true,updatedAt:new Date(now).toISOString(),topics:[{title:'Paper production',visitedAt:new Date(now).toISOString(),collectedAt:new Date(now).toISOString(),collectedChars:400},{title:'Paper types',visitedAt:new Date(now).toISOString(),collectedChars:0},{title:'Paper storage',collectedChars:0}]}],operatorActivity:s.last===null?null:activity(),session:session(),activeJob:s.latest,captures:[],recentUrls:[],learnerEnabled:true};}
+  if(path==='/api/operations/context'){s.checks++;return{helper:{id:helperId,device_name:'Test PC',version:'1.0.19',protocol_version:2,is_online:s.online},helperUpdate:s.updatePhase?{needed:true,protocolBlocked:false,currentVersion:'1.0.19',latestVersion:'1.0.21',installerAvailable:true,canSelfUpdate:true,mode:'queue',requestedVersion:'1.0.21',error:null,phase:s.updatePhase,phaseVersion:'1.0.21',phaseUpdatedAt:new Date(now).toISOString(),inProgress:true,progressLabel:'Installing · waiting for the helper to reconnect'}:undefined,courseCoverage:[{source:'https://example.invalid/course',title:'Paper theory',inventoryObserved:true,updatedAt:new Date(now).toISOString(),topics:[{title:'Paper production',visitedAt:new Date(now).toISOString(),collectedAt:new Date(now).toISOString(),collectedChars:400},{title:'Paper types',visitedAt:new Date(now).toISOString(),collectedChars:0},{title:'Paper storage',collectedChars:0}]}],operatorActivity:s.last===null?null:activity(),session:session(),activeJob:s.latest,latestTask:s.task,captures:[],recentUrls:[],learnerEnabled:true};}
+  if(path==='/api/operations/tasks/finish'){
+    s.finishPosts++;const task=s.jobs.get(body.jobId);task.status=body.result;task.outcome={status:`operator-${body.result}`,verified:false,operatorResolution:{result:body.result,requestedAt:new Date(now).toISOString(),resolvedAt:new Date(now).toISOString(),reportedBy:'operator'}};s.task=task;return{ok:true,status:body.result,jobId:task.id};
+  }
   if(path==='/api/services/status')return s.statusFailed?{__status:503,error:'Service status is unavailable.'}:{checkedAt:new Date(now).toISOString(),helper:{online:s.online,lastSeenAt:new Date(now).toISOString()},browser:{connected:s.connected,checkedAt:new Date(now-(s.statusStale?120_000:0)).toISOString()},assistant:{ready:true,source:'personal',provider:'openai'}};
   if(path.startsWith('/api/operations/learning'))return{id:null,objective:null,history:[]};
   if(path==='/api/operations/actions'){
@@ -49,7 +57,7 @@ function reply(path,method,body,now,s){
     if(s.retries++===0){s.latest.status='completed';return{__status:409,error:'A job is already active. Wait for it to finish or cancel it first.'};}
     return{jobId:makeJob('detect')};
   }
-  if(path.startsWith('/api/jobs/')){const job=s.jobs.get(path.split('/').at(-1));if(job)job.status='completed';return{job,events:[],artifacts:[]};}
+  if(path.startsWith('/api/jobs/')){const job=s.jobs.get(path.split('/').at(-1));if(job&&job.capability_id!==s.holdCapability&&job.status!=='failed')job.status='completed';return{job,events:job?.capability_id==='quiz-learn'?[{data:{text:s.questionOutput}}]:[],artifacts:[]};}
   throw Error(`Unexpected fixture request: ${method} ${path}`);
 }
 let servedState=state();
@@ -60,7 +68,10 @@ const server=createServer(async(req,res)=>{
     res.writeHead(200,{'content-type':'text/html'});res.end('<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/app.css"><title>Vitriol Operations verification</title></head><body><div id="root"></div><script src="/app.js"></script></body></html>');
   }catch(error){res.writeHead(500);res.end(String(error));}
 });
-await new Promise(done=>server.listen(0,'127.0.0.1',done));
+for(let attempt=0;attempt<10;attempt++){
+  try{await new Promise((done,reject)=>{server.once('error',reject);server.listen(30000+Math.floor(Math.random()*20000),'127.0.0.1',()=>{server.removeListener('error',reject);done();});});break;}
+  catch(error){if(error.code!=='EADDRINUSE'||attempt===9)throw error;}
+}
 const url=`http://127.0.0.1:${server.address().port}`;
 const browser=await chromium.launch({channel:'chrome',headless:true});
 let passed=false;
@@ -90,6 +101,12 @@ try{
     const mode=page.getByRole('combobox',{name:'Course activity',exact:true});
     await expect(mode).toHaveValue('read');
     await expect(goal).toHaveValue(/Read all relevant material.*Xerox course overview/);
+    await goal.fill('x'.repeat(1005));
+    await expect(goal).toHaveValue('x'.repeat(1000));
+    await goal.fill('');
+    // User edits are preserved; this fixture now checks default mode goals on a fresh mount.
+    await page.reload();
+    await select.selectOption('course');
     await mode.selectOption('quiz');
     await expect(goal).toHaveValue(/answer and submit.*Xerox course overview/);
     await mode.selectOption('read');
@@ -107,7 +124,7 @@ try{
     await page.clock.fastForward(46_000);
     expect(fixture.refreshes).toBe(probesDuringUpdate);
     await advanced.click();
-    await expect(page.getByRole('button',{name:'End session',exact:true})).toBeEnabled();
+    await expect(page.getByRole('button',{name:'End browser session',exact:true})).toBeEnabled();
     await page.screenshot({path:join(artifacts,viewport.width>500?'desktop-update.png':'mobile-update.png'),fullPage:true});
     await normal.click();
     await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
@@ -118,7 +135,7 @@ try{
     await advanced.click();
     await expect(advanced).toHaveAttribute('aria-selected','true');
     await expect(goal).toBeHidden();
-    await expect(page.getByRole('button',{name:'End session',exact:true})).toBeVisible();
+    await expect(page.getByRole('button',{name:'End browser session',exact:true})).toBeVisible();
     await expect(services).toBeVisible();
     await page.screenshot({path:join(artifacts,viewport.width>500?'desktop-advanced.png':'mobile-advanced.png'),fullPage:true});
     await advanced.press('Home');
@@ -154,7 +171,7 @@ try{
     await expect(page.getByRole('heading',{name:'Your session is paused',exact:true})).toBeVisible();
     await expect.poll(()=>fixture.pausePosts).toBe(0);
     await advanced.click();
-    await expect(page.getByRole('button',{name:'End session',exact:true})).toBeEnabled();
+    await expect(page.getByRole('button',{name:'End browser session',exact:true})).toBeEnabled();
     const probesWhenPaused=fixture.refreshes;
     await page.clock.fastForward(60_000);
     expect(fixture.refreshes).toBe(probesWhenPaused);
@@ -172,6 +189,62 @@ try{
     fixture.statusFailed=false;fixture.statusStale=false;
     await page.clock.fastForward(41_000);
     await expect(services.getByRole('link',{name:'Browser: Connected',exact:true})).toBeVisible();
+    // A real awaiting question survives a later maintenance job and pause/offline state.
+    const task={id:'question-task',status:'completed',capability_id:'quiz-learn',input:{target:{targetId:'course',browserSessionId:'22222222-2222-4222-8222-222222222222'}}};
+    fixture.jobs.set(task.id,task);fixture.latest=task;fixture.task=task;
+    fixture.questionOutput='LEARNER_QUESTION '+JSON.stringify({question:'Which module should I read next?',options:['Paper storage','Paper types'],url:'https://example.invalid/course'});
+    await page.clock.fastForward(16_000);
+    await expect(page.getByRole('heading',{name:'Your AI assistant has a question',exact:true})).toBeVisible();
+    const refreshesWithQuestion=fixture.refreshes;
+    fixture.latest={id:'background-observation',status:'completed',capability_id:'list-tabs'};
+    await page.clock.fastForward(46_000);
+    expect(fixture.refreshes).toBe(refreshesWithQuestion);
+    await expect(page.getByText('Which module should I read next?',{exact:true})).toBeVisible();
+    await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
+    await page.getByRole('button',{name:'Pause session',exact:true}).click();
+    fixture.online=false;
+    await expect(page.getByRole('heading',{name:'Your session is paused',exact:true})).toBeVisible();
+    await expect(page.getByRole('button',{name:'Paper storage',exact:true})).toBeDisabled();
+    await expect(page.getByRole('button',{name:'Mark complete',exact:true})).toBeEnabled();
+    await expect(page.getByRole('button',{name:'Mark failed',exact:true})).toBeEnabled();
+    await page.getByRole('button',{name:'Mark complete',exact:true}).click();
+    await expect(page.getByText(/Marked completed by you/)).toBeVisible();
+    await expect(goal).toHaveValue('');
+    await expect(page.getByText('Which module should I read next?',{exact:true})).toHaveCount(0);
+    await expect(page.getByRole('button',{name:'End browser session',exact:true})).toBeEnabled();
+    expect(fixture.finishPosts).toBe(1);
+    await page.clock.fastForward(60_000);
+    expect(fixture.refreshes).toBe(refreshesWithQuestion);
+    // Finishing during a guided wait stops the local orchestrator before another step can queue.
+    fixture.online=true;fixture.paused=false;fixture.holdCapability='detect';
+    await page.clock.fastForward(61_000);
+    await goal.fill('Read the selected course page.');
+    await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
+    await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
+    await expect.poll(()=>fixture.latest?.capability_id).toBe('detect');
+    await expect(page.getByRole('button',{name:'Mark failed',exact:true})).toBeEnabled();
+    await page.getByRole('button',{name:'Mark failed',exact:true}).click();
+    await expect(page.getByText(/Marked failed by you/)).toBeVisible();
+    const jobsAtFinish=fixture.serial;
+    await page.clock.fastForward(8000);
+    expect(fixture.serial).toBe(jobsAtFinish);
+    expect(fixture.finishPosts).toBe(2);
+    await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();
+    await page.goto(url+'/setup-test');
+    await expect(page.getByRole('button',{name:'Generate code',exact:true})).toBeEnabled();
+    await page.getByRole('button',{name:'Generate code',exact:true}).click();
+    await expect(page.getByRole('alert')).toContainText('Pairing is temporarily unavailable.');
+    await page.getByRole('button',{name:'Generate code',exact:true}).click();
+    await expect(page.getByRole('link',{name:'Launch Vitriol Helper',exact:true})).toHaveAttribute('href',/^vitriol-helper:\/\/pair/);
+    await page.clock.fastForward(3000);
+    await expect(page.getByText('Your pairing code has expired.',{exact:false})).toBeVisible();
+    await expect(page.getByRole('button',{name:'Generate code',exact:true})).toBeEnabled();
+    await expect(page.getByRole('link',{name:'Launch Vitriol Helper',exact:true})).toHaveCount(0);
+    await page.getByRole('button',{name:'Resolve',exact:true}).click();
+    await expect(page.getByRole('alert')).toContainText('Could not resolve this review.');
+    await expect(page.getByText('Review example',{exact:true})).toBeVisible();
+    await page.screenshot({path:join(artifacts,viewport.width>500?'desktop-helper-recovery.png':'mobile-helper-recovery.png'),fullPage:true});
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     expect(errors).toEqual([]);
     console.log(`PASS ${viewport.width}px: Normal/Advanced preserve state and keyboard focus; compact service status handles stale/failure/recovery; guided start, automatic refresh and idle protection.`);
     await page.close();

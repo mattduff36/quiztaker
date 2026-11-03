@@ -158,6 +158,7 @@ function higherRisk(left, right) {
 }
 
 function createStoredPlan(input, source = 'dashboard') {
+  if (input.capabilityId === 'quiz-learn') throw new Error('Guided AI learning requires hosted Vitriol and its paired helper.');
   const capability = getCapability(input.capabilityId);
   if (!capability) throw new Error(`Unknown capability: ${input.capabilityId}`);
   const planId = randomUUID();
@@ -396,6 +397,7 @@ app.get('/api/docs', (req, res) => {
 
 app.post('/api/run', (req, res) => {
   const { script, args, planId } = req.body || {};
+  if (script === 'pw-learn-quiz.js') return res.status(409).json({ error: 'Guided AI learning requires hosted Vitriol and its paired helper.' });
   if (!SCRIPT_WHITELIST.has(script)) {
     return res.status(400).json({ error: 'script not allowed', allowed: [...SCRIPT_WHITELIST] });
   }

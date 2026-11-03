@@ -54,10 +54,10 @@ export function AppShell(props: {
             </Link>
           ))}
         </nav>
-        <div className="hidden border-t border-white/10 p-5 lg:absolute lg:inset-x-0 lg:bottom-0 lg:block">
-          <p className="mb-4 text-xs leading-5 text-slate-500">{productSlogan}</p>
-          <p className="truncate text-xs text-slate-500">{props.email}</p>
-          <form action="/auth/sign-out" method="post" className="mt-3">
+        <div className="border-t border-white/10 px-5 py-3 lg:absolute lg:inset-x-0 lg:bottom-0 lg:p-5">
+          <p className="mb-4 hidden text-xs leading-5 text-slate-500 lg:block">{productSlogan}</p>
+          <p className="hidden truncate text-xs text-slate-500 lg:block">{props.email}</p>
+          <form action="/auth/sign-out" method="post" className="lg:mt-3">
             <button className="flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white">
               <LogOut className="size-3.5" />
               Sign out

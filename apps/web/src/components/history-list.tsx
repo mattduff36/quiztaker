@@ -60,7 +60,8 @@ export function HistoryList({ rows, sessions = [], jobs = [] }: {
         </div>
       ) : null}
       {jobs.length ? (
-        <div className="mb-5 overflow-hidden rounded-lg border border-slate-300 bg-white">
+        <details className="mb-5 overflow-hidden rounded-lg border border-slate-300 bg-white">
+          <summary className="cursor-pointer px-5 py-3 text-sm font-semibold text-slate-800">Detailed automation logs</summary>
           {jobs.map((job) => (
             <article key={job.id} className="grid gap-2 border-b border-slate-200 px-5 py-3 text-sm last:border-0 md:grid-cols-[1fr_auto]">
               <div>
@@ -70,7 +71,7 @@ export function HistoryList({ rows, sessions = [], jobs = [] }: {
               {job.output_url ? <a className="font-semibold text-cyan-800" href={job.output_url}>Output</a> : null}
             </article>
           ))}
-        </div>
+        </details>
       ) : null}
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={() => setKind(null)} className={`rounded-full border px-3 py-1 text-xs font-semibold ${kind ? 'border-slate-300' : 'border-cyan-600 bg-cyan-50'}`}>All</button>

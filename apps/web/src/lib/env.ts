@@ -13,8 +13,6 @@ const serverSchema = z.object({
   LEARNER_BASE_URL: z.string().url().optional(),
   LEARNER_MODEL: z.string().min(1).optional(),
   LEARNER_MODELS: z.string().min(1).optional(),
-  CURSOR_API_KEY: z.string().min(1).optional(),
-  CURSOR_MODEL: z.string().min(1).optional(),
 });
 
 export function getServerEnv() {

@@ -97,21 +97,8 @@ const GEMINI_FALLBACKS = [
   'gemini-2.5-flash-lite',
 ];
 
-export function learnerPrefersCursor(input: {
-  nodeEnv?: string;
-  vercel?: string;
-  cursorApiKey?: string;
-}): boolean {
-  return Boolean(input.cursorApiKey) && input.vercel !== '1' && input.nodeEnv !== 'production';
-}
-
-export function learnerIsEnabled(input: {
-  learnerApiKey?: string;
-  cursorApiKey?: string;
-  nodeEnv?: string;
-  vercel?: string;
-}): boolean {
-  return Boolean(input.learnerApiKey) || learnerPrefersCursor(input);
+export function learnerIsEnabled(input: { learnerApiKey?: string }): boolean {
+  return Boolean(input.learnerApiKey);
 }
 
 export function learnerModelChain(input: {
@@ -134,18 +121,8 @@ export async function requestLearnerDecision(input: {
   snapshot: LearnerSnapshot;
   policy?: LearnerPolicy;
   fetchImpl?: typeof fetch;
-  cursor?: (snapshot: LearnerSnapshot) => Promise<{ action?: LearnerAction; stop?: boolean; error?: string }>;
 }): Promise<{ action?: LearnerAction; stop?: boolean; error?: string }> {
   const snapshot = boundLearnerSnapshot(input.snapshot);
-  if (input.cursor) {
-    try {
-      const cursor = await input.cursor(snapshot);
-      if (cursor.action || cursor.stop) return cursor;
-      return { stop: true, error: cursor.error || 'Cursor learner returned nothing' };
-    } catch (error) {
-      return { stop: true, error: error instanceof Error ? error.message : 'Cursor learner failed' };
-    }
-  }
   if (!input.apiKey) return { stop: true, error: 'Learner API key is not configured' };
   if (snapshot.image) return { stop: true, error: 'Screenshot understanding requires the personal OpenAI connection; no image was sent to this learner provider.' };
   const base = (input.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '');

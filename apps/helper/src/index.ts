@@ -2,7 +2,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { PROTOCOL_VERSION, classifyOutcome } from '@quiztaker/core';
-import { ControlPlaneClient, flushPendingEvents } from './client.js';
+import { ControlPlaneClient } from './client.js';
+import { replayBeforeHeartbeat } from './reporting.js';
+import { acquireInstanceLock } from './instance-lock.js';
 import {
   ensureHelperDirectories,
   getAutomationRoot,
@@ -33,9 +35,11 @@ let nextReleaseCheckAt = 0;
 let hasReportedConnectionRemediation = false;
 let terminal: HelperTerminal | null = null;
 let restoreConsole: (() => void) | null = null;
+let releaseInstance: (() => void) | null = null;
 
 async function main(): Promise<void> {
   ensureHelperDirectories();
+  releaseInstance = await acquireInstanceLock(getHelperHome());
   await reconcileHelperUpdate(getHelperHome(), HELPER_VERSION);
   const args = process.argv.slice(2);
   const launch = resolveHelperLaunch(args);
@@ -66,6 +70,7 @@ async function main(): Promise<void> {
 
   while (!isStopping) {
     try {
+      await replayBeforeHeartbeat((jobId, event) => client.sendEvent(jobId, event));
       const heartbeat = await client.heartbeat({
         ...(runningJob
           ? { status: 'busy' as const, activeJobId: runningJob.jobId }
@@ -106,7 +111,6 @@ async function main(): Promise<void> {
         hasAnnouncedOnline = true;
         await announceOnline(config.controlPlaneUrl);
       }
-      await flushPendingEvents((jobId, event) => client.sendEvent(jobId, event));
       if (Date.now() >= nextSyncAt) {
         await client.syncHistory({
           history: readLocalHistory(),
@@ -194,6 +198,7 @@ async function main(): Promise<void> {
       await delay(10_000);
     }
   }
+  releaseInstance?.();
 }
 
 async function announceOnline(controlPlaneUrl: string): Promise<void> {
@@ -250,6 +255,7 @@ process.on('SIGTERM', stop);
 process.once('exit', () => { restoreConsole?.(); terminal?.close(); });
 
 main().catch((error) => {
+  releaseInstance?.();
   console.error(error);
   process.exitCode = 1;
 });
