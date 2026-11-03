@@ -15,18 +15,15 @@ export type GuidedDecision =
 const known = new Set(['scorm-complete', 'container-batch', 'slickquiz-solve']);
 const learnable = new Set(['unknown', 'none', 'document-wbt', 'csod-curriculum', 'csod-learning']);
 
-export function decideGuidedFlow(detection: GuidedDetection): GuidedDecision {
+export function decideGuidedFlow(detection: GuidedDetection, mode: 'read' | 'quiz' = 'read'): GuidedDecision {
   if (detection.detected === 'session-dead') return {
     kind: 'question', question: 'Can you sign in to the course website in the helper browser?', next: 'I have signed in — inspect again',
   };
-  if (detection.detected === 'server-assessment') return {
-    kind: 'question', question: 'This is a server-scored assessment. Its attempt and submission controls need review before automatic learning can use it. Open a practice or course page to continue.', next: 'Inspect the current page again',
+  if (detection.detected === 'server-assessment' && mode === 'read') return {
+    kind: 'question', question: 'This page is a quiz. Choose Take the quiz to answer and submit it, or choose a course-material page to read.', next: 'Inspect the current page again',
   };
-  if (known.has(detection.action?.capabilityId || '')) return {
-    kind: 'run', capability: detection.action!.capabilityId!, message: `Recognised format. ${detection.action?.label || 'Starting the supported strategy'}.`,
-  };
-  if (learnable.has(detection.detected || '')) return {
-    kind: 'learn', message: 'No ready-to-run strategy matches this page. Capturing its controls, then starting guided learning.',
+  if (known.has(detection.action?.capabilityId || '') || learnable.has(detection.detected || '') || detection.detected === 'server-assessment') return {
+    kind: 'learn', message: mode === 'quiz' ? 'Using retained course material to work through the quiz and inspect its result.' : 'Reading the course pages and collecting material for later questions.',
   };
   return {
     kind: 'question', question: 'Which course or module do you want to work on? Open it in the helper browser, then continue here.', next: 'I have opened it — inspect again',
@@ -56,5 +53,5 @@ export function sameDetectedTarget(detection: GuidedDetection, tab: { index: num
 
 export function supportsGuidedLearning(version: string): boolean {
   const [major = 0, minor = 0, patch = 0] = version.split('.').map(Number);
-  return major > 1 || (major === 1 && (minor > 0 || (minor === 0 && patch >= 8)));
+  return major > 1 || (major === 1 && (minor > 0 || (minor === 0 && patch >= 15)));
 }

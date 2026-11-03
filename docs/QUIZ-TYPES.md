@@ -440,3 +440,26 @@ is not a control. This is recognition of that overlay, not a completed course
 and not a verified passing strategy. If the same action and target leave the
 view unchanged three times, the learner asks the operator to resume instead of
 repeating until the step cap.
+
+## Guided course reading and quiz intent (implementation, not a live pass claim)
+
+Vitriol defaults to **Read course material**. It follows observed course links,
+cards, panels and modal controls through nested frames, retains successive
+viewport excerpts with their sources, and pauses with a summary. Reading never
+uses a SCORM completion shortcut or claims an assessment pass. Choose **Take
+the quiz** to authorize observed answer/navigation and final submission controls
+for that run. The signed job input and stored plan constraints determine this
+intent; page text cannot grant permission. Old jobs default to reading.
+The learner can select an already-open course/lesson/quiz tab offered in its
+snapshot on the same website, and revisit it without operator window changes.
+It rechecks the exact tab URL/title before switching. Unrelated websites are
+not offered; a new course popup opened by a selected control is followed.
+
+Helper 1.0.15 / quiz-learn capability 3 is required. The learner is finite: 80
+steps per run, up to 16 visible frames and 40 controls per category, 8,000 chars
+per observation, 64 retained excerpts and a 24,000-character model context with
+relevance selection for later questions. Resume a reading run if more remains.
+Only visible quiz pass/score evidence counts as passing; a model summary does
+not. Failure evidence remains in course memory for a deliberate subsequent run.
+Offline Chrome fixtures cover the controls and quiz flow; these fixtures are
+not evidence that any live qualification has been passed.

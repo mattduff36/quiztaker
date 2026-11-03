@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import type { LearnerAction, LearnerSnapshot } from '@quiztaker/core';
 import { queryOne } from '@/lib/db';
 import { getServerEnv } from '@/lib/env';
-import { LEARNER_SYSTEM_PROMPT, learnerIsEnabled } from '@/lib/learner';
+import { learnerSystemPrompt, learnerIsEnabled } from '@/lib/learner';
 import { chatParameters } from '@/lib/chat-parameters';
 
 export const LLM_PROVIDERS = {
@@ -274,6 +274,7 @@ export async function completeHostedChat(input: {
   model: string;
   apiKey: string;
   snapshot: LearnerSnapshot;
+  policy?: import('@quiztaker/core').LearnerPolicy;
   fetchImpl?: typeof fetch;
 }): Promise<{ ok: true; action: LearnerAction } | { ok: false; error: string }> {
   let url: URL;
@@ -289,44 +290,51 @@ export async function completeHostedChat(input: {
   const apiKey = normalizeApiKey(input.apiKey);
   if (!model || !apiKey) return { ok: false, error: 'Provider request is invalid' };
   const fetchImpl = input.fetchImpl ?? fetch;
-  let response: Response;
-  try {
-    response = await fetchImpl(url.toString(), {
-      method: 'POST',
-      redirect: 'error',
-      signal: AbortSignal.timeout(LLM_REQUEST_TIMEOUT_MS),
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        ...chatParameters(input.provider, model, LLM_MAX_TOKENS),
-        messages: [
-          { role: 'system', content: LEARNER_SYSTEM_PROMPT },
-          { role: 'user', content: JSON.stringify(input.snapshot) },
-        ],
-      }),
-    });
-  } catch {
-    return { ok: false, error: 'Provider request did not complete' };
+  let feedback = '';
+  // Leave time for the helper's 45-second step-response deadline.
+  const deadline = Date.now() + 40_000;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetchImpl(url.toString(), {
+        method: 'POST',
+        redirect: 'error',
+        signal: AbortSignal.timeout(Math.max(1, Math.min(LLM_REQUEST_TIMEOUT_MS, deadline - Date.now()))),
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          ...chatParameters(input.provider, model, LLM_MAX_TOKENS),
+          messages: [
+            { role: 'system', content: learnerSystemPrompt(input.policy) },
+            ...(feedback ? [{ role: 'system', content: feedback }] : []),
+            { role: 'user', content: JSON.stringify(input.snapshot) },
+          ],
+        }),
+      });
+    } catch {
+      return { ok: false, error: 'Provider request did not complete' };
+    }
+    if (!response.ok) return { ok: false, error: await providerFailure(response) };
+    const body = await readLimited(response);
+    if (body == null) return { ok: false, error: 'Provider response was too large' };
+    let content = '';
+    try {
+      const parsed = JSON.parse(body) as { choices?: Array<{ message?: { content?: unknown } }> };
+      const raw = parsed.choices?.[0]?.message?.content;
+      if (typeof raw === 'string') content = raw;
+    } catch { /* Invalid envelope gets the same single corrective retry. */ }
+    const { decideLearnerStep } = await import('@quiztaker/core');
+    const decided = decideLearnerStep(content, input.snapshot, input.policy);
+    if (!decided.ok) {
+      if (attempt === 0) { feedback = `Your previous response was invalid: ${decided.error}. Return one valid action JSON object using only this snapshot and the selected mode. Do not replace a formatting error with an operator question.`; continue; }
+      return { ok: false, error: 'Learner provider-format error: no valid allowed action after one corrective retry.' };
+    }
+    return { ok: true, action: decided.action };
   }
-  if (!response.ok) return { ok: false, error: await providerFailure(response) };
-  const body = await readLimited(response);
-  if (body == null) return { ok: false, error: 'Provider response was too large' };
-  let content = '';
-  try {
-    const parsed = JSON.parse(body) as { choices?: Array<{ message?: { content?: unknown } }> };
-    const raw = parsed.choices?.[0]?.message?.content;
-    if (typeof raw !== 'string') return { ok: false, error: 'Provider response was not a learner action' };
-    content = raw;
-  } catch {
-    return { ok: false, error: 'Provider response was not a learner action' };
-  }
-  const { decideLearnerStep } = await import('@quiztaker/core');
-  const decided = decideLearnerStep(content, input.snapshot);
-  if (!decided.ok) return { ok: false, error: 'Provider response was not a learner action' };
-  return { ok: true, action: decided.action };
+  return { ok: false, error: 'Learner provider-format error' };
 }
 
 export async function readPublicLlmConnection(userId: string): Promise<PublicLlmConnection> {

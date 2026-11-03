@@ -89,7 +89,9 @@ export function validateCapabilityInput(
         : argsForTarget(input.target);
     case 'scorm-complete':
     case 'container-batch':
+      return withDryRun(argsForTarget(input.target), input.dryRun === true);
     case 'quiz-learn':
+      if (input.mode != null && input.mode !== 'read' && input.mode !== 'quiz') return { ok: false, error: 'Learner mode is invalid' };
       return withDryRun(argsForTarget(input.target), input.dryRun === true);
     case 'cert-batch':
       return withDryRun({ ok: true, args: onlyArgs(input.titles) }, input.dryRun === true);

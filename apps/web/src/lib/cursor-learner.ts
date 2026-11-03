@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { LearnerAction, LearnerSnapshot } from '@quiztaker/core';
-import { LEARNER_SYSTEM_PROMPT } from '@/lib/learner';
+import { learnerSystemPrompt } from '@/lib/learner';
 
 const CURSOR_TIMEOUT_MS = 90_000;
 
@@ -10,6 +10,7 @@ export async function askCursorLearner(input: {
   apiKey: string;
   model?: string;
   snapshot: LearnerSnapshot;
+  policy?: import('@quiztaker/core').LearnerPolicy;
 }): Promise<{ action?: LearnerAction; stop?: boolean; error?: string }> {
   const sdk = await import('@cursor/sdk');
   const cwd = await mkdtemp(path.join(tmpdir(), 'quiztaker-learner-'));
@@ -30,7 +31,7 @@ export async function askCursorLearner(input: {
       },
     });
     const run = await agent.send([
-      LEARNER_SYSTEM_PROMPT,
+      learnerSystemPrompt(input.policy),
       'Do not use tools, edit files, or run commands.',
       'Reply with one JSON object and no other text.',
       JSON.stringify(input.snapshot),
@@ -49,7 +50,7 @@ export async function askCursorLearner(input: {
       return { stop: true, error: result.error?.message || 'Cursor learner failed' };
     }
     const { decideLearnerStep } = await import('@quiztaker/core');
-    const decided = decideLearnerStep(result.result || '', input.snapshot);
+    const decided = decideLearnerStep(result.result || '', input.snapshot, input.policy);
     if (!decided.ok) return { stop: true, error: decided.error };
     return { action: decided.action };
   } catch (error) {

@@ -54,7 +54,9 @@ export function GuidedRunner(props: {
   const [customReply, setCustomReply] = useState(false);
   const [settingsNeeded, setSettingsNeeded] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
-  const [objective, setObjective] = useState('Read the selected course material, then work through its related quiz.');
+  const [mode, setMode] = useState<'read' | 'quiz'>('read');
+  const [suppressRestoredQuestion, setSuppressRestoredQuestion] = useState(false);
+  const [objective, setObjective] = useState('Read all relevant material in the selected course and retain it for later questions.');
   const [memory, setMemory] = useState<CourseMemory | null>(null);
   const [runOutput, setRunOutput] = useState('');
   const [guidance, setGuidance] = useState('');
@@ -62,6 +64,7 @@ export function GuidedRunner(props: {
   const [guidanceNotice, setGuidanceNotice] = useState<string | null>(null);
   const [guidanceError, setGuidanceError] = useState<string | null>(null);
   const objectiveEdited = useRef(false);
+  const priorPage = useRef(props.selectedTarget);
   const locked = useRef(false);
   const stopped = useRef(false);
   const mounted = useRef(true);
@@ -81,7 +84,7 @@ export function GuidedRunner(props: {
   const savedTarget = props.lastJob?.input?.target;
   const outputQuestion = !busy && props.lastJob?.id === props.outputJobId && props.lastJob?.capability_id === 'quiz-learn' && !running(props.lastJob.status)
     && savedTarget?.browserSessionId === session?.id ? learnerQuestion(props.lastOutput) : null;
-  const restoredQuestion = outputQuestion || (!busy ? rememberedQuestion(currentMemory) : null);
+  const restoredQuestion = suppressRestoredQuestion ? null : outputQuestion || (!busy ? rememberedQuestion(currentMemory) : null);
   const currentPauseTab = uniqueQuestionTab(currentQuestion?.url, session?.tabs || []);
   const restoredPauseTab = uniqueQuestionTab(restoredQuestion?.url, session?.tabs || []);
   const question: Question | null = (currentQuestion && currentPauseTab && currentQuestion.sessionId === session?.id
@@ -118,7 +121,7 @@ export function GuidedRunner(props: {
         const value = await readJsonResponse<CourseMemory>(response, 'Could not load course memory');
         if (ignore || token !== memoryRequest.current) return;
         setMemory({ ...value, browserSessionId: sessionId });
-        if (value.objective && !objectiveEdited.current) setObjective(value.objective);
+        // A previous quiz goal must not replace the selected page and intent.
       } catch {
         if (ignore || token !== memoryRequest.current) return;
         setMemory((current) => current?.browserSessionId === sessionId ? current : null);
@@ -128,6 +131,19 @@ export function GuidedRunner(props: {
     const timer = busy || props.active ? window.setInterval(() => void loadMemory(), 3000) : undefined;
     return () => { ignore = true; if (timer) window.clearInterval(timer); };
   }, [props.helperId, session?.id, props.lastJob?.id, props.lastJob?.status, busy, props.active]);
+
+  function clearPageQuestion() {
+    setQuestion(null); setAnswer(''); setCustomReply(false); setReplyError(null); setSuppressRestoredQuestion(true);
+  }
+  useEffect(() => {
+    const changedPage = priorPage.current !== props.selectedTarget;
+    priorPage.current = props.selectedTarget;
+    if (busy) return;
+    if (changedPage) clearPageQuestion();
+    if (!objectiveEdited.current) setObjective(mode === 'quiz'
+      ? `Use retained course material to answer and submit the quiz on ${selected?.title || 'the selected page'}, then inspect the result.`
+      : `Read all relevant material on ${selected?.title || 'the selected course page'}, follow its topics and panels, and retain it for later questions.`);
+  }, [mode, props.selectedTarget, selected?.url, selected?.title, busy]);
 
   async function api<T>(url: string, body?: unknown, method?: string): Promise<T> {
     const response = await fetch(url, { method: method || (body ? 'POST' : 'GET'), cache: 'no-store', signal: AbortSignal.timeout(20_000), ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
@@ -150,7 +166,7 @@ export function GuidedRunner(props: {
     checkStopped();
     const planned = await api<{ plan?: { planId: string }; jobId?: string; waitingForJob?: boolean }>('/api/operations/actions', {
       action: 'plan', helperId: props.helperId, capabilityId,
-      capabilityInput: { capabilityId, ...(target ? { target } : {}), ...(guidance ? { guidance } : {}), ...(capabilityId === 'quiz-learn' ? { objective, ...(currentMemory?.id ? { conversationId: currentMemory.id } : {}) } : {}) },
+      capabilityInput: { capabilityId, ...(target ? { target } : {}), ...(guidance ? { guidance } : {}), ...(capabilityId === 'quiz-learn' ? { mode, objective, ...(currentMemory?.id ? { conversationId: currentMemory.id } : {}) } : {}) },
       confirm: true, source: 'auto-detect',
     });
     let jobId = planned.jobId;
@@ -220,12 +236,12 @@ export function GuidedRunner(props: {
       const detection = detectionRun.job.result.result?.detection;
       const fresh = await freshContext(targetId);
       if (!detection || !sameDetectedTarget(detection, fresh.tab) || before.tab.fingerprint !== fresh.tab.fingerprint) throw new Error('The selected page changed during inspection. Inspect it again before continuing.');
-      const decision = decideGuidedFlow(detection);
+      const decision = decideGuidedFlow(detection, mode);
       if (decision.kind === 'question') { setStage('Your input is needed'); setMessage(detection.detail || 'I need your help before continuing.'); setQuestion({ ...decision, targetId, sessionId: fresh.context.session!.id, url: fresh.tab.url }); return; }
       setMessage(decision.message);
       const capability = decision.kind === 'run' ? decision.capability : 'quiz-learn';
       if (decision.kind === 'learn') {
-        if (!supportsGuidedLearning(fresh.context.helper!.version)) throw new Error('Update the helper to v1.0.8 or later below, then inspect again. This update fixes page capture and enables learning questions.');
+        if (!supportsGuidedLearning(fresh.context.helper!.version)) throw new Error('Update the helper to v1.0.15 or later below, then inspect again. This update fixes page capture and enables learning questions.');
         setStage('Learning the page format');
         const capture = await waitForJob(await queue('learn-capture', fresh.target));
         if (capture.job.status !== 'completed') throw new Error('The page capture failed. Check Output and diagnostics in Advanced tools.');
@@ -328,13 +344,14 @@ export function GuidedRunner(props: {
     {!connected ? <div className="space-y-3" role="status"><h3 className="font-semibold text-slate-950">{props.connection==='helper-offline'?'Connect your Windows helper first':props.snapshotStale?'Let’s check your browser again':'Start your course browser'}</h3><p className="max-w-2xl text-sm leading-6 text-slate-600">{props.connection==='helper-offline'?'Open Vitriol Helper on this PC. Once it is online, the course controls will become available.':'Use the browser window opened by Vitriol for your course. Sign in there if asked, then come back and choose the course tab below.'}</p>{props.connection==='helper-offline'?<a href="/helper" className="inline-flex min-h-11 items-center rounded-md bg-slate-950 px-4 text-sm font-semibold text-white">Open helper setup</a>:<button type="button" disabled={busy||props.active||props.paused} onClick={props.snapshotStale?props.onRefreshTabs:props.onConnect} className="min-h-11 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white disabled:opacity-40">{props.snapshotStale?'Check browser now':'Connect browser'}</button>}</div>:null}
     <div className="grid gap-6 lg:grid-cols-2">
     <div className="space-y-2"><div className="flex items-center justify-between gap-3"><label htmlFor="guided-course-tab" className="text-sm font-semibold text-slate-800">Choose your course tab</label><button type="button" onClick={props.onRefreshTabs} disabled={!connected||busy||props.active||props.paused} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-semibold text-cyan-800 hover:bg-cyan-50 disabled:opacity-40"><RefreshCw className="size-3.5"/>Refresh tabs</button></div>
-      <select id="guided-course-tab" aria-label="Course tab" value={props.selectedTarget} disabled={!connected || busy || props.active || props.paused} onChange={(event) => { props.onSelect(event.target.value); setQuestion(null); setAnswer(''); setCustomReply(false); setStage('Ready when you are'); setMessage('Your course is selected. Check the goal, then start.'); }} className="min-h-12 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm font-normal focus-visible:outline-2 focus-visible:outline-cyan-700">
+      <select id="guided-course-tab" aria-label="Course tab" value={props.selectedTarget} disabled={!connected || busy || props.active || props.paused} onChange={(event) => { props.onSelect(event.target.value); clearPageQuestion(); setStage('Ready when you are'); setMessage('Your course is selected. Check the goal, then start.'); }} className="min-h-12 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm font-normal focus-visible:outline-2 focus-visible:outline-cyan-700">
         <option value="">Choose the course you opened</option>{courseTabs.map((tab) => <option key={tab.targetId} value={tab.targetId}>{tab.title || 'Untitled page'} · tab {tab.index+1}</option>)}
       </select>
       {selected?<p className="break-all text-xs leading-5 text-slate-500">{new URL(selected.url).origin}</p>:<p className="text-xs leading-5 text-slate-600">{connected&&courseTabs.length===0?'No course page is open yet. Open it in the Vitriol browser, then refresh these tabs.':'Only website tabs are shown. If your course is missing, open it in the Vitriol browser and refresh.'}</p>}
       {props.refreshError?<p role="alert" className="text-sm text-rose-800">{props.refreshError}</p>:null}
     </div>
-    <label className="grid gap-2 text-sm font-semibold text-slate-800">What would you like to achieve?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setObjective(event.target.value); }} disabled={busy || props.active || props.paused} maxLength={1000} rows={3} placeholder="For example: read this module, then help me with its quiz." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6 focus-visible:outline-2 focus-visible:outline-cyan-700" /><span className="text-xs font-normal text-slate-600">Your goal and replies stay with this course. You can give more guidance during a run.</span></label>
+    <div className="space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={busy || props.active || props.paused} onChange={event => { setMode(event.target.value as 'read' | 'quiz'); clearPageQuestion(); }} className="min-h-12 rounded-md border border-slate-300 bg-white px-3 font-normal"><option value="read">Read course material</option><option value="quiz">Take the quiz</option></select></label>
+    <label className="grid gap-2 text-sm font-semibold text-slate-800">What would you like to achieve?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setObjective(event.target.value); }} disabled={busy || props.active || props.paused} maxLength={1000} rows={3} placeholder="For example: read this module, then help me with its quiz." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6 focus-visible:outline-2 focus-visible:outline-cyan-700" /><span className="text-xs font-normal text-slate-600">Collected course material stays available across pages. Check your goal when changing pages.</span></label></div>
     </div>
     {!question ? <div role="status" aria-live="polite" className="border-t border-slate-200 pt-5"><p className="font-semibold text-slate-950">{props.paused?'Waiting for your session to resume':props.refreshing?'Updating your course tabs':stage}</p><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{props.paused?'Use Resume session above. Your goal, replies and browser tabs are kept.':!connected?'Connect the helper and browser to continue.':!selected?'Choose your course tab above. Vitriol will read the page and explain the next step.':message}</p></div> : null}
     {progress.length > 0 && (busy || jobRunning) ? <section className="rounded-md border border-slate-200 bg-slate-50 p-4" aria-labelledby="live-activity-title">
@@ -371,7 +388,7 @@ export function GuidedRunner(props: {
       {guidanceError ? <p role="alert" className="text-sm text-amber-950">{guidanceError}</p> : null}
     </div> : null}
     {currentMemory?.history.some((turn) => conversationText(turn)) ? <details className="rounded-md border border-slate-200 bg-slate-50 p-4"><summary className="cursor-pointer text-sm font-semibold text-slate-700">Conversation remembered for this course</summary><ol className="mt-4 space-y-3">{currentMemory.history.map((turn, index) => { const text = conversationText(turn); return text ? <li key={index} className="text-sm leading-6 text-slate-700"><span className="font-semibold">{turn.role === 'user' ? 'You' : 'AI assistant'}: </span>{text}</li> : null; })}</ol></details> : null}
-    <p className="max-w-2xl text-xs leading-5 text-slate-600">Vitriol reads and navigates the selected course and asks when it needs your help. It does not submit a final assessment. Keep this page open for automatic follow-up steps.</p>
+    <p className="max-w-2xl text-xs leading-5 text-slate-600">Vitriol reads and navigates the selected course and asks when it needs your help. Read course material collects information. Take the quiz can answer and submit the selected quiz, then checks the visible result. Keep this page open for automatic follow-up steps.</p>
     </div><footer className="border-t border-slate-200 bg-slate-50 px-5 py-4 text-xs leading-5 text-slate-600 sm:px-7">Tabs update automatically when the browser is free. After 30 minutes without input on this page, Vitriol pauses the session and keeps your place. You will get a warning before it pauses.</footer>
   </section>;
 }

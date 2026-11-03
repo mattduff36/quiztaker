@@ -4,7 +4,7 @@ import { decideGuidedFlow, learnerQuestion, sameDetectedTarget, supportsGuidedLe
 
 test('uses actual detector capability IDs, including SCORM and SlickQuiz', () => {
   for (const [detected, capability] of [['scorm-player', 'scorm-complete'], ['slickquiz-exam', 'slickquiz-solve'], ['container', 'container-batch']]) {
-    assert.equal(decideGuidedFlow({ detected, action: { capabilityId: capability } }).kind, 'run');
+    assert.equal(decideGuidedFlow({ detected, action: { capabilityId: capability } }).kind, 'learn');
   }
   assert.equal(decideGuidedFlow({ detected: 'unknown', action: { capabilityId: 'close-browser' } }).kind, 'learn');
 });
@@ -29,8 +29,8 @@ test('question recovery accepts only bounded structured question markers', () =>
 
 test('learning requires the helper version containing capture and question fixes', () => {
   assert.equal(supportsGuidedLearning('1.0.7'), false);
-  assert.equal(supportsGuidedLearning('1.0.8'), true);
-  assert.equal(supportsGuidedLearning('1.0.10'), true);
+  assert.equal(supportsGuidedLearning('1.0.8'), false);
+  assert.equal(supportsGuidedLearning('1.0.10'), false);
   assert.equal(supportsGuidedLearning('invalid'), false);
 });
 
@@ -48,4 +48,10 @@ test('resume resolves a new target ID only for one exact matching pause URL', ()
   assert.equal(uniqueQuestionTab(undefined, tabs), null);
   assert.equal(uniqueQuestionTab('https://example.com/missing', tabs), null);
   assert.equal(uniqueQuestionTab('https://example.com/pause', [...tabs, { targetId: 'duplicate', url: 'https://example.com/pause' }]), null);
+});
+
+test('quiz intent permits a server assessment while read intent never fast completes', () => {
+  assert.equal(decideGuidedFlow({ detected: 'server-assessment' }, 'quiz').kind, 'learn');
+  assert.equal(decideGuidedFlow({ detected: 'scorm-player', action: {capabilityId:'scorm-complete'} }, 'read').kind, 'learn');
+  assert.equal(supportsGuidedLearning('1.0.15'), true);
 });

@@ -135,6 +135,23 @@ test('provider test follows decideLearnerStep and sanitizes failures', async () 
   }
 });
 
+test('personal hosted provider retries one invalid action then returns a format error or valid action', async () => {
+  for (const recover of [false,true]) {
+    let calls = 0;
+    const result = await completeHostedChat({provider:'openai',model:'gpt-4o-mini',apiKey,policy:{mode:'quiz'},snapshot:CONNECTION_TEST_SNAPSHOT,fetchImpl:async(_url,init)=>{
+      calls += 1;
+      const request = JSON.parse(String(init?.body));
+      assert.match(request.messages[0].content,/Selected intent: Take the quiz/);
+      assert.deepEqual(JSON.parse(request.messages.at(-1).content),CONNECTION_TEST_SNAPSHOT);
+      if(calls===2) assert.match(request.messages[1].content,/previous response was invalid/);
+      return successResponse(recover&&calls===2?'{"action":"wait","ms":0}':'not-json');
+    }});
+    assert.equal(calls,2);
+    assert.equal(result.ok,recover);
+    if(!result.ok) { assert.match(result.error,/provider-format/); assert.equal(JSON.stringify(result).includes('ask-user'),false); }
+  }
+});
+
 test('GPT-6.1 Sol connection test uses supported reasoning parameters', async () => {
   const result = await completeHostedChat({
     provider: 'openai', model: 'gpt-6.1-sol', apiKey, snapshot: CONNECTION_TEST_SNAPSHOT,
@@ -202,7 +219,7 @@ test('save keeps a blank key only for the same provider and only after a valid t
     },
   });
   assert.equal(failed.ok, false);
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
   assert.equal('record' in failed, false);
 
   const saved = await prepareConnectionSave({

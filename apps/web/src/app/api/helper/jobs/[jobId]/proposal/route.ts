@@ -1,3 +1,4 @@
+import { storedLearnerPolicy } from '@quiztaker/core';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { queryOne, withTransaction } from '@/lib/db';
@@ -33,6 +34,7 @@ import { enforceOperatorIdle, readOperatorActivity } from '@/lib/operator-activi
 const control = z.object({
   id: z.string().max(8),
   name: z.string().max(160),
+  kind: z.enum(['content', 'navigation', 'quiz-navigation', 'submission']).optional(),
 });
 
 const schema = z.object({
@@ -42,6 +44,7 @@ const schema = z.object({
     text: z.string().max(8000).optional(),
     choices: z.array(control).max(40).optional(),
     buttons: z.array(control).max(40).optional(),
+    tabs: z.array(z.object({id:z.string().max(8),name:z.string().max(160),url:z.string().max(500)})).max(20).optional(),
   }),
 });
 
@@ -58,8 +61,8 @@ export async function POST(
     status: string;
     capability_id: string;
     attempt_id: string;
-    constraints: { maxSteps?: number; submissionAuthorized?: boolean } | null;
-    input: { guidance?: unknown; conversationId?: unknown } | null;
+    constraints: { mode?: unknown; maxSteps?: number; submissionAuthorized?: boolean } | null;
+    input: { mode?: unknown; guidance?: unknown; conversationId?: unknown } | null;
     browser_session_id: string | null;
   }>(
     `select jobs.status, jobs.capability_id, plans.attempt_id, plans.constraints, plans.input,
@@ -75,9 +78,9 @@ export async function POST(
   if (!['queued', 'dispatched', 'running'].includes(job.status)) {
     return NextResponse.json({ stop: true, error: 'The learner job is not running' });
   }
-  if (!job.constraints || job.constraints.submissionAuthorized !== false) {
-    return NextResponse.json({ stop: true, error: 'Submission is not authorized' });
-  }
+  let policy;
+  try { policy = storedLearnerPolicy(job.input, job.constraints); }
+  catch { return NextResponse.json({ stop: true, error: 'Learner mode is not authorized by this plan' }); }
   const parsed = schema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ stop: true, error: 'Learner snapshot is invalid' });
   const storedGuidance = learnerGuidanceText(job.input?.guidance);
@@ -89,6 +92,7 @@ export async function POST(
     text: incoming.text,
     choices: incoming.choices,
     buttons: incoming.buttons,
+    tabs: incoming.tabs,
     ...(storedGuidance.guidance ? { guidance: storedGuidance.guidance } : {}),
   };
   const conversation = storedConversation(job.input?.conversationId, job.browser_session_id);
@@ -122,7 +126,7 @@ export async function POST(
   if (choice.kind === 'blocked') {
     return NextResponse.json({ stop: true, error: 'Hosted learner connection is not ready' });
   }
-  const maxSteps = Math.min(LEARNER_MAX_STEPS, Number(job.constraints.maxSteps ?? LEARNER_MAX_STEPS));
+  const maxSteps = Math.min(LEARNER_MAX_STEPS, Number(job.constraints?.maxSteps ?? LEARNER_MAX_STEPS));
   const reserved = await withTransaction(async (sql) => {
     await sql(
       `select id from jobs
@@ -157,6 +161,7 @@ export async function POST(
       model: choice.model,
       apiKey,
       snapshot: modelSnapshot,
+      policy,
     });
     return finishLearnerDecision(conversation, helper.userId, helper.helperId, incoming, personal.ok
       ? { action: personal.action }
@@ -179,8 +184,9 @@ export async function POST(
       baseUrl: env.LEARNER_BASE_URL,
     }),
     snapshot: modelSnapshot,
+    policy,
     cursor: preferCursor && cursorKey
-      ? (current) => askCursorLearner({ apiKey: cursorKey, model: env.CURSOR_MODEL, snapshot: current })
+      ? (current) => askCursorLearner({ apiKey: cursorKey, model: env.CURSOR_MODEL, snapshot: current, policy })
       : undefined,
   });
   return finishLearnerDecision(

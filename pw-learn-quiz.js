@@ -4,8 +4,9 @@
 // Confirmed quiz learner for a tab the hosted detector does not already solve.
 // The script only reads the page and applies actions the control plane has
 // already allowlisted. It has no API key and does not call the control plane.
-// Submit, finish, exit, and grade controls are refused here even if a later
-// step asks for them. Every page is sent to the provider with saved context;
+// Default read mode collects course material without submitting assessments.
+// Signed helper job input supplies quiz mode to allow observed quiz submission.
+// Every observed viewport is sent to the provider with saved course context;
 // an ask-user action
 // prints LEARNER_QUESTION and stops with needs-user-input. That is incomplete
 // and never a successful completion. The same action and target on an unchanged
@@ -20,15 +21,17 @@ const { chromium } = require('playwright');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 const MAX_STEPS = 80;
-const SUBMIT_LABEL = /\b(submit|finish|exit|end test|grade)\b/i;
+const SUBMIT_LABEL = /\b(submit|finish|end test|end quiz|grade)\b/i;
+const UNSAFE_LABEL = /\b(log\s*out|sign\s*out|sign\s*in|log\s*in|password|account|payment|purchase|buy|delete|remove|unsubscribe|exit|close browser)\b/i;
+const ASSESSMENT_START_LABEL = /\b(?:(?:start|begin|launch|take)(?:\s+the)?\s+(?:test|quiz|assessment)|retake|retry)\b/i;
 const NAVIGATION_LABEL = /^(next(?: page| slide)?|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch|resume|menu|home|contents)$/i;
 const OPEN_TOPIC_LABEL = /^Open topic: .{1,140}$/;
 const COURSE_INTERACTION_LABEL = /^Course interaction: \d+_\d+_click_?\d+$/;
 const REPEATED_VIEW_LIMIT = 3;
 const REPEATED_VIEW_OPTION = 'Done, resume now';
-const PASS_EVIDENCE = /\byou passed\b|\byour score:\s*100\s*%/i;
-const FAIL_EVIDENCE = /\b(not passed|did not pass|failed|unsuccessful|not successful)\b/i;
-const ALLOWED = new Set(['click', 'answer-select', 'scroll', 'wait', 'capture', 'verify', 'ask-user']);
+const PASS_EVIDENCE = /\byou (?:have )?passed\b|\b(?:result|status):\s*passed\b|\byour score:\s*100\s*%/i;
+const FAIL_EVIDENCE = /\bnot (?:\w+\s+){0,3}pass(?:ed)?\b|\b(did not pass|haven't passed|failed|unsuccessful|not successful)\b/i;
+const ALLOWED = new Set(['click', 'answer-select', 'select-tab', 'scroll', 'wait', 'capture', 'verify', 'ask-user']);
 const LEARNER_NEEDS_INPUT = 'needs-user-input';
 const NO_CONTROLS_QUESTION = 'Open the intended question or module, then resume.';
 
@@ -44,6 +47,7 @@ function parseLearnQuizArgs(argv) {
 
 function pageShowsPass(snapshot) {
   const text = `${snapshot?.title || ''}\n${snapshot?.text || ''}`;
+  if (snapshot?.choices?.length) return false;
   if (FAIL_EVIDENCE.test(text)) return false;
   return PASS_EVIDENCE.test(text);
 }
@@ -120,15 +124,25 @@ function noteRepeatedLearnerAction(state, action, snapshot) {
   return { state: { signature, snapshot, count }, question: null };
 }
 
-function localActionAllowed(action, snapshot) {
+function localActionAllowed(action, snapshot, mode = 'read') {
   if (!action || typeof action !== 'object') return false;
   if (!ALLOWED.has(action.action)) return false;
   if (action.action === 'ask-user') return learnerQuestionPayload(snapshot, action) != null;
+  if (action.action === 'select-tab') {
+    const target = snapshot.tabs?.find(tab => tab.id === action.targetId);
+    if (!target || !/^t\d{1,3}$/.test(action.targetId) || UNSAFE_LABEL.test(target.name)) return false;
+    try { const current = new URL(snapshot.url); return /^https?:$/.test(current.protocol) && new URL(target.url).origin === current.origin; } catch { return false; }
+  }
   if (action.action === 'click' || action.action === 'answer-select') {
     const pool = action.action === 'click' ? snapshot.buttons : snapshot.choices;
     const target = (pool || []).find((item) => item.id === action.targetId);
-    if (!target || SUBMIT_LABEL.test(target.name)) return false;
-    if (action.action === 'click' && !clickLabelAllowed(target.name)) return false;
+    if (!target) return false;
+    if (action.action === 'click') {
+      if (UNSAFE_LABEL.test(target.name)) return false;
+      if (ASSESSMENT_START_LABEL.test(target.name)) return mode === 'quiz';
+      if (SUBMIT_LABEL.test(target.name) || target.kind === 'submission' || target.kind === 'quiz-navigation') return mode === 'quiz';
+      if (!['content', 'navigation'].includes(target.kind) && !clickLabelAllowed(target.name)) return false;
+    }
   }
   return true;
 }
@@ -154,7 +168,7 @@ async function accessibleName(locator) {
     const id = el.getAttribute('id');
     const explicit = id ? el.ownerDocument.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
     const wrapping = el.closest('label');
-    return (explicit?.textContent || wrapping?.textContent || el.innerText || el.textContent || el.getAttribute('title') || el.getAttribute('alt') || el.getAttribute('value') || '');
+    return (explicit?.textContent || wrapping?.textContent || el.innerText || el.textContent || el.getAttribute('title') || el.getAttribute('alt') || el.getAttribute('value') || el.querySelector('img')?.getAttribute('alt') || el.querySelector('[title]')?.getAttribute('title') || ((el.hasAttribute('data-toggle') || el.hasAttribute('data-bs-toggle') || el.hasAttribute('aria-controls')) ? `Open panel: ${el.getAttribute('aria-controls') || el.getAttribute('data-target') || el.getAttribute('href') || 'course detail'}` : ''));
   }).catch(() => '');
   if (text && typeof text === 'object' && text.screenElement) {
     return screenElementControlName(text.id, text.className).slice(0, 160);
@@ -179,49 +193,91 @@ async function visibleFrames(page) {
   return frames;
 }
 
-async function readControls(page, role, prefix, navigationOnly) {
+async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
   const listed = [];
   const handles = new Map();
   for (const frame of await visibleFrames(page)) {
-    const locator = navigationOnly ? frame.locator('button, a, [role=button], [onclick], input[type=button]') : frame.getByRole(role);
+    const locator = navigationOnly ? frame.locator('button, a, [role=button], [role=tab], summary, [onclick], [data-toggle], [data-bs-toggle], [aria-controls], input[type=button], input[type=submit], input[type=image]') : frame.getByRole(role);
     const count = Math.min(await locator.count().catch(() => 0), 120);
     for (let index = 0; index < count; index += 1) {
       const handle = locator.nth(index);
       if (!await handle.isVisible().catch(() => false) || !await handle.isEnabled().catch(() => false)) continue;
       const name = await accessibleName(handle);
-      if (!name || SUBMIT_LABEL.test(name)) continue;
-      if (navigationOnly && !clickLabelAllowed(name)) continue;
-      if (await isSubmitControl(handle)) continue;
+      if (!name || (navigationOnly && UNSAFE_LABEL.test(name))) continue;
+      let kind;
+      if (navigationOnly) {
+        const submits = await isSubmitControl(handle);
+        // Next/Save form controls advance quiz pages; their form type alone
+        // does not make them a final submission. Read mode refuses both.
+        kind = SUBMIT_LABEL.test(name) ? 'submission' : submits || ASSESSMENT_START_LABEL.test(name) || /^(save|return later|summary)\b/i.test(name) ? 'quiz-navigation' : 'content';
+        if (mode !== 'quiz' && (kind === 'submission' || kind === 'quiz-navigation')) continue;
+        const safeLink = await handle.evaluate(el => {
+          if (el.tagName !== 'A') return true;
+          const href = el.getAttribute('href') || '';
+          return !/^(javascript|mailto|tel|data):/i.test(href) && !/\b(logout|signout|delete|purchase|checkout|account|login)\b/i.test(href);
+        }).catch(() => false);
+        if (!safeLink) continue;
+      }
       const id = `${prefix}${listed.length + 1}`;
       handles.set(id, handle);
-      listed.push({ id, name });
+      listed.push({ id, name, ...(kind ? { kind } : {}) });
       if (listed.length >= 40) return { listed, handles };
     }
   }
   return { listed, handles };
 }
 
-async function readSnapshot(page) {
-  let text = '';
+async function readSnapshot(page, mode = 'read') {
+  const sections = [];
   for (const frame of await visibleFrames(page)) {
     try {
-      text += `\n${await frame.locator('body').innerText({ timeout: 2000 })}`;
+      const observed = await frame.evaluate(() => {
+        const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth && s.display !== 'none' && s.visibility !== 'hidden' && el.getClientRects().length; };
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        const lines = [];
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          const parent = node.parentElement;
+          if (!parent || parent.closest('script,style,noscript') || !visible(parent)) continue;
+          const value = node.textContent.replace(/\s+/g, ' ').trim();
+          if (value) lines.push(value);
+        }
+        return { heading: document.querySelector('h1,h2,[role=heading]')?.textContent?.trim() || document.title, text: lines.join('\n'), position: Math.round(scrollY), end: scrollY + innerHeight >= document.documentElement.scrollHeight - 2 };
+      });
+      if (!observed.text.trim()) continue;
+      const source = frame.url().split(/[?#]/)[0].slice(0, 500);
+      sections.push(`[Source: ${source} | ${observed.heading || ''} | scroll ${observed.position}${observed.end ? ' | end of page' : ''}]\n${observed.text}`);
     } catch {
       // A cross-origin frame has no readable body.
     }
-    if (text.length > 6000) break;
   }
-  const buttons = await readControls(page, 'button', 'b', true);
+  const buttons = await readControls(page, 'button', 'b', true, mode);
   const radios = await readControls(page, 'radio', 'c', false);
   const checks = await readControls(page, 'checkbox', 'k', false);
   const handles = new Map([...buttons.handles, ...radios.handles, ...checks.handles]);
+  const tabs = [];
+  // Only already-observed course tabs on this website are offered. There is
+  // no model-supplied URL, browser-wide arbitrary selection or navigation.
+  try {
+    const origin = new URL(page.url()).origin;
+    if (/^https?:/.test(page.url())) for (const candidate of page.context().pages()) {
+      if (candidate === page || tabs.length >= 20 || new URL(candidate.url()).origin !== origin) continue;
+      const name = (await candidate.title()).slice(0,160);
+      if (UNSAFE_LABEL.test(name) || /\b(logout|login|account|checkout|delete)\b/i.test(candidate.url())) continue;
+      if (!/course|lesson|module|quiz|assessment|curriculum|training|paper|learning/i.test(`${name} ${new URL(candidate.url()).pathname}`)) continue;
+      const id = `t${tabs.length + 1}`;
+      tabs.push({id,name:name || 'Course page',url:candidate.url().slice(0,500)});
+      handles.set(id,{page:candidate,url:candidate.url(),name});
+    }
+  } catch { /* A tab closing during observation is not a selectable target. */ }
   return {
     snapshot: {
-      title: await page.title().catch(() => ''),
-      url: page.url(),
-      text: text.replace(/\s+/g, ' ').trim().slice(0, 6000),
+      title: (await page.title().catch(() => '')).slice(0,200),
+      url: page.url().slice(0,500),
+      text: sections.map(section => section.slice(0, Math.floor(7800 / Math.max(1, sections.length)))).join('\n').slice(0, 8000),
       buttons: buttons.listed,
       choices: [...radios.listed, ...checks.listed],
+      tabs,
     },
     handles,
   };
@@ -280,9 +336,20 @@ function createActionReader() {
   };
 }
 
-async function applyAction(page, action, snapshot, handles) {
+async function applyAction(page, action, snapshot, handles, mode = 'read') {
+  if (!localActionAllowed(action, snapshot, mode)) throw new Error('Learner action is not allowed');
+  if (action.action === 'select-tab') {
+    const target = handles.get(action.targetId);
+    const observed = snapshot.tabs?.find(tab => tab.id === action.targetId);
+    if (!target?.page || target.page.isClosed() || target.page.url() !== target.url || target.url !== observed?.url || await target.page.title() !== target.name) throw new Error('Learner tab changed');
+    if (new URL(page.url()).origin !== new URL(target.url).origin) throw new Error('Learner tab website changed');
+    await target.page.bringToFront();
+    return target.page;
+  }
   if (action.action === 'scroll') {
-    await page.mouse.wheel(0, 400);
+    // Scroll each visible course frame as well as the outer wrapper.
+    for (const frame of await visibleFrames(page)) await frame.evaluate(() => window.scrollBy(0, Math.max(300, innerHeight * 0.8))).catch(() => undefined);
+    await page.waitForTimeout(100);
     return;
   }
   if (action.action === 'wait') {
@@ -296,6 +363,8 @@ async function applyAction(page, action, snapshot, handles) {
   }
   const handle = handles.get(action.targetId);
   if (!handle) throw new Error('Learner target is not on the page');
+  const target = [...(snapshot.buttons || []), ...(snapshot.choices || [])].find(item => item.id === action.targetId);
+  if (!await handle.isVisible() || !await handle.isEnabled() || await accessibleName(handle) !== target?.name) throw new Error('Learner target changed');
   if (action.action === 'click') {
     await handle.click({ timeout: 5000 });
     return;
@@ -320,24 +389,31 @@ function finish(completed, reason) {
 
 async function main() {
   const options = parseLearnQuizArgs(process.argv);
+  const mode = process.env.VITRIOL_LEARNER_MODE === 'quiz' ? 'quiz' : 'read';
   const browser = await chromium.connectOverCDP(CDP_URL);
   let reader = null;
   try {
     let page = browser.contexts()[0]?.pages()?.[options.tabIdx];
     if (!page) throw new Error('Tab index is not open');
     if (options.dryRun) {
-      const { snapshot } = await readSnapshot(page);
+      const { snapshot } = await readSnapshot(page, mode);
       console.log(`Dry run: quiz-learn observed "${snapshot.title || 'untitled'}"`);
       return;
     }
     reader = createActionReader();
     let repeatState = null;
     for (let step = 1; step <= MAX_STEPS; step += 1) {
-      const { snapshot, handles } = await readSnapshot(page);
+      const { snapshot, handles } = await readSnapshot(page, mode);
       console.log(`LEARNER_PROGRESS ${JSON.stringify({ message: `Reading ${snapshot.title || 'the current course page'}.` })}`);
-      if (pageShowsPass(snapshot)) { finish(true); return; }
+      if (mode === 'quiz' && pageShowsPass(snapshot)) { finish(true); return; }
       const action = await reader.request(snapshot);
-      if (!localActionAllowed(action, snapshot)) {
+      // The observation above is retained before pausing. A fresh deliberate
+      // run is required to retry a visibly failed result, rather than looping.
+      if (mode === 'quiz' && /\byou (?:have |did )?(?:not (?:yet )?pass(?:ed)?|failed)\b|\b(?:result|status):\s*(?:failed|unsuccessful)\b/i.test(snapshot.text || '')) {
+        await emitQuestion({ question: 'The quiz shows an unsuccessful result. Its evidence has been retained. What should I review before a new attempt?' }, snapshot, browser);
+        return;
+      }
+      if (!localActionAllowed(action, snapshot, mode)) {
         finish(false, 'rejected-action');
         return;
       }
@@ -353,7 +429,7 @@ async function main() {
       let view = snapshot;
       let viewHandles = handles;
       if (action.action !== 'verify') {
-        const current = await readSnapshot(page);
+        const current = await readSnapshot(page, mode);
         if (!sameLearnerView(snapshot, current.snapshot)) {
           console.log(`Learner step ${step}: page changed while deciding; inspecting again`);
           continue;
@@ -369,7 +445,7 @@ async function main() {
         return;
       }
       if (action.action === 'verify') {
-        if (!pageShowsPass(snapshot)) {
+        if (mode !== 'quiz' || !pageShowsPass(snapshot)) {
           console.log(`Learner step ${step}: page does not show a pass`);
           continue;
         }
@@ -377,15 +453,16 @@ async function main() {
         return;
       }
       const popup = action.action === 'click' ? page.waitForEvent('popup', { timeout: 2500 }).catch(() => null) : null;
-      await applyAction(page, action, view, viewHandles);
+      const switched = await applyAction(page, action, view, viewHandles, mode);
+      if (switched) page = switched;
       const opened = popup ? await popup : null;
       if (opened) {
         await opened.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => undefined);
         page = opened;
         console.log('Following the course window opened by the selected control');
       }
-      const target = [...(view.buttons || []), ...(view.choices || [])].find((item) => item.id === action.targetId);
-      const activity = action.action === 'click' ? (target?.name?.startsWith('Course interaction:') ? 'Opened an interactive part of the course.' : `Opened ${target?.name || 'the selected control'}.`) : action.action === 'answer-select' ? `Selected ${target?.name || 'an answer'}.` : action.action === 'scroll' ? 'Scrolled to look for more course content.' : 'Checking the current page.';
+      const target = [...(view.buttons || []), ...(view.choices || []), ...(view.tabs || [])].find((item) => item.id === action.targetId);
+      const activity = action.action === 'select-tab' ? `Switched to ${target?.name || 'the selected course page'}.` : action.action === 'click' ? (target?.name?.startsWith('Course interaction:') ? 'Opened an interactive part of the course.' : `Opened ${target?.name || 'the selected control'}.`) : action.action === 'answer-select' ? `Selected ${target?.name || 'an answer'}.` : action.action === 'scroll' ? 'Scrolled to look for more course content.' : 'Checking the current page.';
       console.log(`LEARNER_PROGRESS ${JSON.stringify({ message: activity })}`);
       console.log(`Learner step ${step}: ${action.action}`);
     }
@@ -412,6 +489,8 @@ module.exports = {
   LEARNER_NEEDS_INPUT,
   accessibleName,
   readControls,
+  readSnapshot,
+  applyAction,
   visibleFrames,
   sameLearnerView,
   clickLabelAllowed,

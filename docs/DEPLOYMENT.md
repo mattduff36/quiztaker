@@ -216,3 +216,13 @@ An LLM may propose a `PlanProposal` only. It cannot create signed jobs or call
 helper endpoints. Every proposal still passes capability authorization,
 explicit confirmation, immutable signing, local whitelist validation, and
 post-run verification.
+
+### Guided course workflow helper compatibility
+
+Release/install Vitriol Helper 1.0.15 with quiz-learn capability 3 alongside the
+control plane. Earlier helpers cannot claim the expanded course-reading/quiz
+jobs. Read is the default; Take the quiz is signed per run and permits observed
+quiz submission. Preserve the existing job signature and authentication setup.
+No database migration is required for this workflow: course excerpts reuse the
+owner/helper/browser-session learner memory. Production build, dependency audit
+and release checks remain required before deployment.

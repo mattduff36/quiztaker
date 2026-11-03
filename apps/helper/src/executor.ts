@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
   capabilities,
+  parseLearnerMode,
   resolveScriptArgs,
   resultEnvelope,
   verifyJob,
@@ -101,6 +102,7 @@ export function startJob(
     windowsHide: false,
     env: {
       ...process.env,
+      VITRIOL_LEARNER_MODE: capability.id === 'quiz-learn' ? parseLearnerMode(envelope.payload.input?.mode) : 'read',
       QUIZTAKER_HOME: getHelperHome(),
       CDP_PROFILE_DIR: join(getHelperHome(), 'chrome-profile'),
       SABA_ATTEMPT_DIR: join(getHelperHome(), 'data', 'attempts'),

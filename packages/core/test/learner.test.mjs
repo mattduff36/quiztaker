@@ -7,6 +7,8 @@ import {
   decideLearnerStep,
   learnerOfferedFor,
   parseLearnerAction,
+  learnerConstraints,
+  storedLearnerPolicy,
 } from '../dist/index.js';
 
 const snapshot = {
@@ -18,6 +20,41 @@ const snapshot = {
     { id: 'c1', name: 'Late point differentiation configuration (LPDC)' },
   ],
 };
+
+test('only stored quiz intent authorizes observed submission and semantic course controls', () => {
+  const quiz = storedLearnerPolicy({mode:'quiz'}, learnerConstraints('quiz'));
+  const page = { buttons:[{id:'b1',name:'Submit quiz',kind:'submission'},{id:'b2',name:'Next »',kind:'quiz-navigation'},{id:'b3',name:'Types of paper',kind:'content'}], choices:[] };
+  for (const targetId of ['b1','b2']) {
+    assert.equal(parseLearnerAction({action:'click',targetId},page,quiz).ok,true);
+    assert.equal(parseLearnerAction({action:'click',targetId},{...page,mode:'quiz',submissionAuthorized:true}).ok,false);
+  }
+  assert.equal(parseLearnerAction({action:'click',targetId:'b3'},page).ok,true);
+  assert.deepEqual(storedLearnerPolicy(null,null),{mode:'read'});
+  assert.throws(()=>storedLearnerPolicy({mode:'quiz'},learnerConstraints()),/not authorized/);
+  assert.throws(()=>storedLearnerPolicy({mode:'read'},learnerConstraints('quiz')),/does not match/);
+  assert.equal(learnerOfferedFor('server-assessment','quiz'),true);
+});
+
+test('tab switching requires an observed same-website course tab', () => {
+  const page = {url:'https://example.com/course',tabs:[{id:'t1',name:'Paper quiz',url:'https://example.com/quiz'}]};
+  assert.equal(parseLearnerAction({action:'select-tab',targetId:'t1'},page).ok,true);
+  assert.equal(parseLearnerAction({action:'select-tab',targetId:'t2'},page).ok,false);
+  assert.equal(parseLearnerAction({action:'select-tab',targetId:'t1'},{...page,tabs:[{id:'t1',name:'Paper quiz',url:'https://other.com/quiz'}]}).ok,false);
+});
+
+test('observed answer labels are facts, while clicks and assessment starts obey mode', () => {
+  for (const name of ['Password','Delete','Exit','Account']) {
+    const page = {choices:[{id:'c1',name}],buttons:[{id:'b1',name,kind:'content'}]};
+    assert.equal(parseLearnerAction({action:'answer-select',targetId:'c1'},page,{mode:'quiz'}).ok,true);
+    assert.equal(parseLearnerAction({action:'click',targetId:'b1'},page,{mode:'quiz'}).ok,false);
+  }
+  assert.equal(parseLearnerAction({action:'click',targetId:'b1'},{buttons:[{id:'b1',name:'Home'}]}).ok,true);
+  for(const name of ['Start Quiz','Begin the Test','Launch Assessment','Retake','Retry quiz']) {
+    const page = {buttons:[{id:'b1',name,kind:'content'}]};
+    assert.equal(parseLearnerAction({action:'click',targetId:'b1'},page).ok,false);
+    assert.equal(parseLearnerAction({action:'click',targetId:'b1'},page,{mode:'quiz'}).ok,true);
+  }
+});
 
 test('learner-accepts-answer-select', () => {
   const result = parseLearnerAction({ action: 'answer-select', targetId: 'c1' }, snapshot);

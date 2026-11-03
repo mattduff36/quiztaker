@@ -154,7 +154,7 @@ test('standing instructions stay separate while the current page and guidance pe
   assert.equal(crowded.guidance, guidance);
 });
 
-test('unsupported actions offer a plain control choice instead of a technical id', async () => {
+test('unsupported actions stop with a format error rather than a routine control question', async () => {
   const result = await requestLearnerDecision({
     apiKey: 'test-key',
     snapshot: {
@@ -168,9 +168,7 @@ test('unsupported actions offer a plain control choice instead of a technical id
       choices: [{ message: { content: '{"action":"click","targetId":"b9"}' } }],
     })),
   });
-  assert.deepEqual(result.action, {
-    action: 'ask-user',
-    question: 'I need a safe control on this page. Which of these should I use?',
-    options: ['Next', 'Home', 'Ask me to identify the control'],
-  });
+  assert.equal(result.action, undefined);
+  assert.equal(result.stop, true);
+  assert.match(result.error || '', /provider-format/);
 });

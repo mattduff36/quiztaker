@@ -534,3 +534,17 @@ test('local pause questions persist for the stored job scope and do not duplicat
   assert.equal(stored?.helperId, helperA);
   assert.equal(stored?.browserSessionId, browserA);
 });
+
+
+test('material from another source page reaches a later quiz decision', async () => {
+  const { requestLearnerDecision } = await import('../src/lib/learner.js');
+  const materials = addLearnerMaterial([], {url:'https://example.com/course/lesson-one',title:'Lesson one',text:'The calibration key is amber.'});
+  const quiz = composeLearnerSnapshot({url:'https://example.com/course/quiz',text:'Which colour is the calibration key?',choices:[{id:'c1',name:'Amber'},{id:'c2',name:'Blue'}]}, {history:[],materials});
+  const result = await requestLearnerDecision({apiKey:'fixture',policy:{mode:'quiz'},snapshot:quiz,fetchImpl:async(_url,init)=>{
+    const context = JSON.parse(String(init?.body)).messages[1].content;
+    assert.match(context,/lesson-one/);
+    const targetId = context.includes('calibration key is amber') ? 'c1' : 'c2';
+    return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({action:'answer-select',targetId})}}]}));
+  }});
+  assert.deepEqual(result.action,{action:'answer-select',targetId:'c1'});
+});

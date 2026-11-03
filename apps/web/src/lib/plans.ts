@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { getCapability, riskLevels, validateCapabilityInput, type PlanProposal, type PlanTarget } from '@quiztaker/core';
+import { getCapability, riskLevels, parseLearnerMode, validateCapabilityInput, type PlanProposal, type PlanTarget } from '@quiztaker/core';
 import { capabilityNegotiationError } from '@/lib/capability-negotiation';
 import { assertLearnerDetectionMatch, learnerConstraints, learnerGuidanceText } from '@/lib/learner';
 import {
@@ -37,6 +37,7 @@ export async function createPlan(userId: string, input: CreatePlanInput): Promis
   const isLearner = capability.id === 'quiz-learn';
   let learnerBinding: { conversationId: string; browserSessionId: string; guidance?: string } | null = null;
   if (isLearner) {
+    capabilityInput.mode = parseLearnerMode(capabilityInput.mode);
     await assertLearnerPage(userId, input.helperId, capabilityInput);
     const guidance = learnerGuidanceText(capabilityInput.guidance);
     if (!guidance.ok) throw new Error(guidance.error);
@@ -71,7 +72,7 @@ export async function createPlan(userId: string, input: CreatePlanInput): Promis
     if (!validated.ok) throw new Error(validated.error);
     args = validated.args;
   }
-  const constraints = isLearner ? learnerConstraints() : input.constraints ?? null;
+  const constraints = isLearner ? learnerConstraints(parseLearnerMode(capabilityInput.mode)) : input.constraints ?? null;
   const steps = isLearner ? ['probe', 'answer-select', 'verify'] : input.steps ?? [];
   const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
   const row = await queryOne<Record<string, unknown>>(
@@ -211,6 +212,7 @@ async function assertLearnerPage(
     tabs: session.tabs ?? [],
     detection: session.detection,
     target,
+    mode: parseLearnerMode(capabilityInput.mode),
   });
 }
 

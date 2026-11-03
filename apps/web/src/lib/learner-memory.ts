@@ -193,6 +193,7 @@ export function composeLearnerSnapshot(
     text: currentText,
     choices: current.choices,
     buttons: current.buttons,
+    tabs: current.tabs,
     ...(current.guidance ? { guidance: current.guidance } : {}),
   };
   if (!memory) return snapshot;
@@ -534,11 +535,12 @@ function flatModelActionText(text: string): string {
 }
 
 function materialLines(materials: LearnerMaterial[], question?: string): string[] {
-  if (!question) return materials.map((item) => item.text);
+  const source = (item: LearnerMaterial) => `[Source: ${item.url} | ${item.title}]\n${item.text}`;
+  if (!question) return materials.map(source);
   const words = [...new Set(question.toLowerCase().match(/[a-z]{4,}/g) || [])].filter((word) => !['which', 'following', 'select', 'question', 'answer', 'device', 'features', 'this', 'that', 'with', 'from', 'have', 'does'].includes(word));
   const documents = materials.map((item) => new Set(item.text.toLowerCase().match(/[a-z]{4,}/g) || []));
   const frequency = new Map(words.map((word) => [word, documents.filter((document) => document.has(word)).length || 1]));
-  return materials.map((item, index) => ({ text: item.text, index, score: words.reduce((score, word) => score + (documents[index].has(word) ? 1 / frequency.get(word)! : 0), 0) }))
+  return materials.map((item, index) => ({ text: source(item), index, score: words.reduce((score, word) => score + (documents[index].has(word) ? 1 / frequency.get(word)! : 0), 0) }))
     .sort((a, b) => a.score - b.score || a.index - b.index).map((item) => item.text);
 }
 

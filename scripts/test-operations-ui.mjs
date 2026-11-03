@@ -36,7 +36,7 @@ function reply(path,method,body,now,s){
     if(body.action==='refresh'){if(s.paused)return{status:'skipped'};s.refreshes++;return{status:'queued',jobId:makeJob('list-tabs')};}
     return activity();
   }
-  if(path==='/api/operations/context'){s.checks++;return{helper:{id:helperId,device_name:'Test PC',version:'1.0.14',protocol_version:2,is_online:s.online},operatorActivity:s.last===null?null:activity(),session:session(),activeJob:s.latest,captures:[],recentUrls:[],learnerEnabled:true};}
+  if(path==='/api/operations/context'){s.checks++;return{helper:{id:helperId,device_name:'Test PC',version:'1.0.15',protocol_version:2,is_online:s.online},operatorActivity:s.last===null?null:activity(),session:session(),activeJob:s.latest,captures:[],recentUrls:[],learnerEnabled:true};}
   if(path.startsWith('/api/operations/learning'))return{id:null,objective:null,history:[]};
   if(path==='/api/operations/actions'){
     if(body.capabilityId==='detect'&&!s.blocked){s.blocked=true;makeJob('list-tabs');return{plan:{planId:'detect-plan'},waitingForJob:true};}
@@ -79,19 +79,33 @@ try{
     await expect(select.getByRole('option')).toHaveCount(2);
     await select.selectOption('course');
     const goal=page.getByRole('textbox',{name:/What would you like to achieve/});
+    const mode=page.getByRole('combobox',{name:'Course activity',exact:true});
+    await expect(mode).toHaveValue('read');
+    await expect(goal).toHaveValue(/Read all relevant material.*Xerox course overview/);
+    await mode.selectOption('quiz');
+    await expect(goal).toHaveValue(/answer and submit.*Xerox course overview/);
+    await mode.selectOption('read');
+    await expect(goal).toHaveValue(/Read all relevant material/);
     await goal.fill('Read this course overview and ask me before continuing.');
     await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
     const before=fixture.refreshes;
     await page.clock.fastForward(46_000);
     await expect.poll(()=>fixture.refreshes).toBeGreaterThan(before);
     await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
+    await mode.selectOption('quiz');
+    await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
+    await mode.selectOption('read');
     await expect(goal).toBeFocused();
     await expect(select).toHaveValue('course');
     await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
     await page.screenshot({path:join(artifacts,viewport.width>500?'desktop.png':'mobile.png'),fullPage:true});
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
-    await expect(page.getByText('This is a server-scored assessment.',{exact:false})).toBeVisible();
+    await expect(page.getByText('This page is a quiz.',{exact:false})).toBeVisible();
+    await mode.selectOption('quiz');
+    await expect(page.getByText('This page is a quiz.',{exact:false})).toHaveCount(0);
+    await mode.selectOption('read');
+    await expect(page.getByText('This page is a quiz.',{exact:false})).toHaveCount(0);
     expect(fixture.retries).toBe(2);
     await page.clock.fastForward(28*60_000+5_000);
     await expect(page.getByRole('button',{name:'Keep working',exact:true})).toBeVisible();
