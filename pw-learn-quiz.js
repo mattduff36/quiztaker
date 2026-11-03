@@ -12,6 +12,8 @@
 // and never a successful completion. The same action and target on an unchanged
 // view stops after three attempts and asks the operator to resume. Guidance is
 // not a shell argument.
+// Quiz jobs allow at most two observed Retake/Retry actions; failed-result
+// snapshots are retained before those actions, and only visible passes finish.
 //
 // Usage:
 //   node pw-learn-quiz.js <tabIdx> [--dry]
@@ -21,6 +23,8 @@ const { chromium } = require('playwright');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 const MAX_STEPS = 80;
+const MAX_QUIZ_RETRIES = 2;
+const RETRY_LABEL = /\b(retake|retry)\b/i;
 const SUBMIT_LABEL = /\b(submit|finish|end test|end quiz|grade)\b/i;
 const UNSAFE_LABEL = /\b(log\s*out|sign\s*out|sign\s*in|log\s*in|password|account|payment|purchase|buy|delete|remove|unsubscribe|exit|close browser)\b/i;
 const ASSESSMENT_START_LABEL = /\b(?:(?:start|begin|launch|take)(?:\s+the)?\s+(?:test|quiz|assessment)|retake|retry)\b/i;
@@ -214,6 +218,7 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
         const safeLink = await handle.evaluate(el => {
           if (el.tagName !== 'A') return true;
           const href = el.getAttribute('href') || '';
+          if (/^javascript:\s*void\s*\(\s*0\s*\)\s*;?$/i.test(href.trim())) return true;
           return !/^(javascript|mailto|tel|data):/i.test(href) && !/\b(logout|signout|delete|purchase|checkout|account|login)\b/i.test(href);
         }).catch(() => false);
         if (!safeLink) continue;
@@ -264,7 +269,9 @@ async function readSnapshot(page, mode = 'read') {
       if (candidate === page || tabs.length >= 20 || new URL(candidate.url()).origin !== origin) continue;
       const name = (await candidate.title()).slice(0,160);
       if (UNSAFE_LABEL.test(name) || /\b(logout|login|account|checkout|delete)\b/i.test(candidate.url())) continue;
-      if (!/course|lesson|module|quiz|assessment|curriculum|training|paper|learning/i.test(`${name} ${new URL(candidate.url()).pathname}`)) continue;
+      const path = new URL(candidate.url()).pathname;
+      if (!/course|lesson|module|quiz|assessment|curriculum|training|paper|learning/i.test(`${name} ${path}`)
+        && !/\/(?:lms|scorm|evaluation)(?:\/|$)/i.test(path)) continue;
       const id = `t${tabs.length + 1}`;
       tabs.push({id,name:name || 'Course page',url:candidate.url().slice(0,500)});
       handles.set(id,{page:candidate,url:candidate.url(),name});
@@ -336,7 +343,7 @@ function createActionReader() {
   };
 }
 
-async function applyAction(page, action, snapshot, handles, mode = 'read') {
+async function applyAction(page, action, snapshot, handles, mode = 'read', retryState = { count: 0 }) {
   if (!localActionAllowed(action, snapshot, mode)) throw new Error('Learner action is not allowed');
   if (action.action === 'select-tab') {
     const target = handles.get(action.targetId);
@@ -366,6 +373,14 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
   const target = [...(snapshot.buttons || []), ...(snapshot.choices || [])].find(item => item.id === action.targetId);
   if (!await handle.isVisible() || !await handle.isEnabled() || await accessibleName(handle) !== target?.name) throw new Error('Learner target changed');
   if (action.action === 'click') {
+    if (mode === 'quiz' && RETRY_LABEL.test(target.name)) {
+      if (retryState.count >= MAX_QUIZ_RETRIES) {
+        const error = new Error('Quiz retry limit reached');
+        error.code = 'LEARNER_RETRY_LIMIT';
+        throw error;
+      }
+      retryState.count += 1;
+    }
     await handle.click({ timeout: 5000 });
     return;
   }
@@ -402,17 +417,12 @@ async function main() {
     }
     reader = createActionReader();
     let repeatState = null;
+    const retryState = { count: 0 };
     for (let step = 1; step <= MAX_STEPS; step += 1) {
       const { snapshot, handles } = await readSnapshot(page, mode);
       console.log(`LEARNER_PROGRESS ${JSON.stringify({ message: `Reading ${snapshot.title || 'the current course page'}.` })}`);
       if (mode === 'quiz' && pageShowsPass(snapshot)) { finish(true); return; }
       const action = await reader.request(snapshot);
-      // The observation above is retained before pausing. A fresh deliberate
-      // run is required to retry a visibly failed result, rather than looping.
-      if (mode === 'quiz' && /\byou (?:have |did )?(?:not (?:yet )?pass(?:ed)?|failed)\b|\b(?:result|status):\s*(?:failed|unsuccessful)\b/i.test(snapshot.text || '')) {
-        await emitQuestion({ question: 'The quiz shows an unsuccessful result. Its evidence has been retained. What should I review before a new attempt?' }, snapshot, browser);
-        return;
-      }
       if (!localActionAllowed(action, snapshot, mode)) {
         finish(false, 'rejected-action');
         return;
@@ -453,10 +463,17 @@ async function main() {
         return;
       }
       const popup = action.action === 'click' ? page.waitForEvent('popup', { timeout: 2500 }).catch(() => null) : null;
-      const switched = await applyAction(page, action, view, viewHandles, mode);
+      let switched;
+      try { switched = await applyAction(page, action, view, viewHandles, mode, retryState); }
+      catch (error) {
+        if (error.code !== 'LEARNER_RETRY_LIMIT') throw error;
+        await emitQuestion({question:'Two quiz retries have been started in this run and the feedback has been retained. What should I review or change before another attempt?'}, view, browser);
+        return;
+      }
       if (switched) page = switched;
       const opened = popup ? await popup : null;
       if (opened) {
+        if (!/^https?:/i.test(opened.url())) await opened.waitForURL(url => /^https?:$/.test(url.protocol), {timeout:10_000}).catch(() => undefined);
         await opened.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => undefined);
         page = opened;
         console.log('Following the course window opened by the selected control');

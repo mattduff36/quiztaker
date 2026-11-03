@@ -3,13 +3,13 @@ const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
 const { readSnapshot, applyAction, localActionAllowed, pageShowsPass, sameLearnerView } = require('./pw-learn-quiz');
 
-async function act(page, name, mode = 'read', choice = false) {
+async function act(page, name, mode = 'read', choice = false, retryState) {
   const view = await readSnapshot(page, mode);
   const target = (choice ? view.snapshot.choices : view.snapshot.buttons).find(control => control.name === name);
   assert.ok(target, `Observed control: ${name}`);
   const action = { action: choice ? 'answer-select' : 'click', targetId: target.id };
   assert.equal(localActionAllowed(action, view.snapshot, mode), true);
-  await applyAction(page, action, view.snapshot, view.handles, mode);
+  await applyAction(page, action, view.snapshot, view.handles, mode, retryState);
   return view;
 }
 
@@ -92,16 +92,20 @@ test('observed existing course tabs can be selected and revisited; unrelated ori
   const browser = await chromium.launch({channel:'chrome',headless:true});
   try {
     const context = await browser.newContext();
-    await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:`<title>${new URL(route.request().url()).pathname.includes('quiz')?'Paper assessment':'Paper course curriculum'}</title><p>Course page material</p>`}));
+    await context.route('**/*',route=>{ const path = new URL(route.request().url()).pathname; return route.fulfill({contentType:'text/html',body:`<title>${path.includes('/lms/scorm/')?'':path.includes('quiz')?'Paper assessment':'Paper course curriculum'}</title><p>Course page material</p>`}); });
     const course = await context.newPage(); await course.goto('https://course.invalid/learning');
     const quiz = await context.newPage(); await quiz.goto('https://course.invalid/quiz');
     const unrelated = await context.newPage(); await unrelated.goto('https://other.invalid/quiz');
+    const lesson = await context.newPage(); await lesson.goto('https://course.invalid/lms/scorm/clientLMS/LMS3.aspx?lesson=paper');
     const observed = await readSnapshot(course,'quiz');
-    assert.equal(observed.snapshot.tabs.length,1);
+    assert.equal(observed.snapshot.tabs.length,2);
     assert.equal(observed.snapshot.tabs[0].name,'Paper assessment');
     const action = {action:'select-tab',targetId:observed.snapshot.tabs[0].id};
     assert.equal(await applyAction(course,action,observed.snapshot,observed.handles,'quiz'),quiz);
     const back = await readSnapshot(quiz,'quiz');
+    const lessonTab = back.snapshot.tabs.find(tab=>tab.url.includes('/lms/scorm/clientLMS/LMS3.aspx'));
+    assert.equal(lessonTab.name,'Course page');
+    assert.equal(await applyAction(quiz,{action:'select-tab',targetId:lessonTab.id},back.snapshot,back.handles,'quiz'),lesson);
     assert.equal(await applyAction(quiz,{action:'select-tab',targetId:back.snapshot.tabs[0].id},back.snapshot,back.handles,'quiz'),course);
     assert.equal(localActionAllowed(action,{...observed.snapshot,tabs:[{...observed.snapshot.tabs[0],url:'https://other.invalid/quiz'}]},'quiz'),false);
     await quiz.goto('https://course.invalid/changed');
@@ -127,5 +131,57 @@ test('answer labels remain selectable; Home is course navigation and read mode e
     }
     for(const name of ['Password','Delete','Exit','Account']) await act(page,name,'quiz',true);
     await act(page,'Home');
+  } finally { await browser.close(); }
+});
+
+test('observed no-op JavaScript anchors open course panels and popups; arbitrary JavaScript links stay excluded', async () => {
+  const browser = await chromium.launch({channel:'chrome',headless:true});
+  try {
+    const context = await browser.newContext();
+    await context.route('https://course.invalid/**',route=>route.fulfill({contentType:'text/html',body:'<h1>Course lesson</h1>'}));
+    const page = await context.newPage();
+    await page.setContent(`<a href="javascript:void(0);" onclick="document.querySelector('#panel').hidden=false">Open curriculum</a><div id="panel" hidden>Opened course material</div>
+      <a href="javascript: void( 0 )" onclick="window.open('https://course.invalid/lesson','_blank')">Open lesson</a>
+      <a href="javascript:alert('bad')">Run arbitrary script</a><a href="javascript:void(1)">Not a no-op</a><a href="javascript:void(0);">Delete account</a>`);
+    const observed = await readSnapshot(page);
+    assert.deepEqual(observed.snapshot.buttons.map(control=>control.name),['Open curriculum','Open lesson']);
+    await act(page,'Open curriculum');
+    assert.match((await readSnapshot(page)).snapshot.text,/Opened course material/);
+    const popup = page.waitForEvent('popup');
+    await act(page,'Open lesson');
+    const lesson = await popup;
+    await lesson.waitForURL('https://course.invalid/lesson');
+    await lesson.waitForLoadState('domcontentloaded');
+    assert.equal(lesson.url(),'https://course.invalid/lesson');
+  } finally { await browser.close(); }
+});
+
+test('a failed result can retake, answer, submit and visibly pass; repeated retries are bounded', async () => {
+  const browser = await chromium.launch({channel:'chrome',headless:true});
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<h1>Quiz result</h1><div id="result">You did not pass. Review feedback: use the retained amber calibration fact.<button onclick="this.parentElement.hidden=true;document.querySelector('#question').hidden=false">Retake quiz</button></div>
+      <form id="question" hidden onsubmit="event.preventDefault();this.hidden=true;document.querySelector('#summary').hidden=false"><label><input type="radio" name="answer" value="amber">Amber</label><label><input type="radio" name="answer" value="blue">Blue</label><input type="submit" value="Next »"></form>
+      <div id="summary" hidden><button onclick="document.body.innerHTML='<h1>Quiz result</h1><p>You passed this quiz. Your score: 100%</p>'">Submit quiz</button></div>`);
+    const failure = await readSnapshot(page,'quiz');
+    assert.match(failure.snapshot.text,/did not pass.*Review feedback/s);
+    assert.equal(pageShowsPass(failure.snapshot),false);
+    const budget = {count:0};
+    // Deterministic fixture decisions use actual observed controls. The same
+    // apply path and per-job budget are used by the runtime after proposals.
+    await act(page,'Retake quiz','quiz',false,budget);
+    await act(page,'Amber','quiz',true,budget);
+    await act(page,'Next »','quiz',false,budget);
+    await act(page,'Submit quiz','quiz',false,budget);
+    assert.equal(pageShowsPass((await readSnapshot(page,'quiz')).snapshot),true);
+    assert.equal(budget.count,1);
+
+    await page.setContent(`<p>You did not pass. Feedback remains available.</p><button onclick="document.querySelector('#attempts').textContent=String(Number(document.querySelector('#attempts').textContent)+1)">Retry quiz</button><output id="attempts">0</output>`);
+    const limit = {count:0};
+    await act(page,'Retry quiz','quiz',false,limit);
+    await act(page,'Retry quiz','quiz',false,limit);
+    await assert.rejects(act(page,'Retry quiz','quiz',false,limit),error=>error.code==='LEARNER_RETRY_LIMIT');
+    assert.equal(await page.locator('#attempts').textContent(),'2');
+    assert.equal(pageShowsPass((await readSnapshot(page,'quiz')).snapshot),false);
   } finally { await browser.close(); }
 });

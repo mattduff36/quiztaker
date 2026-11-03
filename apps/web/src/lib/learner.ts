@@ -284,6 +284,6 @@ function learnerPageAddress(value: string | undefined): string {
 
 export function learnerSystemPrompt(policy: LearnerPolicy = { mode: 'read' }): string {
   return LEARNER_SYSTEM_PROMPT + (policy.mode === 'quiz'
-    ? ' Selected intent: Take the quiz. Use retained course material to answer. You may click actual observed quiz Submit, Finish, Grade and navigation controls. After submission inspect visible results; only real pass evidence is completion. On failure pause with the observed result for a deliberate retry.'
+    ? ' Selected intent: Take the quiz. Use retained course material to answer. You may click actual observed quiz Submit, Finish, Grade and navigation controls. After submission inspect visible results; only real pass evidence is completion. On failure read the visible feedback and relevant retained material before acting. Follow the owner goal: when asked to retry or continue until passing, use observed Retake/Retry controls and revise answers using the evidence rather than asking the operator to click them. Each job permits at most two retries and 80 steps; ask for genuinely missing guidance or pause when those bounds are exhausted. A failed result does not prevent course review navigation or an authorized retry.'
     : ' Selected intent: Read course material. Collect all relevant pages and opened panels before pausing with a summary. Do not submit an assessment or use SCORM completion shortcuts.');
 }
