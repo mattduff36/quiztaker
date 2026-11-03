@@ -46,24 +46,43 @@ export async function pairInteractively(args = process.argv.slice(2)): Promise<H
 }
 
 export function parsePairingLaunch(args: string[]): PairingLaunch | null {
-  const value = args.find((argument) => argument.toLowerCase().startsWith('vitriol-helper:'));
-  if (!value) return null;
-  const launch = new URL(value);
-  if (launch.protocol !== 'vitriol-helper:' || launch.hostname !== 'pair') {
+  return parseProtocolLaunch(args)?.pairing || null;
+}
+
+function parseProtocolLaunch(args: string[]): Pick<HelperLaunch, 'controlPlaneUrl' | 'pairing'> | null {
+  const values = args.filter((argument) => argument.toLowerCase().startsWith('vitriol-helper:'));
+  if (!values.length) return null;
+  if (values.length !== 1) throw new Error('Only one Vitriol Helper launch link is allowed.');
+  const launch = new URL(values[0]!);
+  if (launch.protocol !== 'vitriol-helper:' || !['pair', 'open'].includes(launch.hostname)
+    || launch.username || launch.password || launch.port || launch.pathname || launch.hash) {
     throw new Error('The Vitriol Helper launch link is invalid.');
   }
-  const code = (launch.searchParams.get('code') || '').trim().toUpperCase();
-  const controlPlaneUrl = normalizeUrl(launch.searchParams.get('controlPlaneUrl') || '');
-  if (!/^[A-Z0-9]{6,20}$/.test(code)) throw new Error('The pairing code in the launch link is invalid.');
-  const target = new URL(controlPlaneUrl);
+  const allowedKeys = launch.hostname === 'pair' ? ['code', 'controlPlaneUrl'] : ['controlPlaneUrl'];
+  for (const key of launch.searchParams.keys()) {
+    if (!allowedKeys.includes(key) || launch.searchParams.getAll(key).length !== 1) {
+      throw new Error('The Vitriol Helper launch link is invalid.');
+    }
+  }
+  const targetValue = launch.searchParams.get('controlPlaneUrl');
+  const target = new URL(targetValue ?? (launch.hostname === 'open' ? PRODUCTION_CONTROL_PLANE_URL : ''));
+  if (target.username || target.password || target.pathname !== '/' || target.search || target.hash) {
+    throw new Error('The Vitriol Helper launch target must be an origin without credentials.');
+  }
+  const controlPlaneUrl = normalizeUrl(target.href);
   const isLocal = ['localhost', '127.0.0.1'].includes(target.hostname);
   const isProduction = target.protocol === 'https:'
     && ['vitriol.co.uk', 'www.vitriol.co.uk'].includes(target.hostname);
   if (!isLocal && !isProduction) throw new Error('The pairing launch target is not trusted.');
-  return { code, controlPlaneUrl };
+  if (launch.hostname === 'open') return { controlPlaneUrl, pairing: null };
+  const code = (launch.searchParams.get('code') || '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{6,20}$/.test(code)) throw new Error('The pairing code in the launch link is invalid.');
+  return { controlPlaneUrl, pairing: { code, controlPlaneUrl } };
 }
 
 export function resolveControlPlaneUrl(args: string[]): string {
+  const protocolLaunch = parseProtocolLaunch(args);
+  if (protocolLaunch) return protocolLaunch.controlPlaneUrl;
   const isProduction = args.includes('--production');
   const argument = args.find((value) => value.startsWith('--control-plane-url='));
   if (isProduction && argument) {
@@ -77,8 +96,9 @@ export function resolveControlPlaneUrl(args: string[]): string {
 }
 
 export function resolveHelperLaunch(args: string[]): HelperLaunch {
-  const pairing = parsePairingLaunch(args);
-  const controlPlaneUrl = pairing?.controlPlaneUrl || resolveControlPlaneUrl(args);
+  const protocolLaunch = parseProtocolLaunch(args);
+  const pairing = protocolLaunch?.pairing || null;
+  const controlPlaneUrl = protocolLaunch?.controlPlaneUrl || resolveControlPlaneUrl(args);
   return {
     controlPlaneUrl,
     mode: getControlPlaneMode(controlPlaneUrl),

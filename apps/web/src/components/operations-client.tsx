@@ -11,6 +11,7 @@ import { describeTaskJob, isRunningJob, isTaskJob, retainTaskJob } from '@/lib/o
 import type { OperatorActivity } from '@/lib/operator-activity';
 import { formatDisplayDate } from '@/lib/display-date';
 import { CourseCoverage } from '@/components/course-coverage';
+import {HelperWelcome,rememberHelperConnection} from '@/components/helper-welcome';
 
 interface TabRow {
   targetId: string;
@@ -265,6 +266,7 @@ export function OperationsClient(props: { helperId: string }) {
   }, [jobId, jobStatus, load, guidedBusy, activity.paused, replacingHelper, updateBusy]);
 
   const readiness = connectionState(context, Boolean(contextError));
+  useEffect(()=>{if(context?.helper?.is_online)rememberHelperConnection();},[context?.helper?.is_online]);
   const helperReady = !contextError && context?.helper?.is_online === true;
   const snapshotStale = readiness === 'connected' && (!context?.session?.updated_at || !Number.isFinite(Date.parse(context.session.updated_at)) || Date.now()-Date.parse(context.session.updated_at)>SNAPSHOT_STALE_MS) && !foregroundActive && !guidedBusy;
   const normalCourseVisible = readiness === 'connected' && !snapshotStale && !replacingHelper;
@@ -481,6 +483,9 @@ export function OperationsClient(props: { helperId: string }) {
     finally { actionLock.current = false; setBusy(false); }
   }
 
+  if(readiness==='helper-offline' && view==='normal' && !foregroundActive && !awaitingQuestion && !replacingHelper && !taskRecordedHere) {
+    return <HelperWelcome helper={context?.helper??null} onCheck={load} onAdvanced={()=>setView('advanced')}/>;
+  }
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-3 border-b border-slate-300">

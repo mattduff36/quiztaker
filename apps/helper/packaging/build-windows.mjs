@@ -162,9 +162,10 @@ function writeInstallNotes() {
     'This private release is intentionally unsigned and may show Windows SmartScreen warnings.',
     'Install the MSI, generate a pairing code on the website, then click "Launch Vitriol Helper".',
     'Later updates can be installed from the Operations page. Pairing is kept across upgrades.',
+    'After setup, the website Open Vitriol Helper button starts the saved production pairing and keeps the helper window visible.',
     'The Start-menu shortcut always selects production. A pairing link opened from a local development site selects only that local origin.',
     'Production and local-development pairings are stored separately and survive upgrades or uninstall/reinstall.',
-    'After connecting, the helper confirms it is online and minimizes automatically while it polls for work.',
+    'Start-menu launches may minimize after connecting. Website Open launches keep the helper window visible while it polls for work.',
     'Google Chrome is required. Browser credentials and cookies remain on this computer.',
     'To import an older data folder, run: "Start Vitriol Helper.cmd" --import-data=C:\\path\\to\\old-project\\data',
   ].join('\r\n'));

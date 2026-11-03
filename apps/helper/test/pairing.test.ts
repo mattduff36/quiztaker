@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { getConfigPath, readConfig, writeConfig } from '../src/config.js';
 import {
   parsePairingLaunch,
   resolveControlPlaneUrl,
@@ -105,4 +109,68 @@ test('rejects unsafe or malformed pairing launch links', () => {
     ]),
     /target is not trusted/,
   );
+});
+
+test('opens production without pairing and selects explicit trusted origins', () => {
+  assert.deepEqual(resolveHelperLaunch(['vitriol-helper://open']), {
+    controlPlaneUrl: 'https://www.vitriol.co.uk',
+    mode: 'production',
+    pairing: null,
+  });
+  assert.equal(parsePairingLaunch(['vitriol-helper://open']), null);
+  for (const target of ['https://www.vitriol.co.uk', 'https://vitriol.co.uk', 'http://localhost:4000', 'http://127.0.0.1:3000']) {
+    const args = [`vitriol-helper://open?controlPlaneUrl=${encodeURIComponent(target)}`];
+    assert.equal(resolveHelperLaunch(args).controlPlaneUrl, target);
+    assert.equal(resolveHelperLaunch(args).pairing, null);
+    assert.equal(resolveControlPlaneUrl(args), target);
+  }
+});
+
+test('opening resolves the existing origin pairing without changing saved credentials', () => {
+  const helperHome = mkdtempSync(join(tmpdir(), 'vitriol-helper-open-'));
+  try {
+    for (const target of ['https://www.vitriol.co.uk', 'http://localhost:4000']) {
+      const config = {
+        schemaVersion: 1 as const,
+        controlPlaneUrl: target,
+        helperId: 'existing-helper',
+        encryptedDeviceSecret: 'dpapi:existing-secret',
+        deviceName: 'Existing device',
+        pairedAt: '2026-11-03T00:00:00.000Z',
+      };
+      writeConfig(config, helperHome);
+      const path = getConfigPath(target, helperHome);
+      const before = readFileSync(path, 'utf8');
+      const launch = resolveHelperLaunch([`vitriol-helper://open?controlPlaneUrl=${encodeURIComponent(target)}`]);
+      assert.equal(launch.pairing, null);
+      assert.deepEqual(readConfig(launch.controlPlaneUrl, helperHome), config);
+      assert.equal(readFileSync(path, 'utf8'), before);
+    }
+  } finally {
+    rmSync(helperHome, { recursive: true, force: true });
+  }
+});
+
+test('rejects unsafe, ambiguous, and credential-bearing protocol launches', () => {
+  const unsafeTargets = [
+    'https://example.com', 'http://www.vitriol.co.uk', 'ftp://localhost',
+    'https://www.vitriol.co.uk.attacker.com', 'https://user:secret@www.vitriol.co.uk',
+    'http://user@localhost:4000', 'https://www.vitriol.co.uk/helper',
+    'https://www.vitriol.co.uk?code=SECRET', 'http://localhost:4000#fragment',
+  ];
+  const unsafeLinks = [
+    'vitriol-helper://open/path', 'vitriol-helper://open/', 'vitriol-helper://open#fragment',
+    'vitriol-helper://user:secret@open', 'vitriol-helper://open:123',
+    'vitriol-helper://open?code=ABCD2345', 'vitriol-helper://open?unknown=value',
+    'vitriol-helper://open?controlPlaneUrl=',
+    'vitriol-helper://open?controlPlaneUrl=https://www.vitriol.co.uk&controlPlaneUrl=http://localhost:4000',
+    'vitriol-helper://pair?code=ABCD2345&code=XXXX2345&controlPlaneUrl=https://www.vitriol.co.uk',
+    ...unsafeTargets.map((target) => `vitriol-helper://open?controlPlaneUrl=${encodeURIComponent(target)}`),
+  ];
+  for (const link of unsafeLinks) assert.throws(() => resolveHelperLaunch([link]), link);
+  assert.throws(() => resolveHelperLaunch(['vitriol-helper://open', 'vitriol-helper://open']), /Only one/);
+  assert.throws(() => resolveHelperLaunch([
+    'vitriol-helper://open',
+    'vitriol-helper://pair?code=ABCD2345&controlPlaneUrl=https://www.vitriol.co.uk',
+  ]), /Only one/);
 });

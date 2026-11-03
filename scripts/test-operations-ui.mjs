@@ -42,7 +42,7 @@ function reply(path,method,body,now,s){
     if(body.action==='refresh'){if(s.refreshError)return{__status:503,error:'Browser refresh unavailable.'};if(s.paused)return{status:'skipped'};s.refreshes++;return{status:'queued',jobId:makeJob('list-tabs')};}
     return activity();
   }
-  if(path==='/api/operations/context'){s.checks++;return{helper:s.unpaired?null:{id:helperId,device_name:'Test PC',version:'1.0.19',protocol_version:2,is_online:s.online},helperUpdate:s.updatePhase?{needed:true,protocolBlocked:false,currentVersion:'1.0.19',latestVersion:'1.0.21',installerAvailable:true,canSelfUpdate:true,mode:'queue',requestedVersion:'1.0.21',error:null,phase:s.updatePhase,phaseVersion:'1.0.21',phaseUpdatedAt:new Date(now).toISOString(),inProgress:true,progressLabel:'Installing · waiting for the helper to reconnect'}:undefined,courseCoverage:[{source:'https://example.invalid/course',title:'Paper theory',inventoryObserved:true,updatedAt:new Date(now).toISOString(),topics:[{title:'Paper production',visitedAt:new Date(now).toISOString(),collectedAt:new Date(now).toISOString(),collectedChars:400},{title:'Paper types',visitedAt:new Date(now).toISOString(),collectedChars:0},{title:'Paper storage',collectedChars:0}]}],operatorActivity:s.last===null?null:activity(),session:session(),activeJob:s.latest,latestTask:s.task,captures:[],recentUrls:[],learnerEnabled:true};}
+  if(path==='/api/operations/context'){s.checks++;return{helper:s.unpaired?null:{id:helperId,device_name:'Test PC',version:s.helperVersion||'1.0.19',protocol_version:2,is_online:s.online},helperUpdate:s.updatePhase?{needed:true,protocolBlocked:false,currentVersion:'1.0.19',latestVersion:'1.0.21',installerAvailable:true,canSelfUpdate:true,mode:'queue',requestedVersion:'1.0.21',error:null,phase:s.updatePhase,phaseVersion:'1.0.21',phaseUpdatedAt:new Date(now).toISOString(),inProgress:true,progressLabel:'Installing · waiting for the helper to reconnect'}:undefined,courseCoverage:[{source:'https://example.invalid/course',title:'Paper theory',inventoryObserved:true,updatedAt:new Date(now).toISOString(),topics:[{title:'Paper production',visitedAt:new Date(now).toISOString(),collectedAt:new Date(now).toISOString(),collectedChars:400},{title:'Paper types',visitedAt:new Date(now).toISOString(),collectedChars:0},{title:'Paper storage',collectedChars:0}]}],operatorActivity:s.last===null?null:activity(),session:session(),activeJob:s.latest,latestTask:s.task,captures:[],recentUrls:[],learnerEnabled:true};}
   if(path==='/api/operations/tasks/finish'){
     s.finishPosts++;const task=s.jobs.get(body.jobId);task.status=body.result;task.outcome={status:`operator-${body.result}`,verified:false,operatorResolution:{result:body.result,requestedAt:new Date(now).toISOString(),resolvedAt:new Date(now).toISOString(),reportedBy:'operator'}};s.task=task;return{ok:true,status:body.result,jobId:task.id};
   }
@@ -79,8 +79,9 @@ let passed=false;
 try{
   // Stage matrix uses isolated offline fixtures, including delayed requests and remounts.
   for(const viewport of [{width:1365,height:1000},{width:390,height:844}]) {
-    for(const scenario of ['loading','unpaired','offline','absent','disconnected','stale','no-course','blank-goal','old-finished','old-finished-start','start-error','start-pending']) {
-      const page=await browser.newPage({viewport}); const fixture=state();
+    for(const scenario of ['loading','unpaired','offline','offline-new','absent','disconnected','stale','no-course','blank-goal','old-finished','old-finished-start','start-error','start-pending']) {
+      const page=await browser.newPage({viewport,...(scenario==='offline-new'?{userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36'}:{})}); const fixture=state();
+      if(scenario==='offline-new'){fixture.online=false;fixture.helperVersion='1.0.23';await page.clock.install();await page.addInitScript(()=>document.addEventListener('click',event=>{if(event.target.closest('a')?.getAttribute('href')?.startsWith('vitriol-helper:'))event.preventDefault();},true));}
       if(scenario==='old-finished-start'){await page.clock.install();fixture.holdCapability='start-browser';}
       Object.assign(fixture,scenario==='unpaired'?{unpaired:true}:scenario==='offline'?{online:false}:scenario==='absent'?{noSession:true}:scenario==='disconnected'||scenario.startsWith('start-')?{connected:false}:scenario==='stale'?{stale:true,paused:true}:scenario==='no-course'?{noCourse:true}:{});
       if(scenario.startsWith('old-finished')){fixture.task={id:'old-task',status:'completed',capability_id:'quiz-learn',outcome:{operatorResolution:{result:'completed',requestedAt:new Date().toISOString(),resolvedAt:new Date().toISOString()}}};fixture.jobs.set('old-task',fixture.task);if(scenario==='old-finished-start')fixture.connected=false;}
@@ -94,12 +95,20 @@ try{
         await route.fulfill({status:__status||200,json});
       });
       await page.goto(url);
-      if(['loading','unpaired','offline','absent','disconnected','stale'].includes(scenario)) {
+      if(['loading','unpaired','offline','offline-new','absent','disconnected','stale'].includes(scenario)) {
         await expect(page.getByRole('heading',{name:'Work on a course',exact:true})).toBeHidden();
         await expect(page.getByText('Course material checklist',{exact:true})).toBeHidden();
       }
       if(scenario==='loading') {await expect(page.getByRole('heading',{name:'Checking connection…',exact:true})).toBeVisible();release();}
-      if(scenario==='unpaired'||scenario==='offline')await expect(page.getByRole('link',{name:'Set up helper',exact:true})).toBeVisible();
+      if(scenario==='unpaired'){await expect(page.getByRole('heading',{name:'Welcome. Let’s get your course ready.',exact:true})).toBeVisible();await expect(page.getByRole('link',{name:'Download Windows helper',exact:true})).toBeVisible();}
+      if(scenario==='offline'){await expect(page.getByRole('heading',{name:'Welcome back. Let’s get connected.',exact:true})).toBeVisible();await expect(page.getByRole('link',{name:'Update Vitriol Helper',exact:true})).toBeVisible();}
+      if(scenario==='offline-new') {
+        const open=page.getByRole('link',{name:'Open Vitriol Helper',exact:true});await expect(open).toHaveAttribute('href','vitriol-helper://open');
+        await open.click();await expect(page.getByRole('link',{name:'Waiting for helper…',exact:true}).first()).toHaveAttribute('aria-disabled','true');
+        await page.clock.fastForward(13_000);await expect(page.getByText(/No connection yet/)).toBeVisible();await expect(page.getByRole('link',{name:'Download or reinstall',exact:true})).toBeVisible();
+        await page.screenshot({path:join(artifacts,`${viewport.width}-welcome-recovery.png`),fullPage:true});
+        fixture.online=true;await page.clock.fastForward(16_000);await expect(page.getByRole('heading',{name:'Work on a course',exact:true})).toBeVisible();
+      }
       if(scenario==='absent'||scenario==='disconnected')await expect(page.getByRole('button',{name:'Start browser',exact:true})).toBeEnabled();
       if(scenario==='stale'){await expect(page.getByRole('heading',{name:'Browser check needed',exact:true})).toBeVisible();expect(fixture.refreshes).toBe(0);}
       if(scenario==='no-course'){await expect(page.getByText('No course page is open yet.',{exact:false})).toBeVisible();await expect(page.getByRole('textbox',{name:/What would you like to achieve/})).toBeHidden();}
