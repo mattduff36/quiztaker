@@ -37,7 +37,7 @@ open.onclick=()=>{};document.getElementById('open').onclick=()=>{
 
 async function fixture(t, html = HTML) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quick-scrape-test-'));
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
   t.after(async () => { await browser.close(); fs.rmSync(home, { recursive: true, force: true }); });
   const context = await browser.newContext({ viewport: { width: 800, height: 600 } });
   // Every request is fulfilled in memory. No LMS/live-browser/network access.
@@ -176,7 +176,7 @@ test('CLI attaches to an isolated local fixture CDP, accepts finish newline, dis
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
   await new Promise(resolve => server.close(resolve));
-  const isolated = await chromium.launch({ headless: true, args: [`--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1'] });
+  const isolated = await chromium.launch({ channel: 'chrome', headless: true, args: [`--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1'] });
   let child;
   t.after(async () => {
     if (child && child.exitCode === null) child.kill();
