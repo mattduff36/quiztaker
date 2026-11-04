@@ -302,6 +302,7 @@ try{
     await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
     await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
     await expect.poll(()=>fixture.latest?.capability_id).toBe('detect');
+    await expect(page.getByText('Inspect course page: Working',{exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:'Mark failed',exact:true})).toBeEnabled();
     await page.getByRole('button',{name:'Mark failed',exact:true}).click();
     await expect(page.getByText(/Marked failed by you/)).toBeVisible();

@@ -7,7 +7,8 @@ const BINARY_KEY = /^(screenshot|image|image_url|base64|binary|blob|bytes)$/i;
 const MAX_TEXT = 64_000;
 
 export function sanitizeLogText(raw: string): string {
-  return raw.replace(/\\(["'])/g, '$1').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+  return raw.replace(/data:(?:image|application)\/[a-z0-9.+-]+;base64,[a-z0-9+/=\r\n]*/gi, '[binary omitted]')
+    .replace(/\\(["'])/g, '$1').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
     .replace(/\b(?:Cookie|Set-Cookie):[^\r\n]*/gi, 'Cookie: [redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/=-]+/gi, 'Bearer [redacted]')
     .replace(/\b(?:sk|rk|sess)-[A-Za-z0-9_-]{8,}\b/g, '[redacted key]')
@@ -15,7 +16,14 @@ export function sanitizeLogText(raw: string): string {
     .replace(/https?%3a%2f%2f[^\s"'<>]+/gi, '[encoded URL omitted]')
     .replace(/https?:\/\/[^\s"'<>\\]+/gi, value => {
       try { const url = new URL(value); return `${url.protocol}//${url.host}${url.pathname}`; } catch { return '[redacted URL]'; }
-    }).replace(/((?:\/[A-Za-z0-9_.%/-]+)+)\?[^\s"'<>]+/g, '$1');
+    })
+    // Tokenize once. Nested/retried slash matches can freeze the event loop on
+    // screenshot payloads before the HTTP request or heartbeat is sent.
+    .replace(/[^\s"'<>]+/g, token => {
+      const query = token.indexOf('?');
+      const slash = token.indexOf('/');
+      return slash >= 0 && query > slash ? token.slice(0, query) : token;
+    });
 }
 
 export function sanitizeLogValue(value: unknown, depth = 0): unknown {

@@ -14,6 +14,29 @@ async function act(page, name, mode = 'read', choice = false) {
   return view;
 }
 
+test('Canon overlay identifies the sole hotspot without confusing navigation or ambiguous targets', async () => {
+  const browser = await chromium.launch({channel:'chrome',headless:true});
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<style>.screenElement{width:260px;height:100px}button{width:40px;height:30px}</style>
+      <div id="1_110_slide" class="screenElement image"><button class="invisibutton"></button></div>
+      <div id="1_110_click1" class="screenElement box"><button class="invisibutton" onclick="document.querySelector('.instructionText').innerHTML='Scan and Store material opened'"></button></div>
+      <div id="1_110_instruction_panel" class="screenElement box instructionpanel"><p class="instructionText">Take a look at <b>Scan and Store</b> by selecting it.</p>
+      <div id="1_110_nextbtn" class="screenElement box nextbtn"><button class="invisibutton"></button></div></div>
+      <div hidden><div id="1_110_click2" class="screenElement box"><button class="invisibutton"></button></div></div>`);
+    const first = await readSnapshot(page);
+    assert.match(first.snapshot.text, /Take a look at/);
+    assert.ok(first.snapshot.buttons.some(b=>b.name==='Open topic: Scan and Store'));
+    assert.ok(first.snapshot.buttons.some(b=>b.name==='Next'));
+    assert.equal(first.snapshot.buttons.length,2);
+    await page.locator('[hidden]').evaluate(el=>el.hidden=false);
+    assert.ok(!(await readSnapshot(page)).snapshot.buttons.some(b=>b.name==='Open topic: Scan and Store'));
+    await page.locator('[id="1_110_click2"]').evaluate(el=>el.parentElement.hidden=true);
+    await act(page,'Open topic: Scan and Store');
+    assert.match((await readSnapshot(page)).snapshot.text,/Scan and Store material opened/);
+  } finally { await browser.close(); }
+});
+
 test('Canon visible result recognition ignores hidden, reverse-side and stale course evidence', async () => {
   const browser = await chromium.launch({channel:'chrome',headless:true});
   try {

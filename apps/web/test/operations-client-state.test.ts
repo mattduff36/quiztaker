@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isRunningJob, isTaskJob, retainTaskJob } from '../src/lib/operations-client-state';
+import { describeTaskJob, isRunningJob, isTaskJob, retainTaskJob } from '../src/lib/operations-client-state';
+
+test('shared learner capability does not mislabel reading as a quiz', () => {
+  assert.equal(describeTaskJob({capability_id:'quiz-learn',status:'running'}), 'Course activity: Working');
+});
 
 test('maintenance observations and empty context preserve the task that owns a question', () => {
   const task = {id:'question',capability_id:'quiz-learn',status:'completed'};

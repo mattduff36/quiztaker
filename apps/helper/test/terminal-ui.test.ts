@@ -3,7 +3,23 @@ import test from 'node:test';
 import { mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { HelperTerminal, responseLogPayload, sanitizeLogText, sanitizeLogValue } from '../src/terminal-ui.js';
+
+test('screenshot stdout and long slash tokens cannot block helper heartbeats', () => {
+  // A process timeout also catches synchronous regex hangs that a test timer cannot.
+  const source = `import { sanitizeLogText, sanitizeLogValue } from ${JSON.stringify(new URL('../src/terminal-ui.ts', import.meta.url).href)};
+    const payload = 'ab/cd/'.repeat(11000);
+    const safe = sanitizeLogValue({text:'LEARNER_SNAPSHOT '+JSON.stringify({image:'data:image/jpeg;base64,'+payload})});
+    if (JSON.stringify(safe).includes('ab/cd/')) throw Error('Embedded screenshot leaked');
+    sanitizeLogText('ordinary '+payload);
+    if(sanitizeLogText('GET /api/jobs/abc?qs=value') !== 'GET /api/jobs/abc') throw Error('Query not redacted');
+    console.log('responsive');`;
+  const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source], {timeout:5000,encoding:'utf8'});
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /responsive/);
+});
 
 test('redacts credentials, embedded JSON, query strings and binary while retaining ordinary course text', () => {
   const raw = { authorization: 'Bearer device-private', apiKey: 'private-api', encryptedDeviceSecret: 'private-dpapi', signature: 'private-signature', nonce: 'private-nonce', cookie: 'session=private-cookie', url: 'https://example.invalid/course?user_cookie=private-session#secret', screenshot: 'private-image', text: 'Paper thickness is calliper.' };
@@ -14,6 +30,7 @@ test('redacts credentials, embedded JSON, query strings and binary while retaini
   const embedded = sanitizeLogText('LEARNER_SNAPSHOT {\\"apiKey\\":\\"private-key\\", "url":"https://example.invalid/course?qs=private-session"} Bearer private-bearer');
   assert.doesNotMatch(embedded, /private-|qs=/);
   assert.equal(sanitizeLogText('GET /lms/player?qs=private-session'), 'GET /lms/player');
+  assert.equal(sanitizeLogText('path=/lms/player?qs=private-session'), 'path=/lms/player');
   assert.doesNotMatch(sanitizeLogText('Cookie: sid=private-one; another=private-two'), /private-/);
   assert.match(String(sanitizeLogValue('a'.repeat(5000))), /binary-like payload omitted/);
   assert.doesNotMatch(sanitizeLogText('\x1b[31mhello'), /\x1b/);

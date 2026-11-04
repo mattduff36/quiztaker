@@ -21,6 +21,8 @@
 // Checked choices prevent duplicate selection. Scroll/find operate on observed
 // content; capture supplies one privacy-checked viewport JPEG to the next step.
 // Course outlines include unvisited headings as inventory, never read coverage.
+// Canon instruction panels name a hotspot only when one visible target and
+// one emphasized instruction subject exist on the same slide.
 //
 // Usage:
 //   node pw-learn-quiz.js <tabIdx> [--dry]
@@ -200,6 +202,23 @@ async function accessibleName(locator) {
       }
       if (parent?.matches('.menuStartBtn')) return 'Start';
       if (parent?.classList?.contains('screenElement')) {
+        const slide = /^(\d+_\d+)_click_?\d+$/.exec(parent.id || '');
+        if (slide && parent.ownerDocument) {
+          const visible = node => {
+            if (!node || !node.getClientRects().length) return false;
+            for (let item = node; item; item = item.parentElement) {
+              const style = getComputedStyle(item);
+              if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+            }
+            return true;
+          };
+          const panel = parent.ownerDocument.getElementById(`${slide[1]}_instruction_panel`);
+          const targets = Array.from(parent.ownerDocument.querySelectorAll('.screenElement.box')).filter(node =>
+            new RegExp(`^${slide[1]}_click_?\\d+$`).test(node.id) && visible(node) && node.querySelector('button.invisibutton'));
+          const subjects = panel && visible(panel) ? Array.from(panel.querySelectorAll('.instructionText b, .instructionText strong')).filter(visible) : [];
+          const subject = subjects.length === 1 ? subjects[0].textContent.replace(/\s+/g, ' ').trim() : '';
+          if (targets.length === 1 && targets[0] === parent && subject && subject.length <= 120) return `Open topic: ${subject}`;
+        }
         return { screenElement: true, id: parent.id || '', className: String(parent.className || '') };
       }
     }

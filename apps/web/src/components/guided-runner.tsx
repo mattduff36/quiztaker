@@ -237,6 +237,7 @@ export function GuidedRunner(props: {
   }
 
   async function waitForJob(id: string): Promise<{ job: Job; output: string }> {
+    let reportedStatus = 'queued';
     for (let count = 0; count < 450; count += 1) {
       checkStopped();
       const value = await api<{ job: Job; events: Array<{ data?: { text?: string } }> }>(`/api/jobs/${id}`);
@@ -244,6 +245,10 @@ export function GuidedRunner(props: {
       const output = value.events.map((event) => event.data?.text || '').join('');
       if (mounted.current) setRunOutput(output);
       if (!running(value.job.status)) { ownedJob.current = null; props.onJob?.(value.job); return { job: value.job, output }; }
+      if (reportedStatus !== value.job.status) {
+        reportedStatus = value.job.status;
+        props.onJob?.(value.job);
+      }
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
     throw new Error('This run is taking longer than expected. Check its status in Advanced tools before starting another.');

@@ -246,6 +246,10 @@ tables to roll back.
 
 ## Welcome screen and opening the Windows helper
 
+Helper 1.0.25 fixes a screenshot-logging freeze and labels unambiguous Canon
+instruction-panel hotspots. Install this helper release to receive both local
+fixes; the website release alone cannot update the installed executor.
+
 Helper 1.0.24 supports `vitriol-helper://open` to the existing per-user Windows
 protocol registration. Opening uses the saved pairing for the production origin;
 it does not create a code or replace credentials. Explicit trusted local origins

@@ -472,6 +472,21 @@ not evidence that any live qualification has been passed.
 
 ### Persistent course slides and visible controls (Canon observation)
 
+On 4 November, Device Features used a draggable `.instructionpanel` overlay
+with a bold subject ("Scan and Store") and an invisible button on the matching
+`1_110_click1` hotspot. The overlay text was readable, but the hotspot had no
+accessible label. Helper 1.0.25 labels it from the instruction only when that
+slide has exactly one visible hotspot and one visible emphasized subject.
+Multiple targets keep their technical IDs rather than guessing. Previous/Next
+remain separate controls. A read-only check on the live stalled page confirmed
+the named target; offline fixtures verify clicking, hidden and ambiguous cases.
+
+The same session froze during screenshot capture: the terminal sanitizer's
+nested slash regex could backtrack indefinitely on base64 in learner stdout,
+blocking all heartbeats. Helper 1.0.25 omits embedded data URLs and uses a
+single token scan for relative-URL query redaction. A timeout-isolated regression
+protects both long slash strings and screenshot-bearing stdout.
+
 Canon PaperTheory keeps earlier slides in the DOM: the live page had 161
 interactive candidates, with visible navigation only after index 120. Helper
 1.0.17 budgets the first 120 visible, front-facing candidates rather than raw
