@@ -157,3 +157,13 @@ test('slide adapter preserves existing menu topic and Start names', async () => 
   assert.equal(await accessibleName(locator({ ...base, id: 'menuscreen_panel_1_launchButton', matches: () => true })), 'Start');
   assert.equal(await accessibleName(locator({ ...base, id: '1_110_click1', className: 'screenElement box' })), 'Course interaction: 1_110_click1');
 });
+
+test('a ticking Canon exam timer preserves target identity while changed questions, selections and expiry do not', () => {
+  const {sameLearnerView}=require('./pw-learn-quiz');
+  const a={text:'Time remaining\n22:21\nQuestion one',choices:[{id:'c1',name:'Q1: True',checked:false}]};
+  const b={...a,text:a.text.replace('22:21','22:10')};
+  assert.equal(sameLearnerView(a,b),true);
+  assert.equal(sameLearnerView(a,{...b,text:b.text.replace('Question one','Question two')}),false);
+  assert.equal(sameLearnerView(a,{...b,choices:[{...a.choices[0],checked:true}]}),false);
+  assert.equal(sameLearnerView(a,{...b,text:'Time expired'}),false);
+});

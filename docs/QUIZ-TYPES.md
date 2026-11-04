@@ -547,3 +547,14 @@ in the visual replay. Capture samples visual changes up to five times a second
 and buffers fast DOM changes. Capture is limited to the selected HTTPS course
 origin; authentication screens and editable fields are excluded. Stop limits
 are 15 minutes, 200 MiB, or 4,500 frames per recording.
+
+### Canon timed multi-question forms
+
+The Device Features assessment renders multiple numbered fieldsets on one long
+page. Radio buttons and checkboxes share the hosted 40-choice limit. Collect
+them together in document order, put viewport intersections first, and retain
+their distinct radio/checkbox IDs and checked states. Canon fieldsets expose
+their displayed question number, which distinguishes repeated answer labels.
+The visible “Time remaining” line ticks between observations. Ignore only the
+numeric value on that labelled line when rechecking a decision; changes to
+questions, selections, navigation or expiry still invalidate it.

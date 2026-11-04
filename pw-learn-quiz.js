@@ -14,6 +14,7 @@
 // not a shell argument.
 // Current visible pass/fail results end the attempt before another model call
 // or repeated-action prompt, preserving the observed score and feedback.
+// Radio buttons and checkboxes share one viewport-first 40-choice budget.
 // Hidden persistent slides never consume the visible-control scan budget;
 // transformed-away flipcard faces and hidden headings are not observations.
 // Read-only DOM family markers support source-linked player knowledge; they
@@ -236,6 +237,16 @@ async function accessibleName(locator) {
   return normalized || (await locator.evaluate(dkiInformationIcon).catch(() => null))?.name || '';
 }
 
+async function answerName(handle) {
+  const name = await accessibleName(handle);
+  if (!name) return '';
+  const question = await handle.evaluate(el => {
+    const block = el.closest('fieldset.testEngine-question')?.parentElement;
+    return block?.innerText?.trim().match(/^Question\s+(\d+)\s+of\s+\d+\b/i)?.[1];
+  }).catch(() => undefined);
+  return question ? `Q${question}: ${name}`.slice(0,160) : name;
+}
+
 async function isSubmitControl(locator) {
   return locator.evaluate((el) => {
     const type = (el.getAttribute('type') || '').toLowerCase();
@@ -332,11 +343,12 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
   const listed = [];
   const handles = new Map();
   const candidates = [];
+  const counts = { c: 0, k: 0 };
   const viewport = await page.evaluate(() => ({width:innerWidth,height:innerHeight}));
   for (const frame of await visibleFrames(page)) {
     const box = frame.parentFrame() ? await frame.frameElement().then(element => element.boundingBox()).catch(() => null) : {x:0,y:0};
     if (!box) continue;
-    const locator = navigationOnly ? frame.locator('button, a, [role=button], [role=tab], summary, [onclick], [data-toggle], [data-bs-toggle], [aria-controls], input[type=button], input[type=submit], input[type=image], .dki-element-content.speech-bubble, img.dki-element-content.hasRollover, img.dki-element-content.dki-image-rollover[data-id]') : frame.getByRole(role);
+    const locator = navigationOnly ? frame.locator('button, a, [role=button], [role=tab], summary, [onclick], [data-toggle], [data-bs-toggle], [aria-controls], input[type=button], input[type=submit], input[type=image], .dki-element-content.speech-bubble, img.dki-element-content.hasRollover, img.dki-element-content.dki-image-rollover[data-id]') : role === 'answer' ? frame.getByRole('radio').or(frame.getByRole('checkbox')) : frame.getByRole(role);
     const indices = await locator.evaluateAll((elements, view) => {
       const indices = [];
       for (let index = 0; index < elements.length; index += 1) {
@@ -366,7 +378,9 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
         if (!facing) continue;
         const inViewport = rect.bottom > Math.max(0,view.top) && rect.top < Math.min(innerHeight,view.bottom)
           && rect.right > Math.max(0,view.left) && rect.left < Math.min(innerWidth,view.right);
-        indices.push({index,inViewport});
+        const explicitRole = el.getAttribute('role')?.trim().split(/\s+/)[0];
+        const checkbox = explicitRole ? explicitRole === 'checkbox' : el.matches('input[type=checkbox]');
+        indices.push({index,inViewport,checkbox});
       }
       return indices;
     }, {left:-box.x,top:-box.y,right:viewport.width-box.x,bottom:viewport.height-box.y}).catch(() => []);
@@ -375,10 +389,10 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
   // Stable viewport-first order makes a scroll reveal later modules, while
   // keeping offscreen course controls as an auto-scroll fallback.
   candidates.sort((a,b) => Number(b.inViewport)-Number(a.inViewport));
-  for (const {locator,index} of candidates.slice(0,120)) {
+  for (const {locator,index,checkbox} of candidates.slice(0,120)) {
     const handle = locator.nth(index);
     if (!await handle.isVisible().catch(() => false) || !await handle.isEnabled().catch(() => false)) continue;
-    const name = await accessibleName(handle);
+    const name = role === 'answer' ? await answerName(handle) : await accessibleName(handle);
     if (!name || (navigationOnly && UNSAFE_LABEL.test(name))) continue;
     let kind;
     if (navigationOnly) {
@@ -403,7 +417,8 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
       kind = SUBMIT_LABEL.test(name) ? 'submission' : submits || link.postback || ASSESSMENT_START_LABEL.test(name) || /^(save|return later|summary)\b/i.test(name) ? 'quiz-navigation' : 'content';
       if (mode !== 'quiz' && (kind === 'submission' || kind === 'quiz-navigation')) continue;
     }
-    const id = `${prefix}${listed.length + 1}`;
+    const answerPrefix = checkbox ? 'k' : 'c';
+    const id = role === 'answer' ? `${answerPrefix}${++counts[answerPrefix]}` : `${prefix}${listed.length + 1}`;
     handles.set(id, handle);
     const checked = await handle.evaluate(el => {
       const state = node => {
@@ -490,9 +505,8 @@ async function readSnapshot(page, mode = 'read') {
     }
   }
   const buttons = await readControls(page, 'button', 'b', true, mode);
-  const radios = await readControls(page, 'radio', 'c', false);
-  const checks = await readControls(page, 'checkbox', 'k', false);
-  const handles = new Map([...buttons.handles, ...radios.handles, ...checks.handles]);
+  const answers = await readControls(page, 'answer', '', false);
+  const handles = new Map([...buttons.handles, ...answers.handles]);
   const tabs = [];
   // Only already-observed course tabs on this website are offered. There is
   // no model-supplied URL, browser-wide arbitrary selection or navigation.
@@ -519,7 +533,7 @@ async function readSnapshot(page, mode = 'read') {
       url: page.url().slice(0,500),
       text: `${await observePlayerEvidence(page)}\n${state.feedback?`Tool feedback: ${state.feedback}\n`:''}${sections.map(section => section.slice(0, Math.floor(7400 / Math.max(1, sections.length)))).join('\n')}`.slice(0, 8000),
       buttons: buttons.listed,
-      choices: [...radios.listed, ...checks.listed],
+      choices: answers.listed,
       tabs,
       ...(image?{image}:{}),
       ...(outlines.length?{outlines}:{}),
@@ -531,8 +545,15 @@ async function readSnapshot(page, mode = 'read') {
 }
 
 function sameLearnerView(before, after) {
-  const withoutImage=value=>{if(!value||typeof value!=='object')return value;const {image,...rest}=value;return rest;};
-  return JSON.stringify(withoutImage(before)) === JSON.stringify(withoutImage(after));
+  const comparable = value => {
+    if (!value || typeof value !== 'object') return value;
+    const { image, ...view } = value;
+    // Canon renders this labelled countdown as its own text line. Answers,
+    // question text, expiry notices and every other page change stay significant.
+    if (typeof view.text === 'string') view.text = view.text.replace(/(^|\n)(Time remaining[ \t]*\n)\d{1,3}:\d{2}(?::\d{2})?(?=\n|$)/gi, '$1$2[countdown]');
+    return view;
+  };
+  return JSON.stringify(comparable(before)) === JSON.stringify(comparable(after));
 }
 
 function createActionReader() {
@@ -618,7 +639,7 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
   const handle = handles.get(action.targetId);
   if (!handle) throw new Error('Learner target is not on the page');
   const target = [...(snapshot.buttons || []), ...(snapshot.choices || [])].find(item => item.id === action.targetId);
-  if (!await handle.isVisible() || !await handle.isEnabled() || await accessibleName(handle) !== target?.name) throw new Error('Learner target changed');
+  if (!await handle.isVisible() || !await handle.isEnabled() || (await (action.action === 'answer-select' ? answerName(handle) : accessibleName(handle))) !== target?.name) throw new Error('Learner target changed');
   if (action.action === 'click') {
     if (await handle.evaluate(dkiInformationIcon).catch(() => null)) {
       if (!await handle.isVisible() || !await handle.isEnabled()) throw new Error('Learner target changed');

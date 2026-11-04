@@ -518,3 +518,23 @@ test('a failed result preserves feedback and refuses automatic retake', async ()
     assert.match(await page.locator('body').innerText(),/did not pass/);
   } finally {await browser.close();}
 });
+
+test('mixed Canon answers share forty slots with visible radios and checkboxes first', async () => {
+  const browser = await chromium.launch({channel:'chrome',headless:true});
+  try {
+    const page=await browser.newPage({viewport:{width:900,height:600}});
+    await page.setContent('<style>label{display:block;height:50px}</style>'+Array.from({length:83},(_,i)=>
+      `<label><input type="${i<47?'radio':'checkbox'}">Answer ${i}</label>`).join(''));
+    await page.evaluate(()=>scrollTo(0,45*50));
+    const view=await readSnapshot(page,'quiz');
+    const visible=await page.locator('input').evaluateAll(els=>els.filter(el=>{
+      const r=el.getBoundingClientRect();return r.bottom>0&&r.top<innerHeight;
+    }).map(el=>el.parentElement.textContent));
+    assert.equal(view.snapshot.choices.length,40);
+    assert.deepEqual(view.snapshot.choices.slice(0,visible.length).map(c=>c.name),visible);
+    const target=view.snapshot.choices.find(c=>c.name==='Answer 48');
+    assert.match(target.id,/^k/);
+    await applyAction(page,{action:'answer-select',targetId:target.id},view.snapshot,view.handles,'quiz');
+    assert.equal(await page.getByLabel('Answer 48',{exact:true}).isChecked(),true);
+  } finally { await browser.close(); }
+});
