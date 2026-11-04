@@ -558,3 +558,10 @@ their displayed question number, which distinguishes repeated answer labels.
 The visible “Time remaining” line ticks between observations. Ignore only the
 numeric value on that labelled line when rechecking a decision; changes to
 questions, selections, navigation or expiry still invalidate it.
+
+Canon's UserTestSummary.aspx and UserTestReview.aspx are post-attempt pages.
+Read mode can collect their feedback. The summary can split the heading,
+name, score and percent sign across text nodes. On 4 November the visible
+summary showed 14/20 (70%), with 75% required. Its six incorrect review rows
+gave a category and blank explanations. Keep that distinction in memory;
+a category alone does not identify the correct answer.

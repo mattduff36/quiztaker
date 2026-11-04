@@ -40,3 +40,14 @@ test('instruction, review, active questions, page titles and retained memory can
   assert.equal(recognizeQuizResult({text:'Quiz result\nYou passed this quiz. Your score: 75%'}).scorePercent,75);
   assert.equal(recognizeQuizResult({text:'Test Results\nOverall Score75%(15 out of20)\nStatus: Passed'}).questionsCorrect,15);
 });
+
+test('Canon split text-node summary verifies the actual score for pass and fail', () => {
+  const form='Test Results -\nExample Learner\nQuestions on Test:\n20\nQuestions Correct:\n14\nQuestions Incorrect:\n6\nPercent Correct:\n70\n%\nPassing Score:\n75\n%\nPass/Fail:\nFailed';
+  const fail=recognizeQuizResult({resultViews:[form]});
+  assert.equal(fail.status,'failed');
+  assert.equal(fail.scorePercent,70);
+  assert.equal(fail.questionsCorrect,14);
+  const pass=recognizeQuizResult({resultViews:[form.replace('Failed','Passed').replace('70','80').replace('14','16').replace('Incorrect:\n6','Incorrect:\n4')]});
+  assert.equal(pass.status,'passed');
+  assert.equal(pass.questionsCorrect,16);
+});
