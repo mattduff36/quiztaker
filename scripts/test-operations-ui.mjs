@@ -58,7 +58,12 @@ function reply(path,method,body,now,s){
     if(s.retries++===0){s.latest.status='completed';return{__status:409,error:'A job is already active. Wait for it to finish or cancel it first.'};}
     return{jobId:makeJob('detect')};
   }
-  if(path.startsWith('/api/jobs/')){const job=s.jobs.get(path.split('/').at(-1));if(job&&job.capability_id!==s.holdCapability&&job.status!=='failed')job.status='completed';return{job,events:job?.capability_id==='quiz-learn'?[{data:{text:s.questionOutput}}]:[],artifacts:[]};}
+  if(path.startsWith('/api/jobs/')){const job=s.jobs.get(path.split('/').at(-1));
+    if(job?.capability_id==='quick-scrape'){
+      if(method==='DELETE'){job.status='completed';job.result={ok:true,result:{folder:'C:/Fixtures/recording',pages:3,frames:7}};return{ok:true};}
+      return{job,events:[{data:{text:'QUICK_SCRAPE_READY {}\n'}}],artifacts:[]};
+    }
+if(job&&job.capability_id!==s.holdCapability&&job.status!=='failed')job.status='completed';return{job,events:job?.capability_id==='quiz-learn'?[{data:{text:s.questionOutput}}]:[],artifacts:[]};}
   throw Error(`Unexpected fixture request: ${method} ${path}`);
 }
 let servedState=state();
@@ -295,6 +300,16 @@ try{
     expect(fixture.finishPosts).toBe(1);
     await page.clock.fastForward(60_000);
     expect(fixture.refreshes).toBe(refreshesWithQuestion);
+    fixture.online=true;fixture.paused=false;fixture.holdCapability='quick-scrape';
+    await page.clock.fastForward(61_000);
+    const activityPicker=page.getByRole('combobox',{name:'Course activity'});
+    await activityPicker.selectOption('quick');
+    await page.getByRole('button',{name:'Start recording',exact:true}).click();
+    await expect(page.getByText('Recording',{exact:true})).toBeVisible();
+    await page.getByRole('button',{name:'Finish recording',exact:true}).click();
+    await page.clock.fastForward(2500);
+    await expect(page.getByText('C:/Fixtures/recording',{exact:true})).toBeVisible();
+    await activityPicker.selectOption('read');
     // Finishing during a guided wait stops the local orchestrator before another step can queue.
     fixture.online=true;fixture.paused=false;fixture.holdCapability='detect';
     await page.clock.fastForward(61_000);

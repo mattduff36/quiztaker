@@ -67,7 +67,7 @@ export async function createPlan(userId: string, input: CreatePlanInput): Promis
   const attemptId = randomUUID();
   const source = input.source ?? 'manual-capability';
   let args = input.args ?? capability.args ?? [];
-  if (input.capabilityInput || ['cert-batch', 'class-batch', 'open-url', 'fit-tab', 'slickquiz-solve', 'tab-inspect', 'quiz-learn'].includes(capability.id)) {
+  if (input.capabilityInput || ['cert-batch', 'class-batch', 'open-url', 'fit-tab', 'slickquiz-solve', 'tab-inspect', 'quick-scrape', 'quiz-learn'].includes(capability.id)) {
     const validated = validateCapabilityInput(capability.id, capabilityInput);
     if (!validated.ok) throw new Error(validated.error);
     args = validated.args;

@@ -33,6 +33,7 @@ export const capabilities: readonly Capability[] = [
   capability('detect', 2, 'pw-detect.js', 'Detect current learning context', 'Probe the selected tab and build a ranked plan.', 'none', false, 'process-exit'),
   capability('close-browser', 1, 'pw-close-browser.js', 'Close CDP browser', 'Close the attached automation browser.', 'low', false, 'process-exit'),
   capability('open-url', 1, 'pw-open-url.js', 'Open URL', 'Open an allowed URL in a new browser tab.', 'low', false, 'process-exit'),
+  capability('quick-scrape', 1, 'pw-quick-scrape.js', 'Quick scrape', 'Record a course as you click through it.', 'low', false, 'capture-written'),
   capability('quiz-learn', 4, 'pw-learn-quiz.js', 'Learn this quiz', 'Read course material or take its quiz using the selected intent.', 'high', true, 'quiz-result-passed', { dryRunArgs: ['--dry'] }),
 ] as const;
 

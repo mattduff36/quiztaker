@@ -36,7 +36,7 @@ export function GuidedRunner(props: {
   refreshing?: boolean;
   onBusy: (value: boolean) => void;
   onRefresh: () => Promise<void>;
-  lastJob?: { id: string; status: string; capability_id?: string; input?: { target?: { targetId?: string; browserSessionId?: string; fingerprint?: string } } } | null;
+  lastJob?: { result?: unknown; id: string; status: string; capability_id?: string; input?: { target?: { targetId?: string; browserSessionId?: string; fingerprint?: string } } } | null;
   outputJobId?: string;
   lastOutput: string;
   paused?: boolean;
@@ -55,6 +55,7 @@ export function GuidedRunner(props: {
   onJob?: (job: {id: string;status: string;capability_id?: string}) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [finishPending, setFinishPending] = useState(false);
   const [stopPending,setStopPending]=useState(false);
   const stopLock=useRef(false);
   const [stage, setStage] = useState('Ready when you are');
@@ -64,7 +65,7 @@ export function GuidedRunner(props: {
   const [customReply, setCustomReply] = useState(false);
   const [settingsNeeded, setSettingsNeeded] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
-  const [mode, setMode] = useState<'read' | 'quiz'>('read');
+  const [mode, setMode] = useState<'read' | 'quiz' | 'quick'>('read');
   const [suppressRestoredQuestion, setSuppressRestoredQuestion] = useState(false);
   const [objective, setObjective] = useState('Read all relevant material in the selected course and retain it for later questions.');
   const [memory, setMemory] = useState<CourseMemory | null>(null);
@@ -101,7 +102,7 @@ export function GuidedRunner(props: {
   const restoredQuestion = props.finalized || suppressRestoredQuestion ? null : outputQuestion || (!busy ? rememberedQuestion(currentMemory) : null);
   const currentPauseTab = uniqueQuestionTab(currentQuestion?.url, session?.tabs || []);
   const restoredPauseTab = uniqueQuestionTab(restoredQuestion?.url, session?.tabs || []);
-  const question: Question | null = props.finalized ? null : (currentQuestion && currentPauseTab && currentQuestion.sessionId === session?.id
+  const question: Question | null = props.finalized || mode === 'quick' ? null : (currentQuestion && currentPauseTab && currentQuestion.sessionId === session?.id
     && (currentQuestion.targetId === props.selectedTarget || currentPauseTab.targetId === props.selectedTarget) ? currentQuestion : null)
     || (restoredQuestion && restoredPauseTab && (savedTarget?.targetId === props.selectedTarget || restoredPauseTab.targetId === props.selectedTarget)
       ? { ...restoredQuestion, model: true, targetId: restoredPauseTab.targetId, sessionId: session?.id } : null);
@@ -236,14 +237,18 @@ export function GuidedRunner(props: {
     return jobId;
   }
 
-  async function waitForJob(id: string): Promise<{ job: Job; output: string }> {
+  async function waitForJob(id: string, recording = false): Promise<{ job: Job; output: string }> {
     let reportedStatus = 'queued';
-    for (let count = 0; count < 450; count += 1) {
+    for (let count = 0; count < (recording ? 7200 : 450); count += 1) {
       checkStopped();
       const value = await api<{ job: Job; events: Array<{ data?: { text?: string } }> }>(`/api/jobs/${id}`);
       checkStopped();
       const output = value.events.map((event) => event.data?.text || '').join('');
       if (mounted.current) setRunOutput(output);
+      if (recording && output.includes('QUICK_SCRAPE_READY ')) {
+        setStage('Recording');
+        setMessage('Click through the course window. Return here and choose Finish recording when you are done.');
+      }
       if (!running(value.job.status)) { ownedJob.current = null; props.onJob?.(value.job); return { job: value.job, output }; }
       if (reportedStatus !== value.job.status) {
         reportedStatus = value.job.status;
@@ -255,7 +260,7 @@ export function GuidedRunner(props: {
   }
 
   async function start(quickReply?: string) {
-    if (locked.current || !(pauseTab || selected) || !props.ready || props.active || props.paused || props.suspended || !objective.trim()) return;
+    if (locked.current || !(pauseTab || selected) || !props.ready || props.active || props.paused || props.suspended || (mode !== 'quick' && !objective.trim())) return;
     locked.current = true; stopped.current = false; cancellationRequested.current = false;
     props.onTaskStart?.();
     finalized.current = false;
@@ -280,6 +285,15 @@ export function GuidedRunner(props: {
       }
       const before = await freshContext(targetId);
       if (guidance && (question?.sessionId !== before.context.session?.id || question?.url !== before.tab.url || !uniqueQuestionTab(question?.url, before.context.session?.tabs || []))) throw new Error('The paused page changed or is ambiguous. Inspect the intended page without the old answer.');
+      if (mode === 'quick') {
+        setStage('Starting Quick scrape');
+        setMessage('Wait for Recording before clicking through the course.');
+        const recording = await waitForJob(await queue('quick-scrape', before.target), true);
+        if (recording.job.status !== 'completed') throw new Error('Recording stopped before it could finish. Previously captured files remain on this PC.');
+        setStage('Recording saved');
+        setMessage('Your replay and transcript are saved on this PC. Captured text is available for later questions.');
+        return;
+      }
       const detectionRun = await waitForJob(await queue('detect', before.target));
       if (detectionRun.job.status !== 'completed' || detectionRun.job.result?.ok !== true) throw new Error('The page could not be inspected. Check Output and diagnostics in Advanced tools, then try again.');
       const detection = detectionRun.job.result.result?.detection;
@@ -372,6 +386,19 @@ export function GuidedRunner(props: {
     }
   }
 
+  const savedRecording = props.lastJob?.capability_id === 'quick-scrape' && props.lastJob.status === 'completed'
+    ? (props.lastJob.result as {result?: {folder?:string;pages?:number;frames?:number}} | undefined)?.result : null;
+  const recordingId = props.lastJob?.capability_id === 'quick-scrape' && running(props.lastJob.status) ? props.lastJob.id : null;
+  async function finishRecording() {
+    if (!recordingId || finishPending) return;
+    setFinishPending(true);
+    try {
+      await api(`/api/jobs/${recordingId}`, undefined, 'DELETE');
+      setMessage('Saving your recording…');
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not finish the recording. Try again.'); }
+    finally { setFinishPending(false); }
+  }
+
   async function stop() {
     if(stopLock.current)return; stopLock.current=true;setStopPending(true);
     cancellationRequested.current = true; stopped.current = true;
@@ -401,10 +428,12 @@ export function GuidedRunner(props: {
       {selected?<p className="break-all text-xs leading-5 text-slate-500">{new URL(selected.url).origin}</p>:<p className="text-xs leading-5 text-slate-600">{connected&&courseTabs.length===0?'No course page is open yet. Open it in the Vitriol browser, then refresh these tabs.':'Only website tabs are shown. If your course is missing, open it in the Vitriol browser and refresh.'}</p>}
       {props.refreshError?<p role="alert" className="text-sm text-rose-800">{props.refreshError}</p>:null}
     </div>
-    <div hidden={!selected || courseTabs.length===0} className="space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={busy || props.active || props.paused || props.suspended} onChange={event => { setMode(event.target.value as 'read' | 'quiz'); clearPageQuestion(); }} className="min-h-12 rounded-md border border-slate-300 bg-white px-3 font-normal"><option value="read">Read course material</option><option value="quiz">Take the quiz</option></select></label>
-    <label className="grid gap-2 text-sm font-semibold text-slate-800">What would you like to achieve?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setObjective(event.target.value.slice(0, OBJECTIVE_LIMIT)); }} disabled={busy || props.active || props.paused || props.suspended} maxLength={OBJECTIVE_LIMIT} rows={3} placeholder="For example: read this module, then help me with its quiz." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6 focus-visible:outline-2 focus-visible:outline-cyan-700" /><span className="text-xs font-normal text-slate-600">Collected course material stays available across pages. Check your goal when changing pages.</span></label></div>
+    <div hidden={!selected || courseTabs.length===0} className="space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={busy || props.active || props.paused || props.suspended} onChange={event => { setMode(event.target.value as 'read' | 'quiz' | 'quick'); clearPageQuestion(); }} className="min-h-12 rounded-md border border-slate-300 bg-white px-3 font-normal"><option value="read">Read course material</option><option value="quiz">Take the quiz</option><option value="quick">Quick scrape</option></select></label>
+      {mode === 'quick' ? <p className="text-sm text-slate-600">Record the selected course window as you click through slides and open panels. The helper saves a replay and transcript on this PC and retains page text for later questions.</p> : null}
+    <label hidden={mode === 'quick'} className={mode === 'quick' ? 'hidden' : 'grid gap-2 text-sm font-semibold text-slate-800'}>What would you like to achieve?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setObjective(event.target.value.slice(0, OBJECTIVE_LIMIT)); }} disabled={busy || props.active || props.paused || props.suspended} maxLength={OBJECTIVE_LIMIT} rows={3} placeholder="For example: read this module, then help me with its quiz." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6 focus-visible:outline-2 focus-visible:outline-cyan-700" /><span className="text-xs font-normal text-slate-600">Collected course material stays available across pages. Check your goal when changing pages.</span></label></div>
     </div>
     {!question ? <div role="status" aria-live="polite" className="border-t border-slate-200 pt-5"><p className="font-semibold text-slate-950">{props.paused?'Waiting for your session to resume':props.refreshing?'Updating your course tabs':stage}</p><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{props.paused?'Use Resume session above. Your goal, replies and browser tabs are kept.':!connected?'Connect the helper and browser to continue.':!selected?'Choose your course tab above. Vitriol will read the page and explain the next step.':message}</p></div> : null}
+    {savedRecording?.folder ? <section className="space-y-1 text-sm"><strong>Quick scrape saved</strong><p>{savedRecording.pages} page observations · {savedRecording.frames} frames. Open the recording folder on this PC for the replay and transcript.</p><p className="break-all select-all">{savedRecording.folder}</p></section> : null}
     {progress.length > 0 && (busy || jobRunning) ? <section className="rounded-md border border-slate-200 bg-slate-50 p-4" aria-labelledby="live-activity-title">
       <h3 id="live-activity-title" className="text-sm font-semibold text-slate-950">Live activity</h3>
       {progress.length > 1 ? <ol className="mt-3 space-y-1 text-sm leading-6 text-slate-600">{progress.slice(0, -1).map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ol> : null}
@@ -425,8 +454,8 @@ export function GuidedRunner(props: {
       </> : null}
     </section> : null}
     <div className="flex flex-wrap items-center gap-3">
-      {(selected || busy || question) && (!question?.model || showReplyField || busy) ? <button type="button" onClick={() => void start()} disabled={!props.ready || !(pauseTab || selected) || !objective.trim() || busy || props.active || props.paused || props.suspended || Boolean(question?.model && !answer.trim())} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}{busy ? 'Working…' : question?.model ? 'Send answer and continue' : question?.next || 'Inspect and start'}</button> : null}
-      {busy ? <button type="button" disabled={stopPending} aria-busy={stopPending} onClick={() => void stop()} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold"><Square className="size-4" />{stopPending ? 'Requesting stop…' : 'Stop'}</button> : null}
+      {(selected || busy || question) && (!question?.model || showReplyField || busy) ? <button type="button" onClick={() => void start()} disabled={!props.ready || !(pauseTab || selected) || (mode !== 'quick' && !objective.trim()) || busy || props.active || props.paused || props.suspended || Boolean(question?.model && !answer.trim())} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}{busy ? 'Working…' : mode === 'quick' ? 'Start recording' : question?.model ? 'Send answer and continue' : question?.next || 'Inspect and start'}</button> : null}
+      {recordingId ? <button type="button" disabled={finishPending} onClick={() => void finishRecording()} className="min-h-11 rounded-md border border-slate-300 px-4 text-sm font-semibold">{finishPending ? 'Finishing…' : 'Finish recording'}</button> : busy ? <button type="button" disabled={stopPending} aria-busy={stopPending} onClick={() => void stop()} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold"><Square className="size-4" />{stopPending ? 'Requesting stop…' : 'Stop'}</button> : null}
       {settingsNeeded ? <a href="/settings" className="font-semibold text-cyan-800 underline">Connect or test AI in Settings</a> : null}
     </div>
     {currentMemory?.id ? <div className="space-y-3 border-t border-slate-200 pt-5">

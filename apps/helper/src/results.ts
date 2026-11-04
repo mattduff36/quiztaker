@@ -1,4 +1,4 @@
-import { resultEnvelope } from '@quiztaker/core';
+import { quickScrapeResult, resultEnvelope } from '@quiztaker/core';
 import { readBrowserSession, replaceBrowserSession } from './browser-session.js';
 
 export function structuredResult(
@@ -10,6 +10,10 @@ export function structuredResult(
   if (capabilityId === 'list-tabs' && Array.isArray(parsed)) {
     const browserSession = replaceBrowserSession(parsed as Array<{ idx?: number; title?: string; url?: string; hasFocus?: boolean }>);
     return { ...resultEnvelope(capabilityId, code === 0, { browserSession }) };
+  }
+  if (capabilityId === 'quick-scrape') {
+    const recording = quickScrapeResult(output);
+    return { ...resultEnvelope(capabilityId, code === 0 && Boolean(recording), recording || {}) };
   }
   if (capabilityId === 'quiz-learn') {
     let quizResult: Record<string,unknown> | undefined;

@@ -86,6 +86,7 @@ export function validateCapabilityInput(
       return { ok: true, args: [url] };
     }
     case 'fit-tab':
+    case 'quick-scrape':
     case 'tab-inspect':
     case 'slickquiz-solve':
       return argsForTarget(input.target);

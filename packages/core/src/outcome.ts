@@ -70,6 +70,12 @@ export function classifyOutcome(input: {
       : { outcome: 'failure', verified: false, status: 'browser-not-connected', failureSignature: 'cdp-not-connected', artifacts };
   }
 
+  if (input.script === 'pw-quick-scrape.js') {
+    const recording = quickScrapeResult(text);
+    return recording ? { outcome: 'success', verified: true, status: 'recording-saved', artifacts: [] }
+      : { outcome: 'failure', verified: false, status: 'recording-missing', failureSignature: 'recording-missing', artifacts: [] };
+  }
+
   if (input.script === 'pw-tab-inspect.js') {
     let captured = false;
     try {
@@ -112,4 +118,15 @@ export function classifyOutcome(input: {
     return { outcome: 'success', verified: true, status: 'process-exit-0', artifacts };
   }
   return { outcome: 'success', verified: false, status: 'process-exit-0', artifacts };
+}
+
+export function quickScrapeResult(output: string): {folder:string; pages:number; frames:number; reason:string} | null {
+  const line = output.split('\n').reverse().find(row => row.startsWith('QUICK_SCRAPE_RESULT '));
+  if (!line) return null;
+  try {
+    const result = JSON.parse(line.slice('QUICK_SCRAPE_RESULT '.length));
+    if (typeof result.folder !== 'string' || !result.folder || !Number.isSafeInteger(result.frames) || result.frames < 1 ||
+        !Number.isSafeInteger(result.pages) || result.pages < 0) return null;
+    return {folder:result.folder.slice(0,1024), pages:result.pages, frames:result.frames, reason:String(result.reason || '').slice(0,120)};
+  } catch { return null; }
 }

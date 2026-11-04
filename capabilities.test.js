@@ -16,7 +16,7 @@ test('every mutating capability declares risk and verifier', () => {
 
 test('public cards and detector actions come from registry', () => {
   const publicCapabilities = listPublicCapabilities();
-  assert.equal(publicCapabilities.length, CAPABILITIES.length - 1);
+  assert.deepEqual(CAPABILITIES.filter(item => !publicCapabilities.some(card => card.id === item.id)).map(item => item.id), ['quick-scrape','quiz-learn']);
   assert.equal(publicCapabilities.some((capability) => capability.id === 'quiz-learn'), false, 'legacy dashboard has no hosted learner bridge');
   assert.ok(publicCapabilities.some((capability) => capability.id === 'cert-batch' && capability.card));
   assert.ok(publicCapabilities.some((capability) => capability.id === 'class-batch' && capability.picker === 'class-activities'));

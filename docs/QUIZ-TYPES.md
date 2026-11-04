@@ -534,3 +534,16 @@ button anchors with identifier targets, empty string arguments and the observed
 fixed WebForm flags, rejecting extra script and external action URLs. These
 controls are classified as quiz navigation and excluded in Read mode. The
 offline regression clicks the exact postback markup; it is not a live pass claim.
+
+### Quick scrape for manually paced course players
+
+Select the course tab in Operations, choose Quick scrape, and start recording.
+Wait for Recording, then click through the course and open its panels yourself.
+Finish recording in Operations. The Windows helper writes a local replay
+(`replay.html`), timestamped frames, and text and JSONL transcripts under
+`%LOCALAPPDATA%\QuizTaker Helper\data\quick-scrape`. The most recent 64
+text excerpts feed course memory for later questions. Image-only content appears
+in the visual replay. Capture samples visual changes up to five times a second
+and buffers fast DOM changes. Capture is limited to the selected HTTPS course
+origin; authentication screens and editable fields are excluded. Stop limits
+are 15 minutes, 200 MiB, or 4,500 frames per recording.

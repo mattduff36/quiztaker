@@ -1,3 +1,4 @@
+import { saveQuickScrapeMaterial } from '@/lib/learner-memory';
 import { createHash, randomUUID } from 'node:crypto';
 import { put } from '@vercel/blob';
 import {
@@ -223,7 +224,7 @@ export async function recordJobEvent(
     'select label, targets, input, browser_session_id from plans where id = $1 and user_id = $2',
     [job.plan_id, job.user_id],
   );
-  const probeOnly = ['list-tabs', 'cdp-check', 'cert-status', 'detect', 'cert-dry-run', 'tab-inspect', 'fit-tab', 'start-browser', 'close-browser', 'open-url', 'learn-capture'].includes(job.capability_id);
+  const probeOnly = ['list-tabs', 'cdp-check', 'cert-status', 'detect', 'cert-dry-run', 'tab-inspect', 'fit-tab', 'start-browser', 'close-browser', 'open-url', 'learn-capture', 'quick-scrape'].includes(job.capability_id);
   const ingested = await transaction(async (sql) => {
   const locked = await sql<{ status: string }>(
     // No job key changes here. FOR UPDATE would block heartbeat's FK KEY SHARE
@@ -270,6 +271,9 @@ export async function recordJobEvent(
       planBrowserSessionId: plan?.browser_session_id,
     })
     : null;
+  if (job.capability_id === 'quick-scrape' && plan?.browser_session_id) {
+    await saveQuickScrapeMaterial({userId,helperId,browserSessionId:plan.browser_session_id},output,sql);
+  }
   if (pauseScope) {
     await recordLocalPausedQuestion({ ...pauseScope, output }, {
       query: sql,

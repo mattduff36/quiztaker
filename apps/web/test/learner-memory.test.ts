@@ -21,6 +21,7 @@ import {
   readLearnerSessionForModel,
   readLearnerSessionForOperator,
   recordLearnerTurn,
+  saveQuickScrapeMaterial,
   recordLocalPausedQuestion,
   storedLearnerPauseScope,
   utf8Text,
@@ -547,4 +548,17 @@ test('material from another source page reaches a later quiz decision', async ()
     return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({action:'answer-select',targetId})}}]}));
   }});
   assert.deepEqual(result.action,{action:'answer-select',targetId:'c1'});
+});
+
+test('Quick scrape saves overlay excerpts in the selected browser conversation and deduplicates replay', async () => {
+  const db=createHarness();
+  const scope={userId:userA,helperId:helperA,browserSessionId:browserA};
+  const output=['QUICK_SCRAPE_READY {}','QUICK_SCRAPE_PAGE '+JSON.stringify({title:'Device Features',url:'https://example.test/course',text:'The Scan and Store overlay explains the mailbox.'}),'QUICK_SCRAPE_PAGE {partial'].join('\n');
+  await saveQuickScrapeMaterial(scope,output,db.query);
+  await saveQuickScrapeMaterial(scope,output,db.query);
+  const memory=await ensureLearnerSession(scope,db);
+  assert.equal(memory.materials.length,1);
+  assert.match(memory.materials[0].text,/Scan and Store/);
+  const other=await ensureLearnerSession({...scope,userId:userB},db);
+  assert.equal(other.materials.length,0);
 });

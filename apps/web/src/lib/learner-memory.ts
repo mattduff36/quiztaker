@@ -249,6 +249,23 @@ export async function ensureLearnerSession(
   });
 }
 
+/** Retain manually visited course pages in the same scoped material store as guided reading. */
+export async function saveQuickScrapeMaterial(scope: LearnerMemoryScope, output: string, sql: SqlQuery) {
+  const pages: Array<{title:string;url:string;text:string}> = [];
+  for (const line of output.split('\n')) {
+    if (!line.startsWith('QUICK_SCRAPE_PAGE ')) continue;
+    try {
+      const page = JSON.parse(line.slice('QUICK_SCRAPE_PAGE '.length));
+      if (typeof page.text !== 'string' || !page.text.trim()) continue;
+      pages.push({title:String(page.title || 'Course page'), url:String(page.url || ''), text:page.text});
+    } catch { /* A partial last record cannot supply material. */ }
+  }
+  if (!pages.length) return;
+  const session = await ensureLearnerSession(scope, {query:sql, transaction:fn=>fn(sql)});
+  const materials = pages.reduce((current, page) => addLearnerMaterial(current,page),session.materials);
+  await updateSession(sql,session,{materials});
+}
+
 export async function appendLearnerGuidance(
   input: LearnerMemoryScope & { conversationId: string; requestId: string; text: string },
   deps?: LearnerMemoryDeps,

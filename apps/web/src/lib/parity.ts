@@ -7,6 +7,8 @@ const blockedWhenDisabled = new Set([
   'fit-tab',
   'tab-inspect',
   'cdp-check',
+  'quick-scrape',
+  'quick-scrape',
   'quiz-learn',
 ]);
 

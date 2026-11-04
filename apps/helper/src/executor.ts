@@ -1,3 +1,4 @@
+import { StringDecoder } from 'node:string_decoder';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -110,6 +111,9 @@ export function startJob(
     };
   }
 
+  const selectedCapture = capability.id === 'quick-scrape'
+    ? readBrowserSession()?.tabs.find(tab => tab.index === Number(scriptArgs[0])) : undefined;
+  if (capability.id === 'quick-scrape' && !selectedCapture?.url) throw new Error('The selected course tab is no longer available.');
   const child = spawn(process.env.QUIZTAKER_NODE_PATH || process.execPath, [
     scriptPath,
     ...scriptArgs,
@@ -118,6 +122,7 @@ export function startJob(
     windowsHide: false,
     env: {
       ...process.env,
+      ...(selectedCapture ? { VITRIOL_CAPTURE_TARGET: selectedCapture.url } : {}),
       VITRIOL_LEARNER_MODE: capability.id === 'quiz-learn' ? parseLearnerMode(envelope.payload.input?.mode) : 'read',
       QUIZTAKER_HOME: getHelperHome(),
       CDP_PROFILE_DIR: join(getHelperHome(), 'chrome-profile'),
@@ -136,8 +141,33 @@ export function startJob(
 
   void emit('accepted', { script: capability.script, args: envelope.payload.args });
   void emit('started', { pid: child.pid });
+  // Full transcripts stay on disk. Keep a bounded tail for course memory and
+  // stream status separately so rapid slides cannot flood the helper outbox.
+  const decoder = new StringDecoder('utf8');
+  const capturedPages: string[] = [];
+  let pendingLine = '';
+  let recordingResult = '';
+  let capturedCount = 0;
+  function readRecordingLines(chunk: string) {
+    pendingLine += chunk;
+    const lines = pendingLine.split('\n');
+    pendingLine = (lines.pop() || '').slice(-32000);
+    for (const line of lines) {
+      if (line.startsWith('QUICK_SCRAPE_PAGE ')) {
+        capturedCount++;
+        capturedPages.push(line.slice(0,32000));
+        if (capturedPages.length > 64) capturedPages.shift();
+        if (capturedCount === 1 || capturedCount % 10 === 0) void emit('stdout',{text:`Recorded ${capturedCount} page observations.\n`});
+      } else if (line.startsWith('QUICK_SCRAPE_RESULT ')) {
+        recordingResult = line.slice(0,4096);
+      } else if (line.startsWith('QUICK_SCRAPE_READY ')) {
+        void emit('stdout',{text:line.slice(0,2048)+'\n'});
+      }
+    }
+  }
   const completion = new Promise<{ code: number | null; output: string }>((resolvePromise, reject) => {
     child.stdout.on('data', (value: Buffer) => {
+      if (capability.id === 'quick-scrape') { readRecordingLines(decoder.write(value)); return; }
       const text = value.toString();
       ({ output, isOutputTruncated } = appendOutput(output, text, isOutputTruncated));
       void emit('stdout', { text });
@@ -152,6 +182,10 @@ export function startJob(
       reject(error);
     });
     child.on('close', (rawCode) => {
+      if (capability.id === 'quick-scrape') {
+        readRecordingLines(decoder.end() + '\n');
+        output = [output.slice(-8000), ...capturedPages, recordingResult].join('\n');
+      }
       const code = normalizeProcessExitCode(rawCode);
       if (code !== rawCode) {
         const text = `Executor exited with Windows status 0x${Number(rawCode).toString(16).toUpperCase()} (${rawCode}; signed ${code}).\n`;
@@ -173,6 +207,16 @@ export function startJob(
     completion,
     cancel: () => {
       if (isCancelled || child.exitCode !== null) return;
+      if (capability.id === 'quick-scrape' && child.stdin.writable) {
+        // Finish the recording before the helper reports its terminal result.
+        if (child.stdin.writableEnded) return;
+        child.stdin.on('error', () => {});
+        child.stdin.end('finish\n');
+        const deadline = setTimeout(() => { if (child.exitCode === null && child.pid) killTree(child.pid); }, 12_000);
+        deadline.unref();
+        child.once('close', () => clearTimeout(deadline));
+        return;
+      }
       isCancelled = true;
       if (child.pid) killTree(child.pid);
       child.kill();
