@@ -1,6 +1,6 @@
 # Dependency security overrides
 
-Next.js and its ESLint config are pinned together at 16.3.8. Patched transitive versions are pinned for proxy-addr, source-map-js and postcss-selector-parser.
+Next.js is pinned at 16.4.5 for GHSA-mfr8-8qww-v76h. The ESLint config is pinned at 16.3.8. Patched transitive versions are pinned for proxy-addr, source-map-js and postcss-selector-parser.
 
 The Next ESLint plugin depends on fast-glob -> micromatch -> braces. The braces stack-exhaustion advisory (GHSA-vfj7-8cjw-p6xm) affects every published braces release as of 2026-10-14. The root fast-glob override replaces that lint-only dependency with the local @vitriol/next-glob adapter backed by tinyglobby 0.2.17. The adapter implements the plugin's sole call, globSync(string, {onlyDirectories:true}), preserving absolute Windows paths. It is not a general-purpose fast-glob replacement. dependency-compatibility.test.js exercises the real plugin with single/array roots and directory filtering. No lint rules or audit thresholds are disabled.
 

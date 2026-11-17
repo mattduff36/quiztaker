@@ -48,9 +48,11 @@ export function GuidedRunner(props: {
   onRefreshTabs?: () => void;
   onPause?: () => void;
   taskReset?: number;
+  freshTask?: boolean;
+  preparing?: boolean;
   finalized?: boolean;
   onTaskStart?: () => void;
-  onStopControl?: (stop: (() => void) | null) => void;
+  onStopControl?: (stop: (() => string | null) | null) => void;
   onAwaitingQuestion?: (value: boolean) => void;
   onJob?: (job: {id: string;status: string;capability_id?: string}) => void;
 }) {
@@ -66,7 +68,7 @@ export function GuidedRunner(props: {
   const [settingsNeeded, setSettingsNeeded] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
   const [mode, setMode] = useState<'read' | 'quiz' | 'quick'>('read');
-  const [suppressRestoredQuestion, setSuppressRestoredQuestion] = useState(false);
+  const [suppressRestoredQuestion, setSuppressRestoredQuestion] = useState(Boolean(props.freshTask));
   const [objective, setObjective] = useState('Read all relevant material in the selected course and retain it for later questions.');
   const [memory, setMemory] = useState<CourseMemory | null>(null);
   const [runOutput, setRunOutput] = useState('');
@@ -118,7 +120,14 @@ export function GuidedRunner(props: {
   }, [busy, pauseTargetId, selectedTarget, onSelect]);
 
   useEffect(() => {
-    props.onStopControl?.(() => {cancellationRequested.current=true;stopped.current=true;runGeneration.current+=1;setStage('Stopping');setMessage('No further steps will be queued. Recording your task result.');});
+    props.onStopControl?.(() => {
+      cancellationRequested.current = true;
+      stopped.current = true;
+      runGeneration.current += 1;
+      setStage('Stopping');
+      setMessage('No further steps will be queued.');
+      return ownedJob.current;
+    });
     return () => props.onStopControl?.(null);
   }, [props.onStopControl]);
 
@@ -342,7 +351,9 @@ export function GuidedRunner(props: {
       if (mounted.current && generation === runGeneration.current) { if (question) { setQuestion(question); setReplyError(error instanceof Error ? error.message : 'Could not continue. Your reply has been kept.'); } setStage(stopped.current ? 'Stopped' : 'Your input is needed'); setMessage(error instanceof Error ? error.message : 'The run could not continue. Inspect again.'); }
     } finally {
       locked.current = false;
-      if (mounted.current) { setBusy(false); props.onBusy(false); void props.onRefresh(); }
+      if (mounted.current) setBusy(false);
+      props.onBusy(false);
+      if (mounted.current || cancellationRequested.current) void props.onRefresh();
     }
   }
 
@@ -410,10 +421,13 @@ export function GuidedRunner(props: {
     } else {stopLock.current=false;setStopPending(false);}
   }
 
-  useEffect(()=>{if((props.paused || props.suspended)&&busy)void stop();},[props.paused,props.suspended]);
+  useEffect(()=>{
+    if ((props.paused || props.suspended) && busy && !cancellationRequested.current) void stop();
+  },[props.paused,props.suspended,busy]);
   const connected = props.connection ? props.connection==='connected' && !props.snapshotStale : props.ready;
   const courseTabs = (session?.tabs||[]).filter(tab=>/^https?:\/\//.test(tab.url));
   const currentStep = !connected ? 0 : !selected ? 1 : !objective.trim() ? 2 : 3;
+  const draftDisabled = busy || (props.active && !props.preparing) || props.paused || props.suspended;
 
   return <section className="overflow-hidden rounded-xl border border-slate-300 bg-white" aria-labelledby="guided-title">
     <div className="space-y-6 p-5 sm:p-7">
@@ -422,15 +436,15 @@ export function GuidedRunner(props: {
     {!connected ? <div className="space-y-3" role="status"><h3 className="font-semibold text-slate-950">{props.connection==='helper-offline'?'Connect your Windows helper first':props.snapshotStale?'Let’s check your browser again':'Start your course browser'}</h3><p className="max-w-2xl text-sm leading-6 text-slate-600">{props.connection==='helper-offline'?'Open Vitriol Helper on this PC. Once it is online, the course controls will become available.':'Use the browser window opened by Vitriol for your course. Sign in there if asked, then come back and choose the course tab below.'}</p>{props.connection==='helper-offline'?<a href="/helper" className="inline-flex min-h-11 items-center rounded-md bg-slate-950 px-4 text-sm font-semibold text-white">Open helper setup</a>:<button type="button" disabled={busy||props.active||props.paused||props.suspended} onClick={props.snapshotStale?props.onRefreshTabs:props.onConnect} className="min-h-11 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white disabled:opacity-40">{props.snapshotStale?'Check browser now':'Connect browser'}</button>}</div>:null}
     <div className="grid gap-6 lg:grid-cols-2">
     <div className="space-y-2"><div className="flex items-center justify-between gap-3"><label htmlFor="guided-course-tab" className="text-sm font-semibold text-slate-800">Choose your course tab</label><button type="button" onClick={props.onRefreshTabs} disabled={!connected||busy||props.active||props.paused||props.suspended||props.refreshing} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-semibold text-cyan-800 hover:bg-cyan-50 disabled:opacity-40"><RefreshCw className={`size-3.5 ${props.refreshing ? 'animate-spin' : ''}`}/>{props.refreshing ? 'Refreshing tabs…' : 'Refresh tabs'}</button></div>
-      <select id="guided-course-tab" aria-label="Course tab" value={props.selectedTarget} disabled={!connected || busy || props.active || props.paused || props.suspended} onChange={(event) => { props.onSelect(event.target.value); clearPageQuestion(); setStage('Ready when you are'); setMessage('Your course is selected. Check the goal, then start.'); }} className="min-h-12 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm font-normal focus-visible:outline-2 focus-visible:outline-cyan-700">
+      <select id="guided-course-tab" aria-label="Course tab" value={props.selectedTarget} disabled={!connected || draftDisabled} onChange={(event) => { props.onSelect(event.target.value); clearPageQuestion(); setStage('Ready when you are'); setMessage('Your course is selected. Check the goal, then start.'); }} className="min-h-12 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm font-normal focus-visible:outline-2 focus-visible:outline-cyan-700">
         <option value="">Choose the course you opened</option>{courseTabs.map((tab) => <option key={tab.targetId} value={tab.targetId}>{tab.title || 'Untitled page'} · tab {tab.index+1}</option>)}
       </select>
-      {selected?<p className="break-all text-xs leading-5 text-slate-500">{new URL(selected.url).origin}</p>:<p className="text-xs leading-5 text-slate-600">{connected&&courseTabs.length===0?'No course page is open yet. Open it in the Vitriol browser, then refresh these tabs.':'Only website tabs are shown. If your course is missing, open it in the Vitriol browser and refresh.'}</p>}
+      {selected?<p className="break-all text-xs leading-5 text-slate-500">{new URL(selected.url).origin}</p>:<p className="text-xs leading-5 text-slate-600">{connected&&courseTabs.length===0?'No course page is open yet. Enter its URL above.':'Only website tabs are shown. If your course is missing, open it in the Vitriol browser and refresh.'}</p>}
       {props.refreshError?<p role="alert" className="text-sm text-rose-800">{props.refreshError}</p>:null}
     </div>
-    <div hidden={!selected || courseTabs.length===0} className="space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={busy || props.active || props.paused || props.suspended} onChange={event => { setMode(event.target.value as 'read' | 'quiz' | 'quick'); clearPageQuestion(); }} className="min-h-12 rounded-md border border-slate-300 bg-white px-3 font-normal"><option value="read">Read course material</option><option value="quiz">Take the quiz</option><option value="quick">Quick scrape</option></select></label>
+    <div hidden={!selected || courseTabs.length===0} className="space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={draftDisabled} onChange={event => { setMode(event.target.value as 'read' | 'quiz' | 'quick'); clearPageQuestion(); }} className="min-h-12 rounded-md border border-slate-300 bg-white px-3 font-normal"><option value="read">Read course material</option><option value="quiz">Take the quiz</option><option value="quick">Quick scrape</option></select></label>
       {mode === 'quick' ? <p className="text-sm text-slate-600">Record the selected course window as you click through slides and open panels. The helper saves a replay and transcript on this PC and retains page text for later questions.</p> : null}
-    <label hidden={mode === 'quick'} className={mode === 'quick' ? 'hidden' : 'grid gap-2 text-sm font-semibold text-slate-800'}>What would you like to achieve?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setObjective(event.target.value.slice(0, OBJECTIVE_LIMIT)); }} disabled={busy || props.active || props.paused || props.suspended} maxLength={OBJECTIVE_LIMIT} rows={3} placeholder="For example: read this module, then help me with its quiz." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6 focus-visible:outline-2 focus-visible:outline-cyan-700" /><span className="text-xs font-normal text-slate-600">Collected course material stays available across pages. Check your goal when changing pages.</span></label></div>
+    <label hidden={mode === 'quick'} className={mode === 'quick' ? 'hidden' : 'grid gap-2 text-sm font-semibold text-slate-800'}>What would you like to achieve?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setObjective(event.target.value.slice(0, OBJECTIVE_LIMIT)); }} disabled={draftDisabled} maxLength={OBJECTIVE_LIMIT} rows={3} placeholder="For example: read this module, then help me with its quiz." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6 focus-visible:outline-2 focus-visible:outline-cyan-700" /><span className="text-xs font-normal text-slate-600">Collected course material stays available across pages. Check your goal when changing pages.</span></label></div>
     </div>
     {!question ? <div role="status" aria-live="polite" className="border-t border-slate-200 pt-5"><p className="font-semibold text-slate-950">{props.paused?'Waiting for your session to resume':props.refreshing?'Updating your course tabs':stage}</p><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{props.paused?'Use Resume session above. Your goal, replies and browser tabs are kept.':!connected?'Connect the helper and browser to continue.':!selected?'Choose your course tab above. Vitriol will read the page and explain the next step.':message}</p></div> : null}
     {savedRecording?.folder ? <section className="space-y-1 text-sm"><strong>Quick scrape saved</strong><p>{savedRecording.pages} page observations · {savedRecording.frames} frames. Open the recording folder on this PC for the replay and transcript.</p><p className="break-all select-all">{savedRecording.folder}</p></section> : null}

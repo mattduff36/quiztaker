@@ -137,7 +137,66 @@ try{
     }
     console.log(`PASS ${viewport.width}px progressive stage matrix, delayed start duplicate guard, error and remount.`);
   }
-  for(const explicitlyStop of [false,true]) {
+  for (const existingTask of [false, true]) {
+    const page = await browser.newPage();
+    const fixture = state();
+    fixture.noCourse = !existingTask;
+    if (existingTask) {
+      fixture.holdCapability = 'quiz-learn';
+      fixture.task = { id: 'running-course', status: 'running', capability_id: 'quiz-learn' };
+      fixture.latest = fixture.task;
+      fixture.jobs.set(fixture.task.id, fixture.task);
+    }
+    let cancellations = 0;
+    let opened = '';
+    await page.route('**/api/**', async route => {
+      const req = route.request();
+      const path = new URL(req.url()).pathname;
+      const body = req.postDataJSON() || {};
+      if (path === '/api/jobs/running-course' && req.method() === 'DELETE') {
+        cancellations++;
+        return route.fulfill({ json: { ok: true } });
+      }
+      if (path === '/api/operations/actions' && body.capabilityId === 'open-url') {
+        expect(body.confirm).toBe(true);
+        opened = body.capabilityInput.url;
+        fixture.noCourse = false;
+      }
+      const { __status, ...json } = reply(path, req.method(), body, Date.now(), fixture);
+      await route.fulfill({ status: __status || 200, json });
+    });
+    await page.goto(url);
+    if (existingTask) await expect(page.getByText('Course activity: Working', { exact: true })).toBeVisible();
+    else await expect(page.getByRole('textbox', { name: 'Website URL' })).toBeVisible();
+    await page.getByRole('button', { name: 'New task', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Start a new task', exact: true })).toBeFocused();
+    await expect(page.getByRole('heading', { name: 'Current task', exact: true })).toBeHidden();
+    const website = page.getByRole('textbox', { name: 'Website URL' });
+    const open = page.getByRole('button', { name: 'Open URL', exact: true });
+    await website.fill('https://example.invalid/course');
+    if (existingTask) {
+      expect(cancellations).toBe(1);
+      await expect(open).toBeDisabled();
+      const course = page.getByRole('combobox', { name: 'Course tab', exact: true });
+      await course.selectOption('course');
+      const goal = page.getByRole('textbox', { name: /What would you like to achieve/ });
+      await goal.fill('Read a different module');
+      const start = page.getByRole('button', { name: 'Inspect and start', exact: true });
+      await expect(start).toBeDisabled();
+      fixture.task.status = 'cancelled';
+      await expect(start).toBeEnabled();
+      await expect(goal).toHaveValue('Read a different module');
+    } else {
+      expect(cancellations).toBe(0);
+      await expect(open).toBeEnabled();
+      await open.click();
+      await expect.poll(() => opened).toBe('https://example.invalid/course');
+    }
+    expect(fixture.finishPosts).toBe(0);
+    await page.close();
+  }
+  console.log('PASS new task from a blank browser and a running task, with separate draft and stop states.');
+  for(const transition of ['navigate', 'stop', 'new-task']) {
     const page=await browser.newPage();const fixture=state();fixture.paused=true;
     let release;const held=new Promise(done=>{release=done;});let queued=0,deletes=0;
     await page.route('**/api/**',async route=>{
@@ -152,14 +211,23 @@ try{
     await page.getByRole('textbox',{name:/What would you like to achieve/}).fill('Read this course');
     await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
     await expect.poll(()=>queued).toBe(1);
-    if(explicitlyStop)await page.getByRole('button',{name:'Stop',exact:true}).click();
-    await page.getByRole('button',{name:'Navigate fixture away',exact:true}).click();release();
+    if (transition === 'new-task') {
+      await page.getByRole('button', { name: 'New task', exact: true }).click();
+      await expect(page.getByRole('heading', { name: 'Start a new task', exact: true })).toBeVisible();
+      await page.getByRole('combobox', { name: 'Course tab', exact: true }).selectOption('course');
+      await expect(page.getByRole('button', { name: 'Inspect and start', exact: true })).toBeDisabled();
+    } else {
+      if (transition === 'stop') await page.getByRole('button', { name: 'Stop', exact: true }).click();
+      await page.getByRole('button', { name: 'Navigate fixture away', exact: true }).click();
+    }
+    release();
     await expect.poll(()=>fixture.jobs.size).toBeGreaterThan(0);
-    if(explicitlyStop)await expect.poll(()=>deletes).toBe(1);
+    if(transition !== 'navigate')await expect.poll(()=>deletes).toBe(1);
     else {await page.waitForTimeout(100);expect(deletes).toBe(0);}
+    if (transition === 'new-task') await expect(page.getByRole('button', { name: 'Inspect and start', exact: true })).toBeEnabled();
     await page.close();
   }
-  console.log('PASS navigation preserves acknowledged jobs; explicit Stop survives pending queue and navigation.');
+  console.log('PASS navigation preserves acknowledged jobs; Stop and New task cancel a late queued job.');
   for(const viewport of [{width:1365,height:1000},{width:390,height:844}]){
     const page=await browser.newPage({viewport});
     const errors=[];page.on('pageerror',error=>errors.push(error.message));
