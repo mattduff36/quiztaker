@@ -17,7 +17,7 @@
     "dev:legacy": "node --watch server.js --port 4000",
     "build": "node --env-file-if-exists=.env.local scripts/build-workspaces.mjs",
     "typecheck": "npm run build --workspace=@quiztaker/core && npm run typecheck --workspaces --if-present",
-    "test": "node --test *.test.js && npm run test --workspaces --if-present",
+    "test": "node --test --test-concurrency=1 *.test.js && npm run test --workspaces --if-present",
     "test:db": "node --env-file=.env.local scripts/verify-neon.mjs",
     "db:migrate": "node --env-file=.env.local scripts/migrate-neon.mjs",
     "import:legacy": "node --env-file-if-exists=.env.local scripts/import-legacy-knowledge.mjs",
