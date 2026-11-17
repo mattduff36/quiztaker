@@ -82,11 +82,15 @@ export async function askCoordinator(
 export async function coordinateDecision(
   decide: (snapshot: unknown) => Promise<LearnerDecision>,
   ask: (snapshot: LearnerSnapshot, reason: string) => Promise<LearnerAction | undefined>,
-  snapshot: LearnerSnapshot & { blockedControl?: boolean; coordinationStart?: boolean },
+  snapshot: LearnerSnapshot & { blockedControl?: boolean; screenshotBlocked?: boolean; coordinationStart?: boolean },
 ): Promise<LearnerDecision> {
-  const { blockedControl, coordinationStart, ...observation } = snapshot;
+  const { blockedControl, screenshotBlocked, coordinationStart, ...observation } = snapshot;
+  if (screenshotBlocked === true) {
+    const action = await ask(observation, 'Another screenshot would show the unchanged page. Can you identify the next step from the visible course controls?');
+    return { action: action ?? { action: 'ask-user', question: 'Another screenshot would show the same page. Can you identify the next course step?' } };
+  }
   if (blockedControl === true) {
-    const action = await ask(observation, 'The previous browser click was blocked. Inspect the fresh observation and suggest a different safe next step.');
+    const action = await ask(observation, 'The previous course control did not respond as expected. Inspect the fresh observation and suggest a different next step.');
     return { action: action ?? { action: 'ask-user', question: 'A course control was blocked. Can you open the next page in the helper browser?' } };
   }
   const decision = await decide(observation);

@@ -237,28 +237,44 @@ async function accessibleName(locator) {
   return normalized || (await locator.evaluate(dkiInformationIcon).catch(() => null))?.name || '';
 }
 
-async function answerName(handle) {
+async function controlName(handle) {
   const name = await accessibleName(handle);
-  if (!name) return '';
   if (/^Rectangle \d+$/i.test(name)) {
     const label = await handle.evaluate(el => {
-      if (!el.matches('input.acc-shadow-el[data-represents]')) return '';
+      if (!el.matches('input.acc-shadow-el[data-represents],button.acc-shadow-el[data-represents]')) return '';
       const parts = el.getAttribute('data-represents').split('.');
       const id = parts.pop();
       if (parts.at(-1) === id) parts.pop();
+      if (parts.length < 2) return '';
       const scope = `${parts.join('.')}.`;
       const row = el.getBoundingClientRect();
-      const labels = [...el.ownerDocument.querySelectorAll('button.acc-shadow-el.acc-button[data-represents]')]
+      const isAnswer = el.tagName === 'INPUT';
+      const selector = isAnswer ? '.acc-text[data-represents],button.acc-shadow-el.acc-button[data-represents]' : '.acc-text[data-represents]';
+      const labels = [...el.ownerDocument.querySelectorAll(selector)]
         .filter(candidate => {
-          if (!candidate.getAttribute('data-represents').startsWith(scope)) return false;
+          if (candidate === el || !candidate.getAttribute('data-represents').startsWith(scope)
+            || !candidate.checkVisibility({checkVisibilityCSS:true})) return false;
           const rect = candidate.getBoundingClientRect();
-          return rect.width && rect.height && rect.left >= row.right && rect.left - row.right < row.width * 2
-            && Math.abs((rect.top + rect.height / 2) - (row.top + row.height / 2)) < row.height / 3;
-        });
-      return labels.length === 1 ? labels[0].textContent.trim() : '';
+          if (!rect.width || !rect.height) return false;
+          const y = rect.top + rect.height / 2;
+          if (isAnswer) return rect.left >= row.right && rect.left - row.right < row.width * 2
+            && Math.abs(y - (row.top + row.height / 2)) < row.height / 3;
+          const x = rect.left + rect.width / 2;
+          return x > row.left && x < row.right && y > row.top && y < row.bottom
+            && rect.width <= row.width * 1.2 && rect.height <= row.height;
+        }).map(candidate => candidate.textContent.replace(/\s+/g, ' ').trim())
+        .filter(text => text && !/^Rectangle \d+$/i.test(text) && !/[\uE000-\uF8FF]/.test(text));
+      const distinct = [...new Set(labels)];
+      return distinct.length === 1 ? distinct[0] : '';
     }).catch(() => '');
-    if (label) return label.replace(/\s+/g, ' ').slice(0, 160);
+    if (label) return label.slice(0, 160);
   }
+  return name;
+}
+
+async function answerName(handle) {
+  const name = await controlName(handle);
+  if (!name) return '';
   const question = await handle.evaluate(el => {
     const block = el.closest('fieldset.testEngine-question')?.parentElement;
     return block?.innerText?.trim().match(/^Question\s+(\d+)\s+of\s+\d+\b/i)?.[1];
@@ -273,10 +289,13 @@ function storylineGraphic(el, findDuplicate = false) {
     const id = control.getAttribute('data-represents')?.split('.').at(-1);
     if (!id) return null;
     const rect = control.getBoundingClientRect();
-    const hit = control.ownerDocument.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-    const object = hit?.closest(`.slide-object[data-model-id="${CSS.escape(id)}"]`);
-    const eventTarget = hit?.closest('svg .eventable');
-    return object && eventTarget && object.contains(eventTarget) ? hit : null;
+    for (const [fx, fy] of [[.5, .5], [.35, .5], [.65, .5], [.5, .35], [.5, .65]]) {
+      const hit = control.ownerDocument.elementFromPoint(rect.left + rect.width * fx, rect.top + rect.height * fy);
+      const object = hit?.closest(`.slide-object[data-model-id="${CSS.escape(id)}"]`);
+      const eventTarget = hit?.closest('svg .eventable');
+      if (object && eventTarget && object.contains(eventTarget)) return { fx, fy };
+    }
+    return null;
   };
   if (!el.matches('button.acc-shadow-el[data-represents],input.acc-shadow-el[data-represents][type=radio],input.acc-shadow-el[data-represents][type=checkbox]')) return null;
   if (!findDuplicate) return graphicAt(el);
@@ -289,6 +308,58 @@ function storylineGraphic(el, findDuplicate = false) {
       && Math.abs(rect.width - point.width) < 1 && Math.abs(rect.height - point.height) < 1
       && Boolean(graphicAt(candidate));
   });
+}
+
+class CourseControlBlocked extends Error {}
+
+async function clickStorylineControl(page, handle, point, answer) {
+  const element = await handle.elementHandle({ timeout: 800 });
+  const [frame, identity] = await Promise.all([
+    element.ownerFrame(),
+    element.evaluate(el => ({ id: el.id, model: el.getAttribute('data-represents') })),
+  ]).finally(() => element.dispose());
+  if (!frame || !/^[\w-]+$/.test(identity.id)) throw new CourseControlBlocked('The course control has no stable identity');
+  const current = frame.locator(`[id="${identity.id}"]`);
+  const isSame = () => current.evaluate((el, model) => el.getAttribute('data-represents') === model, identity.model, { timeout: 800 });
+  if (answer && await current.isChecked({ timeout: 800 })) return;
+
+  async function position(fraction) {
+    const box = await current.boundingBox({ timeout: 800 });
+    if (!box) return null;
+    return { x: box.x + box.width * fraction.fx, y: box.y + box.height * fraction.fy };
+  }
+  const initial = await position(point);
+  if (!initial) throw new CourseControlBlocked('The course control disappeared');
+  await page.mouse.move(initial.x, initial.y);
+
+  // Hover can replace Storyline's SVG. Re-read the same accessibility element
+  // and require its graphic to still own the pointer before sending down/up.
+  const fresh = await current.evaluate(storylineGraphic, false, { timeout: 800 });
+  const hit = fresh && await position(fresh);
+  if (!hit || !await isSame() || Math.hypot(initial.x - hit.x, initial.y - hit.y) > 1) {
+    throw new CourseControlBlocked('The course control changed under the pointer');
+  }
+  for (let child = frame; child.parentFrame(); child = child.parentFrame()) {
+    const host = await child.frameElement();
+    try {
+      const bounds = await host.boundingBox();
+      if (!bounds || !await host.evaluate((el, ratio) => {
+        const rect = el.getBoundingClientRect();
+        return el.ownerDocument.elementFromPoint(rect.x + rect.width * ratio.x, rect.y + rect.height * ratio.y) === el;
+      }, {x: (initial.x - bounds.x) / bounds.width, y: (initial.y - bounds.y) / bounds.height})) {
+        throw new CourseControlBlocked('Another element covers the course frame');
+      }
+    } finally { await host.dispose(); }
+  }
+  await page.mouse.down();
+  await page.mouse.up();
+  if (answer) {
+    try {
+      await current.filter({ visible: true }).and(frame.locator(':checked')).waitFor({ state: 'visible', timeout: 1000 });
+      if (await isSame()) return;
+    } catch { /* A redraw is allowed, but selection still needs proof. */ }
+    throw new CourseControlBlocked('The answer selection could not be verified after the click');
+  }
 }
 
 async function isSubmitControl(locator) {
@@ -436,7 +507,7 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
   for (const {locator,index,checkbox} of candidates.slice(0,120)) {
     const handle = locator.nth(index);
     if (!await handle.isVisible().catch(() => false) || !await handle.isEnabled().catch(() => false)) continue;
-    const name = role === 'answer' ? await answerName(handle) : await accessibleName(handle);
+    const name = role === 'answer' ? await answerName(handle) : await controlName(handle);
     if (!name || (navigationOnly && UNSAFE_LABEL.test(name))) continue;
     if (navigationOnly && /^[<>]$/.test(name) && await handle.evaluate(storylineGraphic, true).catch(() => false)) continue;
     let kind;
@@ -585,6 +656,7 @@ async function readSnapshot(page, mode = 'read') {
       ...(image?{image}:{}),
       ...(outlines.length?{outlines}:{}),
       ...(state.blockedControl ? { blockedControl: true } : {}),
+      ...(state.screenshotBlocked ? { screenshotBlocked: true } : {}),
   };
   // Raw live text is local verification evidence, not additional provider
   // context. Exclude it from JSON and never populate it from course memory.
@@ -655,7 +727,7 @@ function createActionReader() {
 
 async function applyAction(page, action, snapshot, handles, mode = 'read') {
   if (!localActionAllowed(action, snapshot, mode)) throw new Error('Learner action is not allowed');
-  const state=observationFor(page);delete state.feedback;delete state.blockedControl;
+  const state=observationFor(page);delete state.feedback;delete state.blockedControl;delete state.screenshotBlocked;
   if (action.action === 'select-tab') {
     const target = handles.get(action.targetId);
     const observed = snapshot.tabs?.find(tab => tab.id === action.targetId);
@@ -681,22 +753,26 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
     return;
   }
   if (action.action === 'capture') {
+    const {image, blockedControl, screenshotBlocked, coordinationStart, ...view} = snapshot;
+    view.text = view.text?.replace(/^Tool feedback: [^\n]*\n/gm, '');
+    if (sameLearnerView(state.captureView, view)) {
+      state.feedback = 'Screenshot skipped because the visible course page is unchanged. Use the observed controls or ask for guidance.';
+      state.screenshotBlocked = true;
+      return;
+    }
+    state.captureView = view;
     await captureCurrentView(page);
     return;
   }
   const handle = handles.get(action.targetId);
   if (!handle) throw new Error('Learner target is not on the page');
   const target = [...(snapshot.buttons || []), ...(snapshot.choices || [])].find(item => item.id === action.targetId);
-  if (!await handle.isVisible() || !await handle.isEnabled() || (await (action.action === 'answer-select' ? answerName(handle) : accessibleName(handle))) !== target?.name) throw new Error('Learner target changed');
-  const visibleControl = await handle.evaluateHandle(storylineGraphic);
-  try {
-    const graphic = visibleControl.asElement();
-    if (graphic) {
-      if (action.action === 'answer-select' && await handle.isChecked()) return;
-      await graphic.click({ timeout: 5000 });
-      return;
-    }
-  } finally { await visibleControl.dispose(); }
+  if (!await handle.isVisible() || !await handle.isEnabled() || (await (action.action === 'answer-select' ? answerName(handle) : controlName(handle))) !== target?.name) throw new Error('Learner target changed');
+  const point = await handle.evaluate(storylineGraphic);
+  if (point) {
+    await clickStorylineControl(page, handle, point, action.action === 'answer-select');
+    return;
+  }
   if (action.action === 'click') {
     if (await handle.evaluate(dkiInformationIcon).catch(() => null)) {
       if (!await handle.isVisible() || !await handle.isEnabled()) throw new Error('Learner target changed');
@@ -795,7 +871,8 @@ async function main() {
       try {
         switched = await applyAction(page, action, view, viewHandles, mode);
       } catch (error) {
-        if (!['click', 'answer-select'].includes(action.action) || error?.name !== 'TimeoutError' || page.isClosed()) throw error;
+        if (!['click', 'answer-select'].includes(action.action) || page.isClosed()
+          || !(error instanceof CourseControlBlocked || error?.name === 'TimeoutError' || /element is not attached|target changed/i.test(error?.message || ''))) throw error;
         const state = observationFor(page);
         const control = [...(view.buttons || []), ...(view.choices || [])].find(item => item.id === action.targetId);
         if (!coordinated) {
@@ -803,7 +880,7 @@ async function main() {
           return;
         }
         state.blockedControl = true;
-        state.feedback = `Click on ${control?.name || 'the selected control'} was blocked. Observe the current slide and choose a different safe action.`;
+        state.feedback = `${action.action === 'answer-select' ? 'Selection of' : 'Click on'} ${control?.name || 'the selected control'} could not be confirmed. Check the current slide before trying again.`;
         console.log('Learner click blocked; asking for guidance on the fresh page.');
         continue;
       }

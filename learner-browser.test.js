@@ -19,7 +19,7 @@ test('Storyline matches a shadow button to the visible SVG with the same model i
   try {
     const page = await browser.newPage();
     await page.setContent(`<style>#group,button{position:absolute;left:10px;top:10px;width:150px;height:50px}</style>
-      <button class="acc-shadow-el" data-represents="_player.slide.control12.control12" aria-label="Next"></button>
+      <button id="next" class="acc-shadow-el" data-represents="_player.slide.control12.control12" aria-label="Next"></button>
       <div class="slide-object" id="group" data-model-id="control12">
         <div class="slide-object" data-model-id="shape13"><svg width="150" height="50"><g class="eventable"><rect width="150" height="50" onclick="document.querySelector('output').textContent='Opened'"/></g></svg></div>
       </div><output></output>`);
@@ -29,6 +29,7 @@ test('Storyline matches a shadow button to the visible SVG with the same model i
       button.textContent = '>';
       button.removeAttribute('aria-label');
       const duplicate = button.cloneNode(true);
+      duplicate.id = 'duplicate';
       duplicate.setAttribute('data-represents', '_player.slide.alternate');
       button.before(duplicate);
     });
@@ -46,17 +47,38 @@ test('Storyline uses the label beside a quiz checkbox and changes the actual sel
     const page = await browser.newPage();
     await page.setContent(`<style>
       input,#graphic { position:absolute; margin:0; left:10px; top:10px; width:40px; height:40px }
-      button { position:absolute; left:66px; top:14px; height:32px }
+      .acc-text { position:absolute; left:66px; top:14px; height:32px; opacity:0 }
       label { display:none }
     </style>
     <input id="choice" class="acc-shadow-el" data-represents="_player.slide.layer.answer.answer" type="checkbox">
     <label for="choice">Rectangle 24</label>
-    <button class="acc-shadow-el acc-button" data-represents="_player.slide.layer.text">Poly Lens</button>
+    <div class="acc-shadow-el acc-text" data-represents="_player.slide.layer.text">Poly Lens</div>
     <div id="graphic" class="slide-object" data-model-id="answer">
       <svg width="40" height="40"><g class="eventable"><rect width="40" height="40" onclick="document.querySelector('input').checked=true"/></g></svg>
-    </div>`);
+    </div><script>document.querySelector('svg').addEventListener('mouseover', event => {
+      const rect = event.target;
+      if (!rect.matches('rect') || rect.dataset.redrawn) return;
+      const fresh = rect.cloneNode(); fresh.dataset.redrawn = 'yes'; rect.replaceWith(fresh);
+    });</script>`);
     await act(page, 'Poly Lens', 'quiz', true);
     assert.equal(await page.locator('#choice').isChecked(), true);
+    assert.equal(await page.locator('rect').getAttribute('data-redrawn'), 'yes');
+  } finally { await browser.close(); }
+});
+
+test('Storyline exposes a visible tab label while acting on the matching rectangle only', async () => {
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<style>button, .slide-object { position:absolute; left:10px; top:10px; width:150px; height:50px }
+      .acc-text { position:absolute; left:20px; top:21px; opacity:0 }</style>
+      <button id="tab" class="acc-shadow-el" data-represents="_player.slide.layer.tab">Rectangle 6</button>
+      <div class="acc-text" data-represents="_player.slide.layer.label">VESA mounting kit</div>
+      <div class="slide-object" data-model-id="tab"><svg width="150" height="50"><g class="eventable">
+        <rect width="150" height="50" onclick="document.querySelector('output').textContent='Opened'"/>
+      </g></svg></div><output></output>`);
+    await act(page, 'VESA mounting kit');
+    assert.equal(await page.locator('output').textContent(), 'Opened');
   } finally { await browser.close(); }
 });
 
@@ -403,14 +425,21 @@ test('capture attaches one bounded viewport JPEG and skips visible password/auth
     assert.equal(second.snapshot.image,undefined);assert.equal(captures,1);
     assert.equal(sameLearnerView(first.snapshot,second.snapshot),true);
     assert.equal(sameLearnerView(first.snapshot,{...second.snapshot,text:'Changed course content'}),false);
-    await page.setContent('<form><label>Password<input type="password" value="fixture-only-secret"></label></form>');
     await applyAction(page,{action:'capture'},second.snapshot,second.handles);
+    const repeated = await readSnapshot(page);
+    assert.equal(repeated.snapshot.screenshotBlocked,true);
+    assert.match(repeated.snapshot.text,/visible course page is unchanged/);
+    assert.equal(captures,1);
+    await page.setContent('<form><label>Password<input type="password" value="fixture-only-secret"></label></form>');
+    const login = await readSnapshot(page);
+    await applyAction(page,{action:'capture'},login.snapshot,login.handles);
     const blocked=await readSnapshot(page);assert.equal(blocked.snapshot.image,undefined);assert.equal(captures,1);
     assert.match(blocked.snapshot.text,/Screenshot skipped/);
     assert.doesNotMatch(blocked.snapshot.text,/fixture-only-secret/);
     await page.setContent('<h1>Course view</h1>');
     page.screenshot=async()=>Buffer.alloc(900_000);
-    await applyAction(page,{action:'capture'},blocked.snapshot,blocked.handles);
+    const changed = await readSnapshot(page);
+    await applyAction(page,{action:'capture'},changed.snapshot,changed.handles);
     const oversized=await readSnapshot(page);assert.equal(oversized.snapshot.image,undefined);assert.match(oversized.snapshot.text,/exceeds the size limit/);
   } finally {await browser.close();}
 });

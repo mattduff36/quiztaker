@@ -153,6 +153,13 @@ async function main(): Promise<void> {
           const jobId = envelope.payload.jobId;
           const capability = envelope.payload.capabilityId;
           const coordinated = capability === 'quiz-learn' && envelope.payload.input?.mode === 'quiz' && envelope.payload.input.intent === 'coordinate';
+          const propose = async (snapshot: unknown) => {
+            const decision = await client.proposeLearnerStep(jobId, snapshot);
+            if (decision.screenshot === 'accepted') terminal?.activity('Screenshot received by the assistant.');
+            if (decision.screenshot === 'omitted') terminal?.activity('Screenshot omitted · the assistant connection does not accept images.', 'warning');
+            if (decision.screenshot === 'unconfirmed') terminal?.activity('The assistant did not confirm the screenshot request.', 'warning');
+            return decision;
+          };
           // Automatic tab refreshes are routine housekeeping.
           const action = capability === 'list-tabs' ? null
             : capability === 'start-browser' ? 'Start course browser'
@@ -167,13 +174,13 @@ async function main(): Promise<void> {
             {
               proposeLearnerStep: (snapshot) => coordinated
                 ? coordinateDecision(
-                    view => client.proposeLearnerStep(jobId, view),
+                    propose,
                     (view, reason) => askCoordinator(getHelperHome(), jobId, view, reason, 70_000,
                       () => isStopping || runningJob?.jobId !== jobId || runningJob.cancelRequested,
                       line => terminal?.activity(line)),
                     snapshot as LearnerSnapshot,
                   )
-                : client.proposeLearnerStep(jobId, snapshot),
+                : propose(snapshot),
               isCancellationRequested: () => client.isCancellationRequested(jobId),
             },
           );

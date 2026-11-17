@@ -38,7 +38,8 @@ test('pause during a hosted proposal prevents the returned action reaching the b
   const previousRoot = process.env.QUIZTAKER_AUTOMATION_ROOT;
   process.env.QUIZTAKER_HOME = join(directory, 'home');
   process.env.QUIZTAKER_AUTOMATION_ROOT = directory;
-  writeFileSync(join(directory, 'pw-learn-quiz.js'), `console.log('LEARNER_SNAPSHOT {}'); process.stdin.once('data', data => { console.log('RECEIVED ' + data.toString()); process.exit(0); });`);
+  const image = 'data:image/jpeg;base64,/9j/2Q==';
+  writeFileSync(join(directory, 'pw-learn-quiz.js'), `console.log('LEARNER_SNAPSHOT ' + JSON.stringify({image:${JSON.stringify(image)}})); process.stdin.once('data', data => { console.log('RECEIVED ' + data.toString()); process.exit(0); });`);
   const helperId = randomUUID();
   const secret = deriveHelperSecret('integration-master-key-32-characters', helperId);
   const envelope = signJob({jobId:randomUUID(),planId:randomUUID(),attemptId:randomUUID(),helperId,capabilityId:'quiz-learn',capabilityVersion:4,script:'pw-learn-quiz.js',args:[],fingerprint:null,nonce:randomUUID(),issuedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60_000).toISOString()}, secret);
@@ -46,10 +47,12 @@ test('pause during a hosted proposal prevents the returned action reaching the b
   try {
     const result = await startJob(envelope, helperId, secret, async () => {}, {
       isCancellationRequested: async () => paused,
-      proposeLearnerStep: async () => { paused = true; return {action: {type: 'click', id: '1'}}; },
+      proposeLearnerStep: async snapshot => { assert.deepEqual(snapshot, { image }); paused = true; return {action: {type: 'click', id: '1'}}; },
     }).completion;
     assert.match(result.output, /RECEIVED LEARNER_STOP cancelled/);
     assert.doesNotMatch(result.output, /RECEIVED LEARNER_ACTION/);
+    assert.doesNotMatch(result.output, /LEARNER_SNAPSHOT/);
+    assert.doesNotMatch(result.output, /data:image/);
   } finally {
     if (previousHome == null) delete process.env.QUIZTAKER_HOME; else process.env.QUIZTAKER_HOME = previousHome;
     if (previousRoot == null) delete process.env.QUIZTAKER_AUTOMATION_ROOT; else process.env.QUIZTAKER_AUTOMATION_ROOT = previousRoot;

@@ -53,6 +53,9 @@ test('routine actions continue automatically and blocked clicks ask once before 
   const blocked = await coordinateDecision(decide, unavailable, { blockedControl: true });
   assert.equal((blocked.action as { action: string }).action, 'ask-user');
   assert.equal(asked, 1);
+  const repeatedCapture = await coordinateDecision(decide, unavailable, { screenshotBlocked: true });
+  assert.equal((repeatedCapture.action as { action: string }).action, 'ask-user');
+  assert.equal(asked, 2);
   const action = { action: 'click', targetId: 'b1' } as const;
   assert.deepEqual(await coordinateDecision(decide, async () => action, { coordinationStart: true }), { action });
 });

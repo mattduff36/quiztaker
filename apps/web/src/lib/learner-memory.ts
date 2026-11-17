@@ -194,6 +194,7 @@ export function composeLearnerSnapshot(
     choices: current.choices,
     buttons: current.buttons,
     tabs: current.tabs,
+    ...(current.image ? { image: current.image } : {}),
     ...(current.guidance ? { guidance: current.guidance } : {}),
   };
   if (!memory) return snapshot;

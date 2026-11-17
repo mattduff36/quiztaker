@@ -37,6 +37,16 @@ const helperB = '22222222-2222-4222-8222-222222222222';
 const browserA = '33333333-3333-4333-8333-333333333333';
 const browserB = '44444444-4444-4444-8444-444444444444';
 
+test('current screenshot survives course memory composition and request validation', () => {
+  const image = 'data:image/jpeg;base64,/9j/2Q==';
+  const snapshot = boundLearnerSnapshot(composeLearnerSnapshot(
+    { text: 'Current slide', image }, { objective: 'Read the slides', history: [], materials: [] },
+  ));
+  assert.equal(snapshot.image, image);
+  assert.match(snapshot.text || '', /Read the slides/);
+  assert.doesNotMatch(snapshot.text || '', /base64/);
+});
+
 interface MemoryRow {
   id: string;
   user_id: string;

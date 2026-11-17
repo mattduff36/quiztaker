@@ -75,12 +75,12 @@ export class ControlPlaneClient {
   async proposeLearnerStep(
     jobId: string,
     snapshot: unknown,
-  ): Promise<{ action?: unknown; stop?: boolean; error?: string }> {
+  ): Promise<{ action?: unknown; stop?: boolean; error?: string; screenshot?: 'accepted' | 'omitted' | 'unconfirmed' }> {
     const response = await this.request(`/api/helper/jobs/${encodeURIComponent(jobId)}/proposal`, {
       method: 'POST',
       body: JSON.stringify({ snapshot }),
     }, 150_000);
-    return response.json() as Promise<{ action?: unknown; stop?: boolean; error?: string }>;
+    return response.json();
   }
 
   async isCancellationRequested(jobId: string): Promise<boolean> {

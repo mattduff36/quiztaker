@@ -167,11 +167,20 @@ export function startJob(
     }
   }
   const completion = new Promise<{ code: number | null; output: string }>((resolvePromise, reject) => {
-    child.stdout.on('data', (value: Buffer) => {
-      if (capability.id === 'quick-scrape') { readRecordingLines(decoder.write(value)); return; }
-      const text = value.toString();
+    function reportOutput(text: string) {
+      if (!text) return;
       ({ output, isOutputTruncated } = appendOutput(output, text, isOutputTruncated));
       void emit('stdout', { text });
+    }
+    function readLearnerOutput(chunk: string) {
+      const lines = (pendingLine + chunk).split('\n');
+      pendingLine = lines.pop() || '';
+      for (const line of lines) if (!line.startsWith('LEARNER_SNAPSHOT ')) reportOutput(`${line}\n`);
+    }
+    child.stdout.on('data', (value: Buffer) => {
+      if (capability.id === 'quick-scrape') { readRecordingLines(decoder.write(value)); return; }
+      if (capability.id === 'quiz-learn') { readLearnerOutput(decoder.write(value)); return; }
+      reportOutput(value.toString());
     });
     child.stderr.on('data', (value: Buffer) => {
       const text = value.toString();
@@ -183,6 +192,7 @@ export function startJob(
       reject(error);
     });
     child.on('close', (rawCode) => {
+      if (capability.id === 'quiz-learn') readLearnerOutput(decoder.end() + '\n');
       if (capability.id === 'quick-scrape') {
         readRecordingLines(decoder.end() + '\n');
         output = [output.slice(-8000), ...capturedPages, recordingResult].join('\n');
@@ -231,8 +241,9 @@ function attachLearnerBridge(
   isCancellationRequested?: () => Promise<boolean>,
 ): void {
   let buffer = '';
+  const decoder = new StringDecoder('utf8');
   child.stdout.on('data', (value: Buffer) => {
-    buffer += value.toString();
+    buffer += decoder.write(value);
     let newline = buffer.indexOf('\n');
     while (newline >= 0) {
       const line = buffer.slice(0, newline).replace(/\r$/, '');

@@ -130,8 +130,6 @@ export async function POST(
   // Knowledge-store or public-document failures must not stop the course run.
   const playerKnowledge = await observePlayerKnowledge({ userId: helper.userId, attemptId: job.attempt_id, snapshot })
     .catch(() => { console.warn('Player knowledge could not be updated'); return null; });
-  const composed = composeLearnerSnapshot(snapshot, retained);
-  const modelSnapshot = withStandingInstructions(playerKnowledge ? withPlayerKnowledge(composed, playerKnowledge) : composed, instructions);
   const stored = await loadSecretLlmConnection(helper.userId);
   const choice = chooseProposalLearner(stored);
   if (choice.kind === 'disabled') {
@@ -140,6 +138,15 @@ export async function POST(
   if (choice.kind === 'blocked') {
     return NextResponse.json({ stop: true, error: 'Hosted learner connection is not ready' });
   }
+  const { image, ...textSnapshot } = snapshot;
+  const vision = choice.kind === 'personal' && choice.provider === 'openai';
+  const currentView = image ? {
+    ...textSnapshot,
+    text: `Tool feedback: ${vision ? 'One screenshot is attached to this request.' : 'Screenshot omitted because the configured assistant connection does not accept images. Use the observed text and controls, or ask for guidance.'}\n${textSnapshot.text ?? ''}`,
+    ...(vision ? { image } : {}),
+  } : snapshot;
+  const composed = composeLearnerSnapshot(currentView, retained);
+  const modelSnapshot = withStandingInstructions(playerKnowledge ? withPlayerKnowledge(composed, playerKnowledge) : composed, instructions);
   const maxSteps = Math.min(LEARNER_MAX_STEPS, Number(job.constraints?.maxSteps ?? LEARNER_MAX_STEPS));
   const reserved = await withTransaction(async (sql) => {
     const [current] = await sql<{status:string;cancel_requested:boolean}>(
@@ -183,9 +190,10 @@ export async function POST(
       await queryOne(`insert into attempt_events (user_id, attempt_id, event, data) values ($1,$2,'learner-tools',$3::jsonb) returning id`,
         [helper.userId,job.attempt_id,JSON.stringify({jobId,evidence:personal.evidence})]);
     }
+    const screenshot = image ? (vision ? (personal.ok ? 'accepted' : 'unconfirmed') : 'omitted') : undefined;
     return finishLearnerDecision(jobId, conversation, helper.userId, helper.helperId, incoming, personal.ok
-      ? { action: personal.action }
-      : { stop: true, error: personal.error });
+      ? { action: personal.action, screenshot }
+      : { stop: true, error: personal.error, screenshot });
   }
   const env = getServerEnv();
   const decision = await requestLearnerDecision({
@@ -207,8 +215,8 @@ export async function POST(
     helper.helperId,
     incoming,
     decision.action && !decision.stop
-      ? { action: decision.action }
-      : { stop: true, error: decision.error || 'Learner stopped' },
+      ? { action: decision.action, screenshot: image ? 'omitted' : undefined }
+      : { stop: true, error: decision.error || 'Learner stopped', screenshot: image ? 'omitted' : undefined },
   );
 }
 
@@ -232,7 +240,7 @@ async function finishLearnerDecision(
   userId: string,
   helperId: string,
   observed: { title?: string; url?: string; text?: string },
-  decision: { action?: LearnerAction; stop?: boolean; error?: string },
+  decision: { action?: LearnerAction; stop?: boolean; error?: string; screenshot?: 'accepted' | 'omitted' | 'unconfirmed' },
 ) {
   return withTransaction(async sql => {
   const [current]=await sql<{status:string;cancel_requested:boolean}>(`select status,cancel_requested from jobs where id=$1 and user_id=$2 and helper_id=$3 for no key update`,[jobId,userId,helperId]);
@@ -252,7 +260,7 @@ async function finishLearnerDecision(
       return NextResponse.json({ stop: true, error: 'Learner memory could not be saved' });
     }
   }
-  if (decision.action && !decision.stop) return NextResponse.json({ action: decision.action });
-  return NextResponse.json({ stop: true, error: decision.error || 'Learner stopped' });
+  if (decision.action && !decision.stop) return NextResponse.json({ action: decision.action, screenshot: decision.screenshot });
+  return NextResponse.json({ stop: true, error: decision.error || 'Learner stopped', screenshot: decision.screenshot });
   });
 }
