@@ -537,6 +537,7 @@ async function readSnapshot(page, mode = 'read') {
       tabs,
       ...(image?{image}:{}),
       ...(outlines.length?{outlines}:{}),
+      ...(state.blockedControl ? { blockedControl: true } : {}),
   };
   // Raw live text is local verification evidence, not additional provider
   // context. Exclude it from JSON and never populate it from course memory.
@@ -607,7 +608,7 @@ function createActionReader() {
 
 async function applyAction(page, action, snapshot, handles, mode = 'read') {
   if (!localActionAllowed(action, snapshot, mode)) throw new Error('Learner action is not allowed');
-  const state=observationFor(page);delete state.feedback;
+  const state=observationFor(page);delete state.feedback;delete state.blockedControl;
   if (action.action === 'select-tab') {
     const target = handles.get(action.targetId);
     const observed = snapshot.tabs?.find(tab => tab.id === action.targetId);
@@ -641,6 +642,25 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
   const target = [...(snapshot.buttons || []), ...(snapshot.choices || [])].find(item => item.id === action.targetId);
   if (!await handle.isVisible() || !await handle.isEnabled() || (await (action.action === 'answer-select' ? answerName(handle) : accessibleName(handle))) !== target?.name) throw new Error('Learner target changed');
   if (action.action === 'click') {
+    const visibleControl = await handle.evaluateHandle(el => {
+      if (!el.matches('button.acc-shadow-el[data-represents]')) return null;
+      const id = el.getAttribute('data-represents')?.split('.').at(-1);
+      if (!id) return null;
+      const rect = el.getBoundingClientRect();
+      const hit = el.ownerDocument.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const object = hit?.closest('.slide-object[data-model-id]');
+      const eventTarget = hit?.closest('svg .eventable');
+      // The visible Storyline graphic and the accessibility button must
+      // represent the same object. An unrelated covering layer stays blocked.
+      return object?.getAttribute('data-model-id') === id && eventTarget && object.contains(eventTarget) ? hit : null;
+    });
+    try {
+      const target = visibleControl.asElement();
+      if (target) {
+        await target.click({ timeout: 5000 });
+        return;
+      }
+    } finally { await visibleControl.dispose(); }
     if (await handle.evaluate(dkiInformationIcon).catch(() => null)) {
       if (!await handle.isVisible() || !await handle.isEnabled()) throw new Error('Learner target changed');
       // Pointer movement creates a covering rollover image on these DKI icons.
@@ -670,6 +690,7 @@ function finish(completed, reason, result) {
 async function main() {
   const options = parseLearnQuizArgs(process.argv);
   const mode = process.env.VITRIOL_LEARNER_MODE === 'quiz' ? 'quiz' : 'read';
+  const coordinated = mode === 'quiz' && process.env.VITRIOL_COORDINATE === '1';
   const browser = await chromium.connectOverCDP(CDP_URL);
   let reader = null;
   try {
@@ -684,6 +705,7 @@ async function main() {
     let repeatState = null;
     for (let step = 1; step <= MAX_STEPS; step += 1) {
       const { snapshot, handles } = await readSnapshot(page, mode);
+      if (coordinated && step === 1) snapshot.coordinationStart = true;
       console.log(`LEARNER_PROGRESS ${JSON.stringify({ message: `Reading ${snapshot.title || 'the current course page'}.` })}`);
       const result = mode === 'quiz' ? recognizeQuizResult(snapshot) : null;
       if (result) { finish(result.status === 'passed', undefined, result); return; }
@@ -732,7 +754,22 @@ async function main() {
         return;
       }
       const popup = action.action === 'click' ? page.waitForEvent('popup', { timeout: 2500 }).catch(() => null) : null;
-      const switched = await applyAction(page, action, view, viewHandles, mode);
+      let switched;
+      try {
+        switched = await applyAction(page, action, view, viewHandles, mode);
+      } catch (error) {
+        if (action.action !== 'click' || error?.name !== 'TimeoutError' || page.isClosed()) throw error;
+        const state = observationFor(page);
+        const control = view.buttons?.find(item => item.id === action.targetId);
+        if (!coordinated) {
+          finish(false, 'blocked-control');
+          return;
+        }
+        state.blockedControl = true;
+        state.feedback = `Click on ${control?.name || 'the selected control'} was blocked. Observe the current slide and choose a different safe action.`;
+        console.log('Learner click blocked; asking for guidance on the fresh page.');
+        continue;
+      }
       if (switched) page = switched;
       const opened = popup ? await popup : null;
       if (opened) {

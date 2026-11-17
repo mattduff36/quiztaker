@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { getCapability } from './capabilities.js';
+import { parseLearnerIntent, parseLearnerMode } from './learner.js';
 
 export const PROTOCOL_VERSION = 2;
 export const RESULT_SCHEMA_VERSION = 1;
@@ -100,7 +101,7 @@ export function validateCapabilityInput(
     case 'container-batch':
       return withDryRun(argsForTarget(input.target), input.dryRun === true);
     case 'quiz-learn':
-      if (input.mode != null && input.mode !== 'read' && input.mode !== 'quiz') return { ok: false, error: 'Learner mode is invalid' };
+      parseLearnerIntent(input.intent, parseLearnerMode(input.mode));
       return withDryRun(argsForTarget(input.target), input.dryRun === true);
     case 'cert-batch':
       return withDryRun({ ok: true, args: onlyArgs(input.titles) }, input.dryRun === true);

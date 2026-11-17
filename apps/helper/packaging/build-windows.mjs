@@ -147,6 +147,7 @@ function installAutomationDependencies() {
 function writeLauncher() {
   writeFileSync(join(stageRoot, 'Start Vitriol Helper.cmd'), [
     '@echo off',
+    'title Vitriol Helper',
     'setlocal',
     'set "QUIZTAKER_AUTOMATION_ROOT=%~dp0automation"',
     'set "QUIZTAKER_NODE_PATH=%~dp0runtime\\node.exe"',

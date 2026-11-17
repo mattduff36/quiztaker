@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { decideGuidedFlow, learnerQuestion, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab } from '../src/lib/guided-flow';
+import { decideGuidedFlow, learnerQuestion, learnerStopMessage, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab } from '../src/lib/guided-flow';
 
 test('uses actual detector capability IDs, including SCORM and SlickQuiz', () => {
   for (const [detected, capability] of [['scorm-player', 'scorm-complete'], ['slickquiz-exam', 'slickquiz-solve'], ['container', 'container-batch']]) {
@@ -54,4 +54,19 @@ test('quiz intent permits a server assessment while read intent never fast compl
   assert.equal(decideGuidedFlow({ detected: 'server-assessment' }, 'quiz').kind, 'learn');
   assert.equal(decideGuidedFlow({ detected: 'scorm-player', action: {capabilityId:'scorm-complete'} }, 'read').kind, 'learn');
   assert.equal(supportsGuidedLearning('1.0.15'), true);
+});
+
+test('combined guided mode uses the learner for both course material and assessments', () => {
+  const onCourse = decideGuidedFlow({ detected: 'scorm-player', action: { capabilityId: 'scorm-complete' } }, 'read-and-assess');
+  assert.deepEqual(onCourse, { kind: 'learn', message: 'Reading the course material and using it to answer assessment questions.' });
+  assert.equal(decideGuidedFlow({ detected: 'server-assessment' }, 'read-and-assess').kind, 'learn');
+  assert.equal(decideGuidedFlow({ detected: 'session-dead' }, 'read-and-assess').kind, 'question');
+});
+
+test('a blocked course control has a readable explanation for both old and new helper output', () => {
+  const legacy = 'locator.click: Timeout 5000ms exceeded.\nSVG intercepts pointer events';
+  const structured = 'AUTOMATION_RESULT {"failures":[{"reason":"blocked-control"}]}';
+  assert.match(learnerStopMessage(legacy) ?? '', /could not click the course control/);
+  assert.equal(learnerStopMessage(legacy), learnerStopMessage(structured));
+  assert.equal(learnerStopMessage('Unrecognised output'), null);
 });

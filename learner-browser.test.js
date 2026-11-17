@@ -14,6 +14,24 @@ async function act(page, name, mode = 'read', choice = false) {
   return view;
 }
 
+test('Storyline matches a shadow button to the visible SVG with the same model identity', async () => {
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<style>.slide-object,button{position:absolute;left:10px;top:10px;width:150px;height:50px}</style>
+      <button class="acc-shadow-el" data-represents="_player.slide.control12" aria-label="Next"></button>
+      <div class="slide-object" data-model-id="control12">
+        <svg width="150" height="50"><g class="eventable"><rect width="150" height="50" onclick="document.querySelector('output').textContent='Opened'"/></g></svg>
+      </div><output></output>`);
+    await act(page, 'Next');
+    assert.equal(await page.locator('output').textContent(), 'Opened');
+    await page.locator('.slide-object').evaluate(el => { el.dataset.modelId = 'unrelated'; });
+    await page.locator('output').evaluate(el => { el.textContent = ''; });
+    await assert.rejects(act(page, 'Next'), /Timeout/);
+    assert.equal(await page.locator('output').textContent(), '');
+  } finally { await browser.close(); }
+});
+
 test('Canon overlay identifies the sole hotspot without confusing navigation or ambiguous targets', async () => {
   const browser = await chromium.launch({channel:'chrome',headless:true});
   try {

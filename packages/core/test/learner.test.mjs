@@ -62,6 +62,22 @@ test('only stored quiz intent authorizes observed submission and semantic course
   assert.equal(learnerOfferedFor('server-assessment','quiz'),true);
 });
 
+test('combined intent requires matching stored assessment authorization', () => {
+  const input = { mode: 'quiz', intent: 'read-and-assess' };
+  const constraints = learnerConstraints('quiz', input.intent);
+  const policy = storedLearnerPolicy(input, constraints);
+  assert.deepEqual(policy, input);
+  const page = { buttons: [
+    { id: 'b1', name: 'Read lesson', kind: 'content' },
+    { id: 'b2', name: 'Submit assessment', kind: 'submission' },
+  ] };
+  assert.equal(parseLearnerAction({ action: 'click', targetId: 'b1' }, page, policy).ok, true);
+  assert.equal(parseLearnerAction({ action: 'click', targetId: 'b2' }, page, policy).ok, true);
+  assert.throws(() => storedLearnerPolicy(input, learnerConstraints('quiz')), /intent does not match/);
+  assert.throws(() => storedLearnerPolicy(input, { ...constraints, submissionAuthorized: false }), /not authorized/);
+  assert.throws(() => learnerConstraints('read', input.intent), /invalid for this mode/);
+});
+
 test('tab switching requires an observed same-website course tab', () => {
   const page = {url:'https://example.com/course',tabs:[{id:'t1',name:'Paper quiz',url:'https://example.com/quiz'}]};
   assert.equal(parseLearnerAction({action:'select-tab',targetId:'t1'},page).ok,true);

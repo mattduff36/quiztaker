@@ -2,7 +2,8 @@ import { getCapability } from './capabilities.js';
 
 export const LEARNER_MAX_STEPS = 80;
 export type LearnerMode = 'read' | 'quiz';
-export interface LearnerPolicy { mode: LearnerMode }
+export type LearnerIntent = 'read-and-assess' | 'coordinate';
+export interface LearnerPolicy { mode: LearnerMode; intent?: LearnerIntent }
 
 export const learnerActions = new Set([
   'click',
@@ -61,15 +62,24 @@ export function parseLearnerMode(value: unknown): LearnerMode {
   if (value !== 'read' && value !== 'quiz') throw new Error('Learner mode is invalid');
   return value;
 }
-export function learnerConstraints(mode: LearnerMode = 'read') {
-  return { mode, maxSteps: LEARNER_MAX_STEPS, submissionAuthorized: mode === 'quiz', allowedActions: [...learnerActions] };
+export function parseLearnerIntent(value: unknown, mode: LearnerMode): LearnerIntent | undefined {
+  if (value == null) return undefined;
+  if ((value !== 'read-and-assess' && value !== 'coordinate') || mode !== 'quiz') throw new Error('Learner intent is invalid for this mode');
+  return value;
+}
+
+export function learnerConstraints(mode: LearnerMode = 'read', value?: unknown) {
+  const intent = parseLearnerIntent(value, mode);
+  return { mode, ...(intent ? { intent } : {}), maxSteps: LEARNER_MAX_STEPS, submissionAuthorized: mode === 'quiz', allowedActions: [...learnerActions] };
 }
 /** Trust only stored plan input and server-derived constraints, never page fields. */
-export function storedLearnerPolicy(input: { mode?: unknown } | null, constraints: { mode?: unknown; submissionAuthorized?: unknown } | null): LearnerPolicy {
+export function storedLearnerPolicy(input: { mode?: unknown; intent?: unknown } | null, constraints: { mode?: unknown; intent?: unknown; submissionAuthorized?: unknown } | null): LearnerPolicy {
   const mode = parseLearnerMode(input?.mode);
   if (mode === 'quiz' && (constraints?.mode !== 'quiz' || constraints.submissionAuthorized !== true)) throw new Error('Quiz submission is not authorized by this plan');
   if (mode === 'read' && constraints?.submissionAuthorized === true) throw new Error('Learner plan mode does not match');
-  return { mode };
+  const intent = parseLearnerIntent(input?.intent, mode);
+  if (intent !== (constraints?.intent ?? undefined)) throw new Error('Learner plan intent does not match');
+  return intent ? { mode, intent } : { mode };
 }
 const unsafeLabel = /\b(log\s*out|sign\s*out|sign\s*in|log\s*in|password|account|payment|purchase|buy|delete|remove|unsubscribe|exit|close browser)\b/i;
 export function learnerControlAllowed(target: LearnerControl, policy: LearnerPolicy = { mode: 'read' }): boolean {

@@ -32,11 +32,20 @@ export async function createPlan(userId: string, input: CreatePlanInput): Promis
   const capability = getCapability(input.capabilityId);
   if (!capability) throw new Error('Unknown capability');
   if (!parityAllows(capability.id)) throw new Error('This action is disabled');
-  await assertHelperSupports(userId, input.helperId, capability.id, capability.version);
+  const helperVersion = await assertHelperSupports(userId, input.helperId, capability.id, capability.version);
   const capabilityInput = { ...(input.capabilityInput ?? { capabilityId: capability.id }) };
   const isLearner = capability.id === 'quiz-learn';
+  const constraints = isLearner
+    ? learnerConstraints(parseLearnerMode(capabilityInput.mode), capabilityInput.intent)
+    : input.constraints ?? null;
   let learnerBinding: { conversationId: string; browserSessionId: string; guidance?: string } | null = null;
   if (isLearner) {
+    if (capabilityInput.intent === 'coordinate') {
+      const [major = 0, minor = 0, patch = 0] = helperVersion.split('.').map(Number);
+      if (!(major > 1 || (major === 1 && (minor > 0 || (minor === 0 && patch >= 32))))) {
+        throw new Error('Update Vitriol Helper to v1.0.32 or later to co-ordinate with ChatGPT.');
+      }
+    }
     capabilityInput.mode = parseLearnerMode(capabilityInput.mode);
     await assertLearnerPage(userId, input.helperId, capabilityInput);
     const guidance = learnerGuidanceText(capabilityInput.guidance);
@@ -72,7 +81,6 @@ export async function createPlan(userId: string, input: CreatePlanInput): Promis
     if (!validated.ok) throw new Error(validated.error);
     args = validated.args;
   }
-  const constraints = isLearner ? learnerConstraints(parseLearnerMode(capabilityInput.mode)) : input.constraints ?? null;
   const steps = isLearner ? ['probe', 'answer-select', 'verify'] : input.steps ?? [];
   const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
   const row = await queryOne<Record<string, unknown>>(
@@ -172,9 +180,9 @@ export async function assertHelperSupports(
   helperId: string,
   capabilityId: string,
   capabilityVersion: number,
-): Promise<void> {
-  const helper = await queryOne<{ protocol_version: number; supported_capabilities: Array<{ id?: string; version?: number }> }>(
-    'select protocol_version, supported_capabilities from helpers where id = $1 and user_id = $2',
+): Promise<string> {
+  const helper = await queryOne<{ version: string; protocol_version: number; supported_capabilities: Array<{ id?: string; version?: number }> }>(
+    'select version, protocol_version, supported_capabilities from helpers where id = $1 and user_id = $2',
     [helperId, userId],
   );
   const error = capabilityNegotiationError({
@@ -184,6 +192,7 @@ export async function assertHelperSupports(
     capabilityVersion,
   });
   if (error) throw new Error(error);
+  return helper?.version ?? '';
 }
 
 async function assertLearnerPage(

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Check, LoaderCircle, Play, Square, RefreshCw, Pause } from 'lucide-react';
-import { decideGuidedFlow, learnerQuestion, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab, type GuidedDetection } from '@/lib/guided-flow';
+import { decideGuidedFlow, learnerQuestion, learnerStopMessage, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab, type GuidedDetection, type GuidedLearningMode } from '@/lib/guided-flow';
 import { learnerActivityUpdates } from '@/lib/learner-activity';
 import { OBJECTIVE_LIMIT } from '@/lib/operations-client-state';
 import { readJsonResponse } from '@/lib/operations-readiness';
@@ -13,6 +13,7 @@ type Session = { id: string; revision: number; tabs: Tab[]; cdp_connected: boole
 type Context = { helper: { id: string; is_online: boolean; version: string } | null; session?: Session | null; learnerEnabled?: boolean; activeJob?: { id: string; status: string; capability_id?: string } | null };
 type Job = { id: string; status: string; outcome?: { verified?: boolean; status?: string }; result?: { ok?: boolean; result?: { detection?: GuidedDetection } } };
 type Question = { question: string; options?: string[]; next?: string; model?: boolean; targetId?: string; sessionId?: string; url?: string };
+type CourseMode = GuidedLearningMode | 'quick';
 type RememberedTurn = { role: 'user' | 'assistant'; text: string; url?: string; guidance?: boolean };
 type CourseMemory = { browserSessionId?: string; id: string | null; objective: string | null; history: RememberedTurn[] };
 function rememberedQuestion(memory: CourseMemory | null) {
@@ -67,7 +68,7 @@ export function GuidedRunner(props: {
   const [customReply, setCustomReply] = useState(false);
   const [settingsNeeded, setSettingsNeeded] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
-  const [mode, setMode] = useState<'read' | 'quiz' | 'quick'>('read');
+  const [mode, setMode] = useState<CourseMode>('read');
   const [suppressRestoredQuestion, setSuppressRestoredQuestion] = useState(Boolean(props.freshTask));
   const [objective, setObjective] = useState('Read all relevant material in the selected course and retain it for later questions.');
   const [memory, setMemory] = useState<CourseMemory | null>(null);
@@ -187,9 +188,16 @@ export function GuidedRunner(props: {
     priorPage.current = props.selectedTarget;
     if (busy) return;
     if (changedPage) clearPageQuestion();
-    if (!objectiveEdited.current) setObjective((mode === 'quiz'
-      ? `Use retained course material to answer and submit the quiz on ${selected?.title || 'the selected page'}, then inspect the result.`
-      : `Read all relevant material on ${selected?.title || 'the selected course page'}, follow its topics and panels, and retain it for later questions.`).slice(0, OBJECTIVE_LIMIT));
+    if (!objectiveEdited.current) {
+      const title = selected?.title || 'the selected course page';
+      const goals: Record<GuidedLearningMode, string> = {
+        read: `Read all relevant material on ${title}, follow its topics and panels, and retain it for later questions.`,
+        quiz: `Use retained course material to answer and submit the quiz on ${title}, then inspect the result.`,
+        'read-and-assess': `Read and retain the relevant material on ${title}. Use it to answer assessment questions as they appear. Submit the assessment and check the result.`,
+        coordinate: `Read the relevant material on ${title}, answer the assessment questions, and verify the visible results. Ask the connected Codex chat for guidance if progress is blocked.`,
+      };
+      setObjective(goals[mode === 'quick' ? 'read' : mode].slice(0, OBJECTIVE_LIMIT));
+    }
   }, [mode, props.selectedTarget, selected?.url, selected?.title, busy]);
 
   async function api<T>(url: string, body?: unknown, method?: string): Promise<T> {
@@ -211,9 +219,15 @@ export function GuidedRunner(props: {
 
   async function queue(capabilityId: string, target?: Record<string, unknown>, guidance?: string) {
     checkStopped();
+    const learnerInput = {
+      mode: mode === 'quick' || mode === 'read' ? 'read' : 'quiz',
+      ...(mode === 'read-and-assess' || mode === 'coordinate' ? { intent: mode } : {}),
+      objective,
+      ...(currentMemory?.id ? { conversationId: currentMemory.id } : {}),
+    };
     const planned = await api<{ plan?: { planId: string }; jobId?: string; waitingForJob?: boolean }>('/api/operations/actions', {
       action: 'plan', helperId: props.helperId, capabilityId,
-      capabilityInput: { capabilityId, ...(target ? { target } : {}), ...(guidance ? { guidance } : {}), ...(capabilityId === 'quiz-learn' ? { mode, objective, ...(currentMemory?.id ? { conversationId: currentMemory.id } : {}) } : {}) },
+      capabilityInput: { capabilityId, ...(target ? { target } : {}), ...(guidance ? { guidance } : {}), ...(capabilityId === 'quiz-learn' ? learnerInput : {}) },
       confirm: true, source: 'auto-detect',
     });
     let jobId = planned.jobId;
@@ -345,7 +359,7 @@ export function GuidedRunner(props: {
         setStage('The run needs attention');
         const providerProblem = /provider|learner.*(?:request|key|connection)|api key|quota|rate limit/i.test(result.output);
         setSettingsNeeded(providerProblem);
-        setMessage(providerProblem ? 'The AI connection did not complete a request. Test your provider in Settings, then try again.' : 'The run stopped without verified completion. You can inspect again after opening the intended question or resolving the issue shown in Advanced tools.');
+        setMessage(learnerStopMessage(result.output) ?? (providerProblem ? 'The AI connection did not complete a request. Test your provider in Settings, then try again.' : 'The run stopped without verified completion. You can inspect again after opening the intended question or resolving the issue shown in Advanced tools.'));
       }
     } catch (error) {
       if (mounted.current && generation === runGeneration.current) { if (question) { setQuestion(question); setReplyError(error instanceof Error ? error.message : 'Could not continue. Your reply has been kept.'); } setStage(stopped.current ? 'Stopped' : 'Your input is needed'); setMessage(error instanceof Error ? error.message : 'The run could not continue. Inspect again.'); }
@@ -428,6 +442,8 @@ export function GuidedRunner(props: {
   const courseTabs = (session?.tabs||[]).filter(tab=>/^https?:\/\//.test(tab.url));
   const currentStep = !connected ? 0 : !selected ? 1 : !objective.trim() ? 2 : 3;
   const draftDisabled = busy || (props.active && !props.preparing) || props.paused || props.suspended;
+  const recordedStop = !props.finalized && !busy && props.lastJob?.status === 'failed' && props.lastJob.capability_id === 'quiz-learn'
+    && props.lastJob.id === props.outputJobId ? learnerStopMessage(props.lastOutput) : null;
 
   return <section className="overflow-hidden rounded-xl border border-slate-300 bg-white" aria-labelledby="guided-title">
     <div className="space-y-6 p-5 sm:p-7">
@@ -442,11 +458,12 @@ export function GuidedRunner(props: {
       {selected?<p className="break-all text-xs leading-5 text-slate-500">{new URL(selected.url).origin}</p>:<p className="text-xs leading-5 text-slate-600">{connected&&courseTabs.length===0?'No course page is open yet. Enter its URL above.':'Only website tabs are shown. If your course is missing, open it in the Vitriol browser and refresh.'}</p>}
       {props.refreshError?<p role="alert" className="text-sm text-rose-800">{props.refreshError}</p>:null}
     </div>
-    <div hidden={!selected || courseTabs.length===0} className="space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={draftDisabled} onChange={event => { setMode(event.target.value as 'read' | 'quiz' | 'quick'); clearPageQuestion(); }} className="min-h-12 rounded-md border border-slate-300 bg-white px-3 font-normal"><option value="read">Read course material</option><option value="quiz">Take the quiz</option><option value="quick">Quick scrape</option></select></label>
+    <div hidden={!selected || courseTabs.length===0} className="space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={draftDisabled} onChange={event => { setMode(event.target.value as CourseMode); clearPageQuestion(); }} className="min-h-12 rounded-md border border-slate-300 bg-white px-3 font-normal"><option value="read">Read course material</option><option value="quiz">Take the quiz</option><option value="read-and-assess">Read material and pass assessment questions</option><option value="coordinate">Co-ordinate with ChatGPT</option><option value="quick">Quick scrape</option></select></label>
+      {mode === 'coordinate' ? <p className="text-sm text-slate-600">Reads material and can submit assessment answers. Vitriol asks the Codex chat connected to your Windows helper when it needs guidance.</p> : null}
       {mode === 'quick' ? <p className="text-sm text-slate-600">Record the selected course window as you click through slides and open panels. The helper saves a replay and transcript on this PC and retains page text for later questions.</p> : null}
     <label hidden={mode === 'quick'} className={mode === 'quick' ? 'hidden' : 'grid gap-2 text-sm font-semibold text-slate-800'}>What would you like to achieve?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setObjective(event.target.value.slice(0, OBJECTIVE_LIMIT)); }} disabled={draftDisabled} maxLength={OBJECTIVE_LIMIT} rows={3} placeholder="For example: read this module, then help me with its quiz." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6 focus-visible:outline-2 focus-visible:outline-cyan-700" /><span className="text-xs font-normal text-slate-600">Collected course material stays available across pages. Check your goal when changing pages.</span></label></div>
     </div>
-    {!question ? <div role="status" aria-live="polite" className="border-t border-slate-200 pt-5"><p className="font-semibold text-slate-950">{props.paused?'Waiting for your session to resume':props.refreshing?'Updating your course tabs':stage}</p><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{props.paused?'Use Resume session above. Your goal, replies and browser tabs are kept.':!connected?'Connect the helper and browser to continue.':!selected?'Choose your course tab above. Vitriol will read the page and explain the next step.':message}</p></div> : null}
+    {!question ? <div role="status" aria-live="polite" className="border-t border-slate-200 pt-5"><p className="font-semibold text-slate-950">{props.paused?'Waiting for your session to resume':recordedStop?'The run needs attention':props.refreshing?'Updating your course tabs':stage}</p><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{props.paused?'Use Resume session above. Your goal, replies and browser tabs are kept.':recordedStop || (!connected?'Connect the helper and browser to continue.':!selected?'Choose your course tab above. Vitriol will read the page and explain the next step.':message)}</p></div> : null}
     {savedRecording?.folder ? <section className="space-y-1 text-sm"><strong>Quick scrape saved</strong><p>{savedRecording.pages} page observations · {savedRecording.frames} frames. Open the recording folder on this PC for the replay and transcript.</p><p className="break-all select-all">{savedRecording.folder}</p></section> : null}
     {progress.length > 0 && (busy || jobRunning) ? <section className="rounded-md border border-slate-200 bg-slate-50 p-4" aria-labelledby="live-activity-title">
       <h3 id="live-activity-title" className="text-sm font-semibold text-slate-950">Live activity</h3>
@@ -483,7 +500,7 @@ export function GuidedRunner(props: {
       {guidanceError ? <p role="alert" className="text-sm text-amber-950">{guidanceError}</p> : null}
     </div> : null}
     {currentMemory?.history.some((turn) => conversationText(turn)) ? <details className="rounded-md border border-slate-200 bg-slate-50 p-4"><summary className="cursor-pointer text-sm font-semibold text-slate-700">Conversation remembered for this course</summary><ol className="mt-4 space-y-3">{currentMemory.history.map((turn, index) => { const text = conversationText(turn); return text ? <li key={index} className="text-sm leading-6 text-slate-700"><span className="font-semibold">{turn.role === 'user' ? 'You' : 'AI assistant'}: </span>{text}</li> : null; })}</ol></details> : null}
-    <p className="max-w-2xl text-xs leading-5 text-slate-600">Vitriol reads and navigates the selected course and asks when it needs your help. Read course material collects information. Take the quiz can answer and submit the selected quiz, then checks the visible result. Keep this page open for automatic follow-up steps.</p>
+    <p className="max-w-2xl text-xs leading-5 text-slate-600">Vitriol can answer and submit questions in the assessment modes, then checks the visible result. Keep this page open for automatic follow-up steps.</p>
     </div><footer className="border-t border-slate-200 bg-slate-50 px-5 py-4 text-xs leading-5 text-slate-600 sm:px-7">Tabs update automatically when the browser is free. After 30 minutes without input on this page, Vitriol pauses the session and keeps your place. You will get a warning before it pauses.</footer>
   </section>;
 }

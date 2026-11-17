@@ -1,7 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
-import { PROTOCOL_VERSION, classifyOutcome, getCapability } from '@quiztaker/core';
+import { PROTOCOL_VERSION, classifyOutcome, getCapability, type LearnerSnapshot } from '@quiztaker/core';
 import { ControlPlaneClient } from './client.js';
 import { replayBeforeHeartbeat } from './reporting.js';
 import { acquireInstanceLock } from './instance-lock.js';
@@ -25,6 +25,7 @@ import { HELPER_VERSION } from './version.js';
 import { helperUpdateError, helperUpdateProgress, installHelperUpdate, isNewerVersion, reconcileHelperUpdate, type HelperUpdatePhase } from './updater.js';
 import { minimizeHelperWindow, shouldAutoMinimize } from './windows.js';
 import { HelperTerminal } from './terminal-ui.js';
+import { askCoordinator, coordinateDecision } from './coordination.js';
 
 let isStopping = false;
 let hasAnnouncedOnline = false;
@@ -151,6 +152,7 @@ async function main(): Promise<void> {
         if (envelope) {
           const jobId = envelope.payload.jobId;
           const capability = envelope.payload.capabilityId;
+          const coordinated = capability === 'quiz-learn' && envelope.payload.input?.mode === 'quiz' && envelope.payload.input.intent === 'coordinate';
           // Automatic tab refreshes are routine housekeeping.
           const action = capability === 'list-tabs' ? null
             : capability === 'start-browser' ? 'Start course browser'
@@ -163,7 +165,15 @@ async function main(): Promise<void> {
             client.deviceSecret,
             (event) => client.sendEvent(jobId, event),
             {
-              proposeLearnerStep: (snapshot) => client.proposeLearnerStep(jobId, snapshot),
+              proposeLearnerStep: (snapshot) => coordinated
+                ? coordinateDecision(
+                    view => client.proposeLearnerStep(jobId, view),
+                    (view, reason) => askCoordinator(getHelperHome(), jobId, view, reason, 70_000,
+                      () => isStopping || runningJob?.jobId !== jobId || runningJob.cancelRequested,
+                      () => terminal?.activity('Waiting for guidance from the connected Codex chat…')),
+                    snapshot as LearnerSnapshot,
+                  )
+                : client.proposeLearnerStep(jobId, snapshot),
               isCancellationRequested: () => client.isCancellationRequested(jobId),
             },
           );

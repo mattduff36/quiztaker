@@ -124,6 +124,7 @@ export function startJob(
       ...process.env,
       ...(selectedCapture ? { VITRIOL_CAPTURE_TARGET: selectedCapture.url } : {}),
       VITRIOL_LEARNER_MODE: capability.id === 'quiz-learn' ? parseLearnerMode(envelope.payload.input?.mode) : 'read',
+      VITRIOL_COORDINATE: capability.id === 'quiz-learn' && envelope.payload.input?.mode === 'quiz' && envelope.payload.input.intent === 'coordinate' ? '1' : '',
       QUIZTAKER_HOME: getHelperHome(),
       CDP_PROFILE_DIR: join(getHelperHome(), 'chrome-profile'),
       SABA_ATTEMPT_DIR: join(getHelperHome(), 'data', 'attempts'),

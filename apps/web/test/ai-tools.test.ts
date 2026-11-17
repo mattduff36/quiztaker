@@ -3,8 +3,17 @@ import test from 'node:test';
 import { calculate, executeServerTool, isPublicAddress, searchCourseMaterial, validatePublicUrl } from '../src/lib/ai-tools.js';
 import { completeHostedChat } from '../src/lib/llm-provider.js';
 import { snapshotInput } from '../src/lib/ai-responses.js';
-import { boundLearnerSnapshot } from '../src/lib/learner.js';
+import { boundLearnerSnapshot, learnerSystemPrompt } from '../src/lib/learner.js';
 import { aiToolCatalog } from '../src/lib/ai-tool-catalog.js';
+
+test('the combined prompt reads material, answers inline questions and continues into the assessment', () => {
+  const combined = learnerSystemPrompt({ mode: 'quiz', intent: 'read-and-assess' });
+  assert.match(combined, /Read and retain the relevant lessons and panels before opening the final assessment/);
+  assert.match(combined, /inline questions when they appear, then continue reading/);
+  assert.match(combined, /only real pass evidence is completion/);
+  assert.doesNotMatch(learnerSystemPrompt({ mode: 'quiz' }), /inline questions when they appear/);
+  assert.match(learnerSystemPrompt({ mode: 'read' }), /Do not submit an assessment/);
+});
 
 test('arithmetic parser handles precedence and rejects executable and unbounded input', async () => {
   assert.equal(calculate('(24+6)*3/2'),45); assert.equal(calculate('2**3**2'),512); assert.equal(calculate('1e2+0.5'),100.5);

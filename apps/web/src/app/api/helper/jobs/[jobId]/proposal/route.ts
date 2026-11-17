@@ -67,8 +67,8 @@ export async function POST(
     cancel_requested: boolean;
     capability_id: string;
     attempt_id: string;
-    constraints: { mode?: unknown; maxSteps?: number; submissionAuthorized?: boolean } | null;
-    input: { mode?: unknown; guidance?: unknown; conversationId?: unknown } | null;
+    constraints: { mode?: unknown; intent?: unknown; maxSteps?: number; submissionAuthorized?: boolean } | null;
+    input: { mode?: unknown; intent?: unknown; guidance?: unknown; conversationId?: unknown } | null;
     browser_session_id: string | null;
   }>(
     `select jobs.status, jobs.cancel_requested, jobs.capability_id, plans.attempt_id, plans.constraints, plans.input,

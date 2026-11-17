@@ -235,6 +235,36 @@ try{
     await page.close();
   }
   console.log('PASS browser close progress clears after success and reports failure.');
+  for (const [label, intent, goal] of [
+    ['Read material and pass assessment questions', 'read-and-assess', /Read and retain.*answer assessment questions/],
+    ['Co-ordinate with ChatGPT', 'coordinate', /Read the relevant material.*connected Codex chat/],
+  ]) {
+    const page = await browser.newPage();
+    const fixture = state();
+    fixture.helperVersion = '1.0.32';
+    let learnerInput;
+    await page.route('**/api/**', async route => {
+      const req = route.request();
+      const path = new URL(req.url()).pathname;
+      const body = req.postDataJSON() || {};
+      if (path === '/api/operations/actions' && body.capabilityId === 'quiz-learn') {
+        learnerInput = body.capabilityInput;
+      }
+      const { __status, ...json } = reply(path, req.method(), body, Date.now(), fixture);
+      await route.fulfill({ status: __status || 200, json });
+    });
+    await page.goto(url);
+    await page.getByRole('combobox', { name: 'Course tab', exact: true }).selectOption('course');
+    const activity = page.getByRole('combobox', { name: 'Course activity', exact: true });
+    await expect(activity).toHaveValue('read');
+    await activity.selectOption({ label });
+    await expect(page.getByRole('textbox', { name: /What would you like to achieve/ })).toHaveValue(goal);
+    await page.getByRole('button', { name: 'Inspect and start', exact: true }).click();
+    await expect.poll(() => learnerInput).toMatchObject({ mode: 'quiz', intent });
+    await expect(page.getByText(/Completion verified/)).toBeVisible();
+    await page.close();
+  }
+  console.log('PASS combined and coordinated modes pass explicit assessment intent to the learner.');
   for(const transition of ['navigate', 'stop', 'new-task']) {
     const page=await browser.newPage();const fixture=state();fixture.paused=true;
     let release;const held=new Promise(done=>{release=done;});let queued=0,deletes=0;
