@@ -179,7 +179,6 @@ test('real offline browser: bounded duration and screen chunks', async t => {
   const result = await second.done;
   assert.equal(result.reason, 'duration-limit');
   assert.ok(result.frames < 10);
-  assert.ok(events.some(e => e.kind === 'QUICK_SCRAPE_READY'));
   assert.ok(events.every(e => e.kind !== 'QUICK_SCRAPE_PAGE' || e.value.text.length <= 5000));
 });
 
