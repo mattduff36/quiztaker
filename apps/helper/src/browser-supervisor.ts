@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { createConnection } from 'node:net';
 import { join, resolve } from 'node:path';
 import { ensureHelperDirectories, getAutomationRoot, getHelperHome } from './config.js';
 import { rotateBrowserSession } from './browser-session.js';
@@ -27,17 +28,24 @@ export async function ensureBrowser(): Promise<{ connected: boolean; pid?: numbe
   child.unref();
   writeState({ pid: child.pid, port: cdpPort() });
   rotateBrowserSession();
-  const connected = await waitForCdp();
+  const connected = await waitForCdpState(true);
   return { connected, pid: child.pid };
 }
 
 export async function closeOwnedBrowser(): Promise<{ closed: boolean }> {
   const state = readState();
-  if (state.pid) killTree(state.pid);
+  // Give Chrome time to save the profile and exit before stopping its launcher.
   await runCloseScript();
-  writeState({ port: cdpPort() });
-  rotateBrowserSession();
-  return { closed: !(await cdpReady()) };
+  let closed = await waitForCdpState(false, 10);
+  if (!closed && state.pid && state.port === cdpPort()) {
+    killTree(state.pid);
+    closed = await waitForCdpState(false, 10);
+  }
+  if (closed) {
+    writeState({ port: cdpPort() });
+    rotateBrowserSession();
+  }
+  return { closed };
 }
 
 export function killTree(pid: number): void {
@@ -58,28 +66,40 @@ async function runCloseScript(): Promise<void> {
     const child = spawn(process.env.QUIZTAKER_NODE_PATH || process.execPath, [script], {
       cwd: getAutomationRoot(),
       windowsHide: true,
+      env: { ...process.env, PLAYWRIGHT_CDP_URL: `http://127.0.0.1:${cdpPort()}` },
     });
     const timer = setTimeout(() => {
-      killTree(child.pid || 0);
+      if (child.pid) killTree(child.pid);
       resolvePromise();
     }, 8_000);
-    child.on('close', () => {
+    const finish = () => {
       clearTimeout(timer);
       resolvePromise();
-    });
-    child.on('error', () => {
-      clearTimeout(timer);
-      resolvePromise();
-    });
+    };
+    child.once('close', finish);
+    child.once('error', finish);
   });
 }
 
-async function waitForCdp(): Promise<boolean> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (await cdpReady()) return true;
+async function waitForCdpState(connected: boolean, attempts = 20): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (connected ? await cdpReady() : !(await browserPortOpen())) return true;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
   }
   return false;
+}
+
+function browserPortOpen(): Promise<boolean> {
+  return new Promise((resolvePromise) => {
+    const socket = createConnection({ host: '127.0.0.1', port: cdpPort() });
+    const finish = (open: boolean) => {
+      socket.destroy();
+      resolvePromise(open);
+    };
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+    socket.setTimeout(1500, () => finish(false));
+  });
 }
 
 export function cdpReady(): Promise<boolean> {

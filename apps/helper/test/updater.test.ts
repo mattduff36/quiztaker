@@ -75,8 +75,7 @@ test('quotes Windows short paths and rejects command metacharacters', () => {
 
 test('the installer script waits for this process and does not embed a download URL', () => {
   const script = createApplyScript();
-  assert.match(script, /msiexec\.exe/);
-  assert.match(script, /\/qn \/norestart/);
+  assert.match(script, /msiexec\.exe" \/i "%MSI%" \/passive \/norestart/);
   assert.match(script, /set "ARG=--control-plane-url=%CONTROL%"/);
   assert.match(script, /if \/I "%CONTROL%"=="https:\/\/www\.vitriol\.co\.uk" set "ARG=--production"/);
   assert.match(script, /start "" \/D "%DIR%" cmd\.exe \/d \/s \/c ""%LAUNCHER%" %ARG%"/);

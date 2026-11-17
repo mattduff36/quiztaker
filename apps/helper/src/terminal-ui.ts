@@ -68,8 +68,11 @@ export async function responseLogPayload(response: Response, maxBytes = 192_000,
   return { type, bytes: size, truncated, body: sanitizeLogValue(body) };
 }
 
-export interface TerminalStatus { version: string; device: string; connection: string; job: string; updatePhase: string; lastHttp: string; sent: number; received: number }
-interface TerminalOutput { isTTY?: boolean; rows?: number; columns?: number; write(value: string): unknown; on?(event: string, listener: () => void): unknown; off?(event: string, listener: () => void): unknown }
+type ActivityTone = 'info' | 'ready' | 'warning';
+type ConnectionState = 'connecting' | 'online' | 'reconnecting' | 'stopping';
+interface TerminalOutput { isTTY?: boolean; write(value: string): unknown }
+
+const activityColors: Record<ActivityTone, string> = { info: '\x1b[36m', ready: '\x1b[32m', warning: '\x1b[33m' };
 
 export class HelperTerminal {
   private readonly output: TerminalOutput;
@@ -78,34 +81,27 @@ export class HelperTerminal {
   private readonly maxFiles: number;
   private closed = false;
   private fileFailed = false;
-  private status: TerminalStatus;
-  private readonly resize = () => this.prepareScreen();
-  constructor(options: { helperHome: string; version: string; device: string; output?: TerminalOutput; maxFileBytes?: number; maxFiles?: number }) {
+  private connection: ConnectionState = 'connecting';
+  constructor(options: { helperHome: string; version: string; output?: TerminalOutput; maxFileBytes?: number; maxFiles?: number }) {
     this.output = options.output || process.stdout;
     this.maxFileBytes = options.maxFileBytes || 5 * 1024 * 1024;
     this.maxFiles = Math.max(1, Math.min(5, options.maxFiles || 3));
     this.file = join(options.helperHome, 'logs', 'helper-live.jsonl');
-    this.status = { version: options.version, device: options.device, connection: 'connecting', job: '', updatePhase: '', lastHttp: 'none', sent: 0, received: 0 };
     try { mkdirSync(join(options.helperHome, 'logs'), { recursive: true }); } catch { this.fileFailed = true; }
-    if (this.output.isTTY) { this.output.on?.('resize', this.resize); this.prepareScreen(); }
-    else this.drawStatus();
+    this.activity(`Vitriol Helper ${options.version} · Connecting…`);
+    if (this.fileFailed) this.activity('Diagnostic log could not be opened.', 'warning');
   }
-  setStatus(patch: Partial<TerminalStatus>): void { this.status = { ...this.status, ...patch }; this.drawStatus(); }
-  private prepareScreen(): void {
-    if (this.closed || !this.output.isTTY) return;
-    const rows = Math.max(8, this.output.rows || 24);
-    this.output.write(`\x1b[r\x1b[2J\x1b[4;${rows}r\x1b[4;1H`);
-    this.drawStatus();
+  setConnection(connection: ConnectionState): void {
+    if (this.connection === connection) return;
+    this.connection = connection;
+    if (connection === 'online') this.activity('Ready · Connected to Vitriol.', 'ready');
+    else if (connection === 'reconnecting') this.activity('Connection interrupted · Retrying…', 'warning');
+    else if (connection === 'stopping') this.activity('Stopping Vitriol Helper…');
   }
-  private drawStatus(): void {
+  activity(message: string, tone: ActivityTone = 'info'): void {
     if (this.closed) return;
-    const s = this.status;
-    const lines = [`Vitriol Helper ${s.version} | ${s.device} | ${s.connection}${s.job ? ' · busy' : ''}`,
-      `Job: ${s.job || 'none'} | Update: ${s.updatePhase || 'none'} | HTTP sent ${s.sent} / received ${s.received}`,
-      `Last HTTP: ${s.lastHttp} | ${new Date().toLocaleTimeString('en-GB', { timeZone: 'Europe/London' })}`].map(line => sanitizeLogText(line));
-    if (!this.output.isTTY) { this.output.write(`[status] ${lines.join(' | ')}\n`); return; }
-    const width = Math.max(20, (this.output.columns || 100) - 1);
-    this.output.write(`\x1b7${lines.map((line, index) => `\x1b[${index + 1};1H\x1b[2K${line.slice(0, width)}`).join('')}\x1b8`);
+    const line = sanitizeLogText(message).replace(/[\r\n]+/g, ' ').slice(0, 250);
+    this.output.write(this.output.isTTY ? `${activityColors[tone]}${line}\x1b[0m\n` : `${line}\n`);
   }
   log(kind: string, value: unknown): void {
     if (this.closed) return;
@@ -113,8 +109,6 @@ export class HelperTerminal {
     const record = { at: new Date().toISOString(), kind, data: safe };
     const json = JSON.stringify(record);
     const line = json.length > 256_000 ? `${JSON.stringify({ ...record, data: sanitizeLogText(json.slice(0, 240_000)), truncated: true })}\n` : `${json}\n`;
-    const display = typeof safe === 'string' ? safe : JSON.stringify(safe);
-    this.output.write(`${record.at} ${kind} ${display.length > 240_000 ? `${display.slice(0, 240_000)} [truncated]` : display}\n`);
     if (this.fileFailed) return;
     try {
       if (existsSync(this.file) && statSync(this.file).size + Buffer.byteLength(line) > this.maxFileBytes) {
@@ -127,19 +121,15 @@ export class HelperTerminal {
         }
       }
       appendFileSync(this.file, line, 'utf8');
-    } catch { this.fileFailed = true; this.output.write('Helper log file unavailable; terminal output continues.\n'); }
+    } catch { this.fileFailed = true; this.activity('Diagnostic log could not be written.', 'warning'); }
   }
   sent(method: string, path: string, body: BodyInit | null | undefined): void {
     let value: unknown = body;
     if (typeof body === 'string') { try { value = JSON.parse(body); } catch { /* Text body. */ } }
     else if (body instanceof FormData) value = [...body.entries()].map(([name, entry]) => ({ name, ...(typeof entry === 'string' ? { text: entry } : { type: entry.type, bytes: entry.size, binary: true }) }));
-    this.status.sent += 1;
-    this.drawStatus();
     this.log('HTTP SEND', { method, path: path.split(/[?#]/)[0], body: value ?? null });
   }
   async received(method: string, path: string, response: Response, durationMs: number): Promise<void> {
-    this.status.received += 1;
-    this.setStatus({ connection: response.ok ? 'online' : 'reconnecting', lastHttp: `${method} ${path.split(/[?#]/)[0]} → ${response.status} (${durationMs}ms)` });
     this.log('HTTP RECEIVE', { method, path: path.split(/[?#]/)[0], status: response.status, durationMs, payload: await responseLogPayload(response) });
   }
   installConsole(): () => void {
@@ -149,9 +139,6 @@ export class HelperTerminal {
     return () => { for (const [method, implementation] of original) console[method] = implementation; };
   }
   close(): void {
-    if (this.closed) return;
     this.closed = true;
-    this.output.off?.('resize', this.resize);
-    if (this.output.isTTY) this.output.write('\x1b[r\x1b[?25h\n');
   }
 }

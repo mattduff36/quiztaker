@@ -2,14 +2,12 @@
 
 ## Course coverage and update progress
 
-The helper now stays visible by default. Its TTY header shows connection, current
-job, update phase and HTTP counters above a scrolling sanitized traffic log;
-non-TTY output uses plain text. `--minimize` opts into the previous minimize-after-
-connection behavior. Request/response text is bounded and redacts credentials,
-signatures, cookies and URL session queries; binary uploads/images show type and
-size only. Local append-only JSONL logs rotate across three files of up to 5 MB
-under `%LOCALAPPDATA%\QuizTaker Helper\logs`; do not share these logs publicly,
-because ordinary course content and guidance remain visible as requested.
+The helper stays visible by default and shows one line when work starts or ends,
+the connection changes, or an update advances. `--minimize` minimizes it after
+connection. Detailed diagnostics go to rotating files under
+`%LOCALAPPDATA%\QuizTaker Helper\logs`. They redact credentials, signatures,
+cookies and URL session queries. Course content and guidance can appear in
+these files, so keep them private.
 
 Apply `0011_helper_update_progress.sql` before deploying the progress interface.
 It adds nullable `helpers.update_phase`, `update_phase_version` and
@@ -190,9 +188,10 @@ Vitriol Helper WiX MSI, packages the MSI and instructions in
 and attaches the ZIP, the MSI, checksums, and the SBOM to a GitHub Release.
 The Operations page shows **Update helper** when the paired helper is still on
 protocol 1 or behind that release. Helpers from v1.0.5 download the release,
-check its SHA-256, install the per-user MSI, and restart. Older helpers cannot
-apply an update themselves; the same button downloads the MSI, or the ZIP when
-a release has no separate installer. Pairing data under
+check its SHA-256, install the per-user MSI, and restart. Starting with v1.0.31,
+the installed helper shows the Windows Installer progress bar during updates.
+For older helpers without self-update, the same button downloads the MSI or ZIP.
+Pairing data under
 `%LOCALAPPDATA%\QuizTaker Helper\` is kept. Before announcing the release,
 confirm the authenticated Download page shows the version and checksum, then
 install, pair, heartbeat, and poll one job from a Windows 10/11 x64 session.

@@ -1,7 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
-import { PROTOCOL_VERSION, classifyOutcome } from '@quiztaker/core';
+import { PROTOCOL_VERSION, classifyOutcome, getCapability } from '@quiztaker/core';
 import { ControlPlaneClient } from './client.js';
 import { replayBeforeHeartbeat } from './reporting.js';
 import { acquireInstanceLock } from './instance-lock.js';
@@ -28,7 +28,7 @@ import { HelperTerminal } from './terminal-ui.js';
 
 let isStopping = false;
 let hasAnnouncedOnline = false;
-let runningJob: { jobId: string; run: RunningJob } | null = null;
+let runningJob: { jobId: string; run: RunningJob; cancelRequested: boolean } | null = null;
 let nextSyncAt = 0;
 let nextStrategyPullAt = 0;
 let nextReleaseCheckAt = 0;
@@ -46,6 +46,12 @@ async function main(): Promise<void> {
   const legacyMigration = migrateLegacyConfig();
   const importArg = process.argv.find((value) => value.startsWith('--import-data='));
   migrateLegacyLocalData(importArg?.slice('--import-data='.length));
+  const savedConfig = readConfig(launch.controlPlaneUrl);
+  const shouldPair = args.includes('--pair') || Boolean(launch.pairing);
+  const config = shouldPair || !savedConfig ? await pairInteractively(args) : savedConfig;
+
+  terminal = new HelperTerminal({ helperHome: getHelperHome(), version: HELPER_VERSION });
+  restoreConsole = terminal.installConsole();
   console.log(`Launch target: ${describeControlPlane(launch.controlPlaneUrl)}`);
   if (
     legacyMigration.controlPlaneUrl
@@ -57,12 +63,6 @@ async function main(): Promise<void> {
     );
   }
 
-  const savedConfig = readConfig(launch.controlPlaneUrl);
-  const shouldPair = args.includes('--pair') || Boolean(launch.pairing);
-  const config = shouldPair || !savedConfig ? await pairInteractively(args) : savedConfig;
-
-  terminal = new HelperTerminal({ helperHome: getHelperHome(), version: HELPER_VERSION, device: config.deviceName });
-  restoreConsole = terminal.installConsole();
   const client = new ControlPlaneClient(config, terminal);
   console.log(`Vitriol Helper ${HELPER_VERSION} (protocol ${PROTOCOL_VERSION})`);
   console.log(`Device: ${config.deviceName} (${config.helperId})`);
@@ -78,19 +78,26 @@ async function main(): Promise<void> {
         updateError: await helperUpdateError(getHelperHome()),
         ...await helperUpdateProgress(getHelperHome()),
       });
+      if (!isStopping) terminal.setConnection('online');
       if (heartbeat.update && !runningJob && !isStopping) {
-        let phase: HelperUpdatePhase = 'preparing';
+        let phase: HelperUpdatePhase | null = null;
+        const updateLines: Record<HelperUpdatePhase, string> = {
+          preparing: 'Preparing the helper update…',
+          downloading: 'Downloading the helper update…',
+          installing: 'Installing the helper update…',
+          failed: 'Helper update failed. See Operations.',
+        };
         let reporting: Promise<unknown> | null = null;
         const reportPhase = async (next: HelperUpdatePhase) => {
+          if (phase !== next) terminal?.activity(updateLines[next], next === 'failed' ? 'warning' : 'info');
           phase = next;
-          terminal?.setStatus({ updatePhase: phase });
           if (reporting) await reporting.catch(() => undefined);
           reporting = client.heartbeat({ status: 'online', updatePhase: phase, updateVersion: heartbeat.update!.version,
             updateError: await helperUpdateError(getHelperHome()) });
           await reporting.catch(() => console.warn('Update progress could not be sent; the helper will retry.'));
           reporting = null;
         };
-        const progressTimer = setInterval(() => { if (!reporting) void reportPhase(phase); }, 5_000);
+        const progressTimer = setInterval(() => { if (phase && !reporting) void reportPhase(phase); }, 5_000);
         let outcome: Awaited<ReturnType<typeof installHelperUpdate>>;
         try { outcome = await installHelperUpdate({
           offer: heartbeat.update,
@@ -109,7 +116,7 @@ async function main(): Promise<void> {
       }
       if (!hasAnnouncedOnline) {
         hasAnnouncedOnline = true;
-        await announceOnline(config.controlPlaneUrl);
+        await minimizeAfterConnection();
       }
       if (Date.now() >= nextSyncAt) {
         await client.syncHistory({
@@ -134,6 +141,7 @@ async function main(): Promise<void> {
           console.log(`Helper update available: v${release.version}`);
           console.log('Choose Update helper on the Operations page, or download:');
           console.log(release.downloadUrl);
+          terminal.activity(`Helper update available · v${release.version}`);
         }
         nextReleaseCheckAt = Date.now() + 6 * 60 * 60_000;
       }
@@ -142,6 +150,13 @@ async function main(): Promise<void> {
         const envelope = await client.poll();
         if (envelope) {
           const jobId = envelope.payload.jobId;
+          const capability = envelope.payload.capabilityId;
+          // Automatic tab refreshes are routine housekeeping.
+          const action = capability === 'list-tabs' ? null
+            : capability === 'start-browser' ? 'Start course browser'
+              : capability === 'close-browser' ? 'Close course browser'
+                : capability === 'quiz-learn' ? 'Work on course'
+                  : getCapability(capability)?.label ?? 'Course task';
           const run = startJob(
             envelope,
             config.helperId,
@@ -152,9 +167,10 @@ async function main(): Promise<void> {
               isCancellationRequested: () => client.isCancellationRequested(jobId),
             },
           );
-          runningJob = { jobId, run };
-          terminal?.setStatus({ job: `${envelope.payload.capabilityId} ${jobId.slice(0, 8)}` });
-          void monitorCancellation(client, jobId, run);
+          const activeJob = { jobId, run, cancelRequested: false };
+          runningJob = activeJob;
+          if (action) terminal.activity(`Working · ${action}`);
+          void monitorCancellation(client, activeJob);
           void run.completion
             .then(async ({ code, output }) => {
               const outcome = classifyOutcome({ script: envelope.payload.script, code, output });
@@ -162,22 +178,31 @@ async function main(): Promise<void> {
                 const file = isAbsolute(artifact) ? artifact : resolve(getAutomationRoot(), artifact);
                 if (existsSync(file) && isAllowedArtifact(file)) await client.uploadArtifact(jobId, file);
               }
+              if (!action || isStopping) return;
+              if (outcome.status === 'needs-user-input') terminal?.activity('Waiting for your input in Operations.', 'warning');
+              else if (outcome.outcome === 'success') terminal?.activity(`Done · ${action}`, 'ready');
+              else if (outcome.outcome === 'cancelled' || activeJob.cancelRequested) terminal?.activity(`Stopped · ${action}`);
+              else terminal?.activity(`Needs attention · ${action}. See Operations.`, 'warning');
             })
-            .catch((error: unknown) => console.error('Job failed:', error))
+            .catch((error: unknown) => {
+              console.error('Job failed:', error);
+              if (action && !isStopping) terminal?.activity(`Needs attention · ${action}. See Operations.`, 'warning');
+            })
             .finally(() => {
               runningJob = null;
-              terminal?.setStatus({ job: '' });
             });
         }
       }
       await delay(runningJob ? 2_000 : 5_000);
     } catch (error) {
+      if (!isStopping) terminal.setConnection('reconnecting');
       const message = error instanceof Error ? error.message : String(error);
       console.error(
         new Date().toISOString(),
         `${describeControlPlane(config.controlPlaneUrl)}: ${message}`,
       );
       if (/Control plane returned 401/.test(message)) {
+        terminal.activity('Pairing expired. Open Local helper in Vitriol to reconnect.', 'warning');
         console.error(
           `This pairing is not authorized for ${config.controlPlaneUrl}. `
           + `Open ${config.controlPlaneUrl}/helper, generate a new code, and click "Launch Vitriol Helper".`,
@@ -201,30 +226,23 @@ async function main(): Promise<void> {
   releaseInstance?.();
 }
 
-async function announceOnline(controlPlaneUrl: string): Promise<void> {
-  console.log('');
-  console.log('Connected and online.');
-  console.log(`Open ${controlPlaneUrl} in your browser and continue to Operations.`);
-  console.log('Keep this helper running; close its window when you want it to go offline.');
-  if (!process.argv.includes('--minimize') || !shouldAutoMinimize()) {
-    console.log('The live helper status and traffic remain visible. Use --minimize to minimize after connection.');
-    return;
-  }
-  console.log('This window will minimize in 3 seconds.');
+async function minimizeAfterConnection(): Promise<void> {
+  if (!process.argv.includes('--minimize') || !shouldAutoMinimize()) return;
   await delay(3_000);
-  if (!minimizeHelperWindow()) console.log('Automatic minimize was unavailable; you can minimize this window manually.');
+  if (!minimizeHelperWindow()) terminal?.activity('Automatic minimize unavailable.', 'warning');
 }
 
 async function monitorCancellation(
   client: ControlPlaneClient,
-  jobId: string,
-  run: RunningJob,
+  job: NonNullable<typeof runningJob>,
 ): Promise<void> {
-  while (!isStopping && runningJob?.jobId === jobId) {
+  while (!isStopping && runningJob === job) {
     await delay(3_000);
+    if (isStopping || runningJob !== job) return;
     try {
-      if (await client.isCancellationRequested(jobId)) {
-        run.cancel();
+      if (await client.isCancellationRequested(job.jobId) && runningJob === job) {
+        job.cancelRequested = true;
+        job.run.cancel();
         return;
       }
     } catch {}
@@ -233,7 +251,7 @@ async function monitorCancellation(
 
 function stop(): void {
   isStopping = true;
-  terminal?.setStatus({ connection: 'stopping' });
+  terminal?.setConnection('stopping');
   runningJob?.run.cancel();
 }
 
@@ -256,6 +274,11 @@ process.once('exit', () => { restoreConsole?.(); terminal?.close(); });
 
 main().catch((error) => {
   releaseInstance?.();
-  console.error(error);
+  if (terminal) {
+    console.error(error);
+    terminal.activity('Helper stopped unexpectedly. See the diagnostic log.', 'warning');
+  } else {
+    console.error(error instanceof Error ? error.message : String(error));
+  }
   process.exitCode = 1;
 });

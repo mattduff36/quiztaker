@@ -48,29 +48,40 @@ test('response previews leave the caller body readable and omit binary content',
   assert.equal((large as { bytes: number }).bytes, 100);
 });
 
-test('plain output contains no ANSI and bounded append logs rotate without retaining secrets', () => {
+test('the console shows only activity and connection changes while diagnostics remain in rotating logs', async () => {
   const home = mkdtempSync(join(tmpdir(), 'vitriol-terminal-'));
   const written: string[] = [];
-  const terminal = new HelperTerminal({ helperHome: home, version: '1.0.21', device: 'Test PC', output: { isTTY: false, write: value => written.push(value) }, maxFileBytes: 1200, maxFiles: 3 });
-  terminal.setStatus({ connection: 'online', job: 'quiz-learn test', updatePhase: 'downloading' });
+  const terminal = new HelperTerminal({ helperHome: home, version: '1.0.31', output: { isTTY: false, write: value => written.push(value) }, maxFileBytes: 1200, maxFiles: 3 });
+  terminal.setConnection('online');
+  terminal.setConnection('online');
+  terminal.sent('POST', '/api/helper/heartbeat', '{"status":"online"}');
+  await terminal.received('POST', '/api/helper/heartbeat', new Response('{"debug":"private-detail"}', { headers: { 'content-type': 'application/json' } }), 10);
+  assert.match(readFileSync(join(home, 'logs', 'helper-live.jsonl'), 'utf8'), /private-detail/);
+  terminal.activity('Working · Work on course');
   for (let i = 0; i < 20; i += 1) terminal.log('TEST', { index: i, password: 'private-value', text: 'Ordinary material '.repeat(20) });
+  terminal.activity('Done · Work on course', 'ready');
   terminal.close();
-  assert.doesNotMatch(written.join(''), /\x1b|private-value/);
-  assert.match(written.join(''), /downloading|quiz-learn test/);
+  assert.deepEqual(written, [
+    'Vitriol Helper 1.0.31 · Connecting…\n',
+    'Ready · Connected to Vitriol.\n',
+    'Working · Work on course\n',
+    'Done · Work on course\n',
+  ]);
   const files = readdirSync(join(home, 'logs'));
   assert.equal(files.length, 3);
   for (const file of files) { assert.ok(statSync(join(home, 'logs', file)).size <= 1200); assert.doesNotMatch(readFileSync(join(home, 'logs', file), 'utf8'), /private-value/); }
 });
 
-test('TTY reserves three header rows, redraws on resize and restores the scroll region on close', () => {
+test('TTY colors each activity on one line without changing the scroll region', () => {
   const home = mkdtempSync(join(tmpdir(), 'vitriol-terminal-tty-'));
   const written: string[] = [];
-  let resize: (() => void) | undefined;
-  const terminal = new HelperTerminal({ helperHome: home, version: '1.0.21', device: 'Test PC', output: { isTTY: true, rows: 30, columns: 100, write: value => written.push(value), on: (_name, listener) => { resize = listener; }, off: () => { resize = undefined; } } });
-  assert.match(written.join(''), /\x1b\[4;30r/);
-  terminal.setStatus({ connection: 'online' });
-  resize?.();
+  const terminal = new HelperTerminal({ helperHome: home, version: '1.0.31', output: { isTTY: true, write: value => written.push(value) } });
+  terminal.setConnection('online');
+  terminal.setConnection('reconnecting');
   terminal.close();
-  assert.equal(resize, undefined);
-  assert.ok(written.at(-1)?.includes('\x1b[r'));
+  assert.deepEqual(written, [
+    '\x1b[36mVitriol Helper 1.0.31 · Connecting…\x1b[0m\n',
+    '\x1b[32mReady · Connected to Vitriol.\x1b[0m\n',
+    '\x1b[33mConnection interrupted · Retrying…\x1b[0m\n',
+  ]);
 });

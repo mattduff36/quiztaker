@@ -132,7 +132,7 @@ export function createApplyScript(): string {
     ')',
     ':install',
     'ping -n 3 127.0.0.1 >nul',
-    '"%SystemRoot%\\System32\\msiexec.exe" /i "%MSI%" /qn /norestart',
+    '"%SystemRoot%\\System32\\msiexec.exe" /i "%MSI%" /passive /norestart',
     'set "CODE=%ERRORLEVEL%"',
     '>"%RESULT%" echo %CODE%',
     ...createHelperRestartLines(),

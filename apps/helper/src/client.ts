@@ -147,7 +147,6 @@ export class ControlPlaneClient {
     }
     return response;
     } catch (error) {
-      this.terminal?.setStatus({ connection: 'reconnecting', lastHttp: `${method} ${path.split(/[?#]/)[0]} failed (${Date.now() - started}ms)` });
       this.terminal?.log('HTTP ERROR', error);
       throw error;
     }
