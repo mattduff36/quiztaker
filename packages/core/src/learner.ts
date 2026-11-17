@@ -30,6 +30,7 @@ export interface LearnerControl {
   name: string;
   kind?: 'content' | 'navigation' | 'quiz-navigation' | 'submission';
   checked?: boolean;
+  selection?: { value: string; answered: boolean };
 }
 
 export interface LearnerSnapshot {
@@ -43,8 +44,10 @@ export interface LearnerSnapshot {
   tabs?: Array<{id: string; name: string; url: string}>;
   /** Operator resume note. At most 2000 characters. */
   guidance?: string;
-  /** Explicitly requested screenshot, a bounded JPEG data URL. */
+  /** Bounded current-course JPEG; quiz mode captures each fresh question. */
   image?: string;
+  question?: { id: string; number: number; total: number; stem: string };
+  imageIdentity?: { id: string; questionId?: string };
   /** Observed course headings; inventory is not evidence of reading. */
   outlines?: Array<{ url: string; title: string; topics: string[] }>;
 }
@@ -88,6 +91,9 @@ export function storedLearnerPolicy(input: { mode?: unknown; intent?: unknown } 
 const unsafeLabel = /\b(log\s*out|sign\s*out|sign\s*in|log\s*in|password|account|payment|purchase|buy|delete|remove|unsubscribe|exit|close browser)\b/i;
 export function learnerControlAllowed(target: LearnerControl, policy: LearnerPolicy = { mode: 'read' }): boolean {
   const label = target.name.trim();
+  // These IDs are assigned only to observed Saba matching controls/options.
+  // Repair answer text can legitimately contain words such as "Remove".
+  if (/^m\d+$/.test(target.id) && target.kind === 'quiz-navigation') return Boolean(label) && policy.mode === 'quiz';
   if (!label || unsafeLabel.test(label)) return false;
   if (assessmentStartLabel.test(label)) return policy.mode === 'quiz';
   if (target.kind === 'submission' || submitLabel.test(label)) return policy.mode === 'quiz';
@@ -135,7 +141,11 @@ export function parseLearnerAction(
     if (name === 'click' && !learnerControlAllowed(target, policy)) return { ok: false, error: 'Learner cannot submit the quiz or use this control in the selected mode' };
     if (name === 'answer-select' && target.checked === true) return {ok:false,error:'This answer is already selected. Inspect checked states and choose Next or a different answer.'};
     const radios = (snapshot.choices ?? []).filter(choice => /^c\d+$/.test(choice.id));
-    if (name === 'click' && policy.mode === 'quiz' && /^next(?: page| slide)?[ »›→]*$/i.test(target.name.trim())
+    if (name === 'click' && policy.mode === 'quiz' && /^(?:(?:go to )?next(?: question| page| slide)?[ »›→]*|submit|finish|end test)$/i.test(target.name.trim())
+      && snapshot.buttons?.some(control => control.selection?.answered === false)) {
+      return {ok:false,error:'Select a value for every matching field before continuing.'};
+    }
+    if (name === 'click' && policy.mode === 'quiz' && /^(?:go to )?next(?: question| page| slide)?[ »›→]*$/i.test(target.name.trim())
       && /\bQuestion\s+\d+\s+of\s+\d+\b/i.test(snapshot.text ?? '') && radios.length > 0 && radios.every(choice => choice.checked === false)) {
       return {ok:false,error:'Select an answer on this question before choosing Next.'};
     }

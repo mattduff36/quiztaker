@@ -641,3 +641,10 @@ a category alone does not identify the correct answer.
 ### Follow-up performance work requested for the following release
 
 Recognize repeated assessment layouts and execute observed answer, selection verification, Submit, feedback verification and Next as a bounded sequence. Measure model requests and elapsed time before and after, preserve question identity and stop if the page changes unexpectedly. This is future work. Version 1.0.39 monitors approved Brainshark playback locally, avoiding model requests for each playback check.
+
+
+### Saba Cloud 66 native assessment coordination test - 17 November 2026
+
+Pillar 3 Before Replacing Parts Assessment (cours000000001194014): 10 questions, 80% required, passed with 100% on one attempt. Vitriol handled answer choices, question navigation and submission. Coordinator assisted native trq-radio selection using its associated visible label, verified input.checked, and four-way matching dropdowns using role=combobox and visible role=option labels. The sequence dropdowns displayed descriptions rather than step numbers; use actual observed labels. Never infer unchanged question from repeated Select placeholders: verify question number and stem. Continue and Proceed stayed in the same Chrome window with scoped popup protection. Landing displayed both Continue and activity Launch, so single combined-match launch logic needs priority handling.
+
+After submission Saba displayed Test score 100%, Test status Pass. The learner did not recognize this variant and paused for unchanged-page input. Normal Close Player returned to the same course showing Successful, Score: 100 and completion date17-NOV-2026. Operations also missed this final state and was manually marked complete after external verification. Batch fixes are recorded in data/sessions/pending-2026-11-17-quiz.md. This assisted pass does not establish independent capability.

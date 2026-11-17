@@ -22,6 +22,22 @@ completion or an automatic process kill. Normal/manual course starts pause durin
 replacement; browser tabs and guided input stay intact, with session controls
 still available.
 
+Helper 1.0.40 saves the unique visible `Vitriol Helper` console/Windows Terminal
+window immediately before starting its updater, then consumes that placement on
+restart. Normal, maximized and minimized state are preserved; bounds are clamped
+to the nearest available monitor work area if necessary. A restored placement
+also suppresses `--minimize`. Hidden ConPTY handles, unrelated windows and
+ambiguous title matches are never moved; unavailable capture/restore is reported
+and leaves the default position.
+
+The first upgrade from 1.0.39 needs a one-time capture by the release operator,
+because the old updater cannot save placement. From the new helper module,
+`captureHelperWindowPlacement(helperProcessId)` is read-only;
+`saveHelperWindowPlacement(helperHome, undefined, helperProcessId)` writes the
+30-minute, single-use `update-window-placement.json` before that upgrade.
+Use the existing helper's verified PID and compatibility home, never the
+foreground window. Later upgrades save automatically.
+
 Course coverage uses user-owned `strategies.evidence` records under the internal
 `course-coverage` capability; no new coverage table or migration is needed. A
 bounded topic inventory comes from observed course menus/headings, keyed by the
@@ -31,6 +47,27 @@ that user's learner material store. The checklist explicitly reports incomplete
 or unknown inventory and never equates these observations with learned material
 or verified full coverage. Internal coverage records are excluded from strategy
 promotion metrics.
+
+## Saba native assessments in helper 1.0.40
+
+Quiz capability 6 prioritizes course Continue over activity Launch and retains
+popup protection through later Proceed documents, only between the two supported
+Saba HTTPS hosts. Native radios use ordinary associated-label or keyboard
+selection with checked-state verification. Matching dropdowns expose observed
+description labels and selected values through existing quiz-only click actions;
+Next and submission stay blocked while a matching field is unanswered.
+
+Current question number, stem, identity and screenshot identity take precedence
+over retained guidance. A changed question drops previous control feedback and
+captures a fresh viewport. Connected coordination receives unchanged-action
+blockers for at most two bounded recovery exchanges per run; timeout is visible
+and resumes the existing attempt, not a retake.
+
+Visible Saba Test score/Test status feedback is recognized as an assessment
+result, not authoritative course completion. Normal Close Player/Yes or observed
+Exit must return to the originating course's Successful detail before a
+`courseResult` is published. A completed course is never relaunched.
+Offline Chrome fixtures exercise these paths; they are not a new live pass claim.
 
 ## Guided Operations and inactivity protection
 
@@ -128,8 +165,9 @@ code and the correct local or production origin. The helper accepts protocol
 launches only for localhost or the Vitriol production domains. The Start menu
 shortcut remains available for normal launches and defaults to production.
 After its first accepted heartbeat, the helper confirms that it is online and
-minimizes its terminal window. Pass `--no-minimize` (or set
-`QUIZTAKER_NO_AUTO_MINIMIZE=1`) when diagnosing it interactively.
+stays visible by default. Pass `--minimize` for automatic minimization unless an
+update placement was restored. `--no-minimize` (or
+`QUIZTAKER_NO_AUTO_MINIMIZE=1`) disables that opt-in when diagnosing it.
 
 ## Private artifacts
 

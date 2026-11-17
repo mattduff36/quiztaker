@@ -59,3 +59,41 @@ test('routine actions continue automatically and blocked clicks ask once before 
   const action = { action: 'click', targetId: 'b1' } as const;
   assert.deepEqual(await coordinateDecision(decide, async () => action, { coordinationStart: true }), { action });
 });
+
+test('unchanged-action blocker reaches coordination before a visible resumable timeout',async()=>{
+  let calls=0;
+  const snapshot={question:{id:'a'.repeat(64),number:6,total:10,stem:'Fresh matching question'},unchangedAction:true};
+  const corrected=await coordinateDecision(async()=>assert.fail('Do not ask the model again'),async(view,reason)=>{
+    calls++;assert.equal(view.question?.number,6);assert.match(reason,/unchanged/);
+    return {action:'click',targetId:'m1'};
+  },snapshot);
+  assert.deepEqual(corrected,{action:{action:'click',targetId:'m1'}});
+  const unavailable=await coordinateDecision(async()=>assert.fail(),async()=>undefined,snapshot);
+  assert.match((unavailable.action as {question:string}).question,/resume without restarting/);
+  assert.equal(calls,1);
+});
+
+test('a connected coordinator timeout is visible, cleans exchange files and preserves the fresh question identity',async()=>{
+  const home=await mkdtemp(join(tmpdir(),'vitriol-coordination-timeout-'));
+  const directory=join(home,'coordination');await mkdir(directory);
+  await writeFile(join(directory,'connection.json'),JSON.stringify({id:'connected',expiresAt:Date.now()+10000}));
+  const exchange:string[]=[];
+  try {
+    const pending=askCoordinator(home,'job',{
+      question:{id:'c'.repeat(64),number:6,total:10,stem:'Current question, not Q5'},
+      imageIdentity:{id:'fresh-screen',questionId:'c'.repeat(64)},image:'data:image/jpeg;base64,private-image',
+    },'Inspect current question',800,undefined,line=>exchange.push(line));
+    let filename:string|undefined;
+    for(let attempt=0;attempt<30&&!filename;attempt++) {
+      filename=(await readdir(directory)).find(name=>name.endsWith('.request.json'));
+      if(!filename)await delay(20);
+    }
+    assert.ok(filename);
+    const request=JSON.parse(await readFile(join(directory,filename),'utf8'));
+    assert.equal(request.snapshot.question.number,6);assert.equal(request.snapshot.imageIdentity.id,'fresh-screen');
+    assert.equal(request.snapshot.image,undefined);
+    assert.equal(await pending,undefined);
+    assert.match(exchange.at(-1)||'',/timed out or disconnected.*resume without restarting/);
+    assert.deepEqual(await readdir(directory),['connection.json']);
+  }finally{await rm(home,{recursive:true,force:true});}
+});

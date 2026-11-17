@@ -69,6 +69,15 @@ try {
     select id from claim_pairing_code(${codeHash}, 'CI helper', 'win32', 'x64', '1.0.0')
   `;
   assert(helper?.id, 'Pairing verification failed.');
+  const conversationBrowser = randomUUID();
+  const conversations = await sql`
+    insert into learner_sessions (user_id, helper_id, browser_session_id, objective)
+    values (${userId}, ${helper.id}, ${conversationBrowser}, 'Previous task'),
+           (${userId}, ${helper.id}, ${conversationBrowser}, 'Fresh task')
+    returning id
+  `;
+  assert(conversations.length === 2 && conversations[0].id !== conversations[1].id,
+    'New tasks must retain separate conversations in the same open browser.');
   await expectFailure(
     () => sql`select id from claim_pairing_code(${codeHash}, 'Replay', 'win32', 'x64', '1.0.0')`,
     'A pairing code was accepted twice.',

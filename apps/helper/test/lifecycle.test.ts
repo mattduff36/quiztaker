@@ -42,7 +42,7 @@ test('pause during a hosted proposal prevents the returned action reaching the b
   writeFileSync(join(directory, 'pw-learn-quiz.js'), `console.log('LEARNER_SNAPSHOT ' + JSON.stringify({image:${JSON.stringify(image)}})); process.stdin.once('data', data => { console.log('RECEIVED ' + data.toString()); process.exit(0); });`);
   const helperId = randomUUID();
   const secret = deriveHelperSecret('integration-master-key-32-characters', helperId);
-  const envelope = signJob({jobId:randomUUID(),planId:randomUUID(),attemptId:randomUUID(),helperId,capabilityId:'quiz-learn',capabilityVersion:5,script:'pw-learn-quiz.js',args:[],fingerprint:null,nonce:randomUUID(),issuedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60_000).toISOString()}, secret);
+  const envelope = signJob({jobId:randomUUID(),planId:randomUUID(),attemptId:randomUUID(),helperId,capabilityId:'quiz-learn',capabilityVersion:6,script:'pw-learn-quiz.js',args:[],fingerprint:null,nonce:randomUUID(),issuedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60_000).toISOString()}, secret);
   let paused = false;
   try {
     const result = await startJob(envelope, helperId, secret, async () => {}, {

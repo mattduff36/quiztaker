@@ -203,6 +203,8 @@ export function composeLearnerSnapshot(
     choices: current.choices,
     fields: current.fields,
     playback: current.playback,
+    question: current.question,
+    imageIdentity: current.imageIdentity,
     buttons: current.buttons,
     tabs: current.tabs,
     ...(current.image ? { image: current.image } : {}),

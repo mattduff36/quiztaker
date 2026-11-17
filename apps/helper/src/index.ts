@@ -26,11 +26,13 @@ import { helperUpdateError, helperUpdateProgress, installHelperUpdate, isNewerVe
 import { minimizeHelperWindow, shouldAutoMinimize } from './windows.js';
 import { HelperTerminal } from './terminal-ui.js';
 import { askCoordinator, coordinateDecision } from './coordination.js';
+import { restoreHelperWindowPlacement } from './window-placement.js';
 
 let isStopping = false;
 let hasAnnouncedOnline = false;
 let runningJob: { jobId: string; run: RunningJob; cancelRequested: boolean } | null = null;
 let attentionJobId: string | null = null;
+let windowPlacementRestored = false;
 let nextSyncAt = 0;
 let nextStrategyPullAt = 0;
 let nextReleaseCheckAt = 0;
@@ -42,6 +44,7 @@ let releaseInstance: (() => void) | null = null;
 async function main(): Promise<void> {
   ensureHelperDirectories();
   releaseInstance = await acquireInstanceLock(getHelperHome());
+  windowPlacementRestored = restoreHelperWindowPlacement(getHelperHome());
   await reconcileHelperUpdate(getHelperHome(), HELPER_VERSION);
   const args = process.argv.slice(2);
   const launch = resolveHelperLaunch(args);
@@ -253,6 +256,7 @@ async function main(): Promise<void> {
 }
 
 async function minimizeAfterConnection(): Promise<void> {
+  if (windowPlacementRestored) return;
   if (!process.argv.includes('--minimize') || !shouldAutoMinimize()) return;
   await delay(3_000);
   if (!minimizeHelperWindow()) terminal?.activity('Automatic minimize unavailable.', 'warning');

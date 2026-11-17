@@ -79,6 +79,19 @@ test('current screenshot survives course memory composition and request validati
   assert.doesNotMatch(snapshot.text || '', /base64/);
 });
 
+test('fresh question, matching selections and screenshot identity survive retained prior guidance',()=>{
+  const question={id:'b'.repeat(64),number:6,total:10,stem:'A different matching question'};
+  const imageIdentity={id:'fresh-capture',questionId:question.id};
+  const snapshot=boundLearnerSnapshot(composeLearnerSnapshot({
+    question,imageIdentity,image:'data:image/jpeg;base64,YWJj',text:'Question 6 of 10\nA different matching question',
+    buttons:[{id:'m1',name:'Repair step',kind:'quiz-navigation',selection:{value:'Inspect assembly',answered:true}}],
+  },{history:[{role:'user',text:'Previous question 5: dropdown did not change',at:new Date().toISOString()}],materials:[]}));
+  assert.deepEqual(snapshot.question,question);assert.deepEqual(snapshot.imageIdentity,imageIdentity);
+  assert.equal(snapshot.buttons?.[0].selection?.value,'Inspect assembly');
+  assert.match(LEARNER_SYSTEM_PROMPT,/current question id, number and stem override old guidance/);
+  assert.equal(boundLearnerSnapshot({...snapshot,image:undefined}).imageIdentity,undefined);
+});
+
 interface MemoryRow {
   id: string;
   user_id: string;

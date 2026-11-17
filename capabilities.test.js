@@ -28,3 +28,7 @@ test('planned action steps are restricted to safe DSL', () => {
   });
   assert.ok(action.steps.every((step) => SAFE_ACTIONS.has(step)));
 });
+
+test('local learner manifest requires the question-bound capability6 contract',()=>{
+  assert.equal(createAction('quiz-learn').capabilityVersion,6);
+});

@@ -30,12 +30,14 @@ test('persists and reports genuine phases before downloading and spawning the in
   writeFileSync(join(localAppData, 'Programs', 'Vitriol Helper', 'Start Vitriol Helper.cmd'), '@echo off\r\n');
   const bytes = Buffer.from('test verified installer');
   const phases: string[] = [];
+  let saved=false;
   assert.equal(await installHelperUpdate({
     offer: offer({ installerUrl: msiUrl, installerSha256: createHash('sha256').update(bytes).digest('hex') }),
     helperHome: home, localAppData, controlPlaneUrl: 'https://www.vitriol.co.uk', platform: 'win32',
     onPhase: async (phase, target) => { phases.push(phase); assert.equal((await helperUpdateProgress(home))?.updatePhase, phase); assert.equal(target, version); },
     fetchImpl: async () => { assert.equal(phases.at(-1), 'downloading'); return new Response(bytes); },
-    spawnImpl: () => assert.equal(phases.at(-1), 'installing'),
+    savePlacement: savedHome=>{assert.equal(savedHome,home);assert.equal(phases.at(-1),'installing');saved=true;return true;},
+    spawnImpl: () => {assert.equal(phases.at(-1), 'installing');assert.equal(saved,true);},
   }), 'restarting');
   assert.deepEqual(phases, ['preparing', 'downloading', 'installing']);
   assert.deepEqual(await helperUpdateProgress(home), { updatePhase: 'installing', updateVersion: version });
@@ -106,6 +108,7 @@ test('downloads a verified MSI and launches the installer once', async () => {
     platform: 'win32',
     localAppData,
     fetchImpl,
+    savePlacement:()=>true,
     spawnImpl: (commandLine) => commands.push(commandLine),
   });
   const second = await installHelperUpdate({
@@ -115,6 +118,7 @@ test('downloads a verified MSI and launches the installer once', async () => {
     platform: 'win32',
     localAppData,
     fetchImpl,
+    savePlacement:()=>assert.fail('Skipped updates must not save stale bounds'),
     spawnImpl: (commandLine) => commands.push(commandLine),
   });
 
@@ -149,6 +153,7 @@ test('records a checksum failure and does not retry that same request', async ()
     platform: 'win32',
     localAppData,
     fetchImpl,
+    savePlacement:()=>assert.fail('Failed verification must not save placement'),
     spawnImpl: () => assert.fail('installer launched'),
   }), 'failed');
   assert.equal(await installHelperUpdate({

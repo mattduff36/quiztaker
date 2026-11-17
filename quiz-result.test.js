@@ -4,6 +4,15 @@ const { recognizeQuizResult, quizResultPayload } = require('./lib/quiz-result');
 
 const canon = 'Test Results\nQuestions on Test20\nQuestions Correct15\nQuestions Incorrect5\nPercent Correct75%\nPassing Score70%\nPass/Fail: Passed\nOverall Score75%(15 out of20)';
 
+test('Saba native result recognizes split labels, actual score, status and threshold without a Results heading',()=>{
+  const text='Congratulations, you passed the assessment\nTest score\n100%\nTest status\nPass\nPassing threshold\n80%';
+  const result=recognizeQuizResult({resultViews:[text]});
+  assert.equal(result.status,'passed');assert.equal(result.scorePercent,100);assert.equal(result.passingScorePercent,80);
+  assert.equal(recognizeQuizResult({text:text.replace('100%','70%')}).status,'failed');
+  assert.equal(recognizeQuizResult({text:'Test score 65%\nTest status Fail\nPassing threshold 80%'}).status,'failed');
+  assert.equal(recognizeQuizResult({text:'Test score 100%'}),null);
+});
+
 test('Canon summary preserves actual result, score, counts and pass threshold', () => {
   const result = recognizeQuizResult({text: canon});
   assert.deepEqual(result, {status:'passed', evidence:[canon], scorePercent:75, passingScorePercent:70, questionsTotal:20, questionsCorrect:15, questionsIncorrect:5});

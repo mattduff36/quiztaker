@@ -38,6 +38,7 @@ const control = z.object({
   name: z.string().max(160),
   kind: z.enum(['content', 'navigation', 'quiz-navigation', 'submission']).optional(),
   checked: z.boolean().optional(),
+  selection: z.object({value:z.string().max(160),answered:z.boolean()}).optional(),
 });
 
 const schema = z.object({
@@ -53,6 +54,8 @@ const schema = z.object({
     buttons: z.array(control).max(40).optional(),
     tabs: z.array(z.object({id:z.string().max(8),name:z.string().max(160),url:z.string().max(500)})).max(20).optional(),
     image: z.string().max(900_000).regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/).optional(),
+    question: z.object({id:z.string().regex(/^[a-f0-9]{64}$/),number:z.number().int().positive().max(10000),total:z.number().int().positive().max(10000),stem:z.string().max(1000)}).optional(),
+    imageIdentity: z.object({id:z.string().max(64),questionId:z.string().regex(/^[a-f0-9]{64}$/).optional()}).optional(),
     outlines: z.array(z.object({url:z.string().max(500),title:z.string().max(200),topics:z.array(z.string().max(160)).max(60)})).max(4).optional(),
   }),
 });
@@ -106,6 +109,8 @@ export async function POST(
     buttons: incoming.buttons,
     tabs: incoming.tabs,
     image: incoming.image,
+    question: incoming.question,
+    imageIdentity: incoming.imageIdentity,
     outlines: incoming.outlines,
     ...(storedGuidance.guidance ? { guidance: storedGuidance.guidance } : {}),
   };

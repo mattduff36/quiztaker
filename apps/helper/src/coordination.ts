@@ -53,13 +53,13 @@ export async function askCoordinator(
   const reply = join(directory, `${id}.reply.json`);
   const temporary = `${request}.tmp`;
   const expiresAt = Math.min(connection.expiresAt, Date.now() + timeoutMs);
-  const { title, url, text, buttons, choices, fields, playback, tabs, outlines } = snapshot;
+  const { title, url, text, buttons, choices, fields, playback, tabs, outlines, question, imageIdentity } = snapshot;
   try {
     await mkdir(directory, { recursive: true });
     await writeFile(temporary, JSON.stringify({
       id, connectionId: connection.id, expiresAt, jobId,
       reason: sanitizeLogValue(reason.slice(0, 500)),
-      snapshot: sanitizeLogValue({ title, url, text, buttons, choices, fields, playback, tabs, outlines }),
+      snapshot: sanitizeLogValue({ title, url, text, buttons, choices, fields, playback, tabs, outlines, question, imageIdentity }),
     }), { flag: 'wx' });
     await rename(temporary, request);
     showExchange?.(`Vitriol → ChatGPT · ${reason}`);
@@ -75,6 +75,7 @@ export async function askCoordinator(
       }
       await delay(350);
     }
+    if (!cancelled?.()) showExchange?.('ChatGPT coordination timed out or disconnected. Pausing on the current page; resume without restarting the attempt.');
   } finally {
     await Promise.allSettled([request, reply, temporary].map(path => rm(path, { force: true })));
   }
@@ -83,9 +84,13 @@ export async function askCoordinator(
 export async function coordinateDecision(
   decide: (snapshot: unknown) => Promise<LearnerDecision>,
   ask: (snapshot: LearnerSnapshot, reason: string) => Promise<LearnerAction | undefined>,
-  snapshot: LearnerSnapshot & { blockedControl?: boolean; screenshotBlocked?: boolean; coordinationStart?: boolean },
+  snapshot: LearnerSnapshot & { blockedControl?: boolean; screenshotBlocked?: boolean; coordinationStart?: boolean; unchangedAction?: boolean },
 ): Promise<LearnerDecision> {
-  const { blockedControl, screenshotBlocked, coordinationStart, ...observation } = snapshot;
+  const { blockedControl, screenshotBlocked, coordinationStart, unchangedAction, ...observation } = snapshot;
+  if (unchangedAction === true) {
+    const action = await ask(observation, 'Repeated actions left this question unchanged. Inspect the fresh question and controls and propose a different next step.');
+    return {action:action ?? {action:'ask-user',question:'The page is unchanged and coordination is unavailable. Check the current question, then resume without restarting the attempt.',options:['Done, resume now']}};
+  }
   if (screenshotBlocked === true) {
     const action = await ask(observation, 'Another screenshot would show the unchanged page. Can you identify the next step from the visible course controls?');
     return { action: action ?? { action: 'ask-user', question: 'Another screenshot would show the same page. Can you identify the next course step?' } };

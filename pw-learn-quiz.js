@@ -10,7 +10,7 @@
 // an ask-user action
 // prints LEARNER_QUESTION and stops with needs-user-input. That is incomplete
 // and never a successful completion. The same action and target on an unchanged
-// view stops after three attempts and asks the operator to resume. Guidance is
+// view requests coordination once, then pauses after bounded retries. Guidance is
 // not a shell argument.
 // Current visible pass/fail results end the attempt before another model call
 // or repeated-action prompt, preserving the observed score and feedback.
@@ -28,16 +28,19 @@
 // explicit operator reply scoped to the current conversation and presentation.
 // Approved playback is monitored locally, including inline questions and the
 // real Saba completion result. Written answers use observed course fields only.
+// Saba matching uses observed dropdowns/options, verified selections and fresh
+// question identities. Native result finalization still requires Saba success.
 //
 // Usage:
 //   node pw-learn-quiz.js <tabIdx> [--dry]
 
 const readline = require('node:readline');
+const { createHash, randomUUID } = require('node:crypto');
 const { chromium } = require('playwright');
 const { observePlayerEvidence } = require('./lib/player-evidence');
 const { recognizeQuizResult, quizResultPayload } = require('./lib/quiz-result');
 const { readBrainshark, listeningQuestion, playbackApproved, playbackControl, setPlaybackSpeed, closeBrainsharkReaders, CONTINUE_LISTENING_QUESTION } = require('./lib/brainshark-player');
-const { launchSelectedCourse, originatingSabaPage, finishSabaCourse } = require('./lib/course-launch');
+const { launchSelectedCourse, originatingSabaPage, finishSabaCourse, protectSabaPopups, sabaAddress } = require('./lib/course-launch');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 const MAX_STEPS = 80;
@@ -51,6 +54,7 @@ const REPEATED_VIEW_LIMIT = 3;
 const REPEATED_VIEW_OPTION = 'Done, resume now';
 const ALLOWED = new Set(['click', 'answer-select', 'answer-text', 'select-tab', 'scroll', 'find-text', 'wait', 'capture', 'verify', 'ask-user']);
 const observationState = new WeakMap();
+const matchingTargets = new WeakMap();
 const MAX_CAPTURE_DATA_URL = 900_000;
 const LEARNER_NEEDS_INPUT = 'needs-user-input';
 const NO_CONTROLS_QUESTION = 'Open the intended question or module, then resume.';
@@ -162,9 +166,12 @@ function localActionAllowed(action, snapshot, mode = 'read') {
     if (action.action === 'answer-select' && target.checked === true) return false;
     if (action.action === 'click') {
       if (mode === 'quiz' && recognizeQuizResult(snapshot)) return false;
+      if (/^m\d+$/.test(target.id) && target.kind === 'quiz-navigation') return mode === 'quiz';
       if (UNSAFE_LABEL.test(target.name)) return false;
       const radios = (snapshot.choices || []).filter(choice => /^c\d+$/.test(choice.id));
-      if (mode === 'quiz' && /^next(?: page| slide)?[ »›→]*$/i.test(target.name.trim()) && /\bQuestion\s+\d+\s+of\s+\d+\b/i.test(snapshot.text || '')
+      if (mode === 'quiz' && /^(?:(?:go to )?next(?: question| page| slide)?[ »›→]*|submit|finish|end test)$/i.test(target.name.trim())
+        && snapshot.buttons?.some(control => control.selection?.answered === false)) return false;
+      if (mode === 'quiz' && /^(?:go to )?next(?: question| page| slide)?[ »›→]*$/i.test(target.name.trim()) && /\bQuestion\s+\d+\s+of\s+\d+\b/i.test(snapshot.text || '')
         && radios.length > 0 && radios.every(choice => choice.checked === false)) return false;
       if (ASSESSMENT_START_LABEL.test(target.name)) return mode === 'quiz';
       if (SUBMIT_LABEL.test(target.name) || target.kind === 'submission' || target.kind === 'quiz-navigation') return mode === 'quiz';
@@ -442,7 +449,8 @@ async function captureCurrentView(page) {
     const jpeg=await page.screenshot({type:'jpeg',quality:55,fullPage:false,scale:'css',timeout:10_000});
     const image=`data:image/jpeg;base64,${jpeg.toString('base64')}`;
     if(image.length>MAX_CAPTURE_DATA_URL){state.feedback='Screenshot skipped because the viewport image exceeds the size limit.';return;}
-    state.image=image;state.imageUrl=page.url();state.feedback='A viewport screenshot was captured by the last capture action.';
+    state.image=image;state.imageUrl=page.url();state.imageIdentity={id:randomUUID(),...(state.questionId?{questionId:state.questionId}:{})};
+    state.feedback='A viewport screenshot was captured for the current question/view.';
   } catch {state.feedback='The viewport screenshot was unavailable. Continue using the observed text and controls.';}
 }
 
@@ -482,6 +490,7 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
       const indices = [];
       for (let index = 0; index < elements.length; index += 1) {
         const el = elements[index];
+        if (el.matches('[role=combobox],[role=option]')) continue;
         // Rise keeps earlier quiz cards mounted after advancing.
         const quizCard = el.closest('.quiz-card');
         if (quizCard && (!quizCard.classList.contains('quiz-card--active') || el.getAttribute('aria-disabled') === 'true')) continue;
@@ -573,6 +582,84 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
   return { listed, handles };
 }
 
+async function matchingDisplay(combo) {
+  return combo.evaluate(el=>{
+    const selected=(el.getAttribute('aria-labelledby') || '').split(/\s+/)
+      .filter(id=>/-control-value$/.test(id)).map(id=>el.ownerDocument.getElementById(id))
+      .find(node=>node && node.getClientRects().length);
+    if(selected) return selected.textContent.replace(/\s+/g,' ').trim().slice(0,160);
+    const clone=el.cloneNode(true);
+    clone.querySelectorAll('[role=listbox],[role=option],[hidden],[aria-hidden=true]').forEach(node=>node.remove());
+    return clone.textContent.replace(/\s+/g,' ').trim().slice(0,160);
+  });
+}
+
+async function matchingFieldName(combo,index) {
+  return combo.evaluate((el,index)=>{
+    const label=el.getAttribute('aria-label') || (el.getAttribute('aria-labelledby') || '').split(/\s+/)
+      .map(id=>el.ownerDocument.getElementById(id)?.textContent || '').join(' ');
+    return label.trim().replace(/\s+/g,' ').slice(0,160) || `Matching field ${index+1}`;
+  },index);
+}
+
+async function readSabaMatching(page, mode, hasQuestion) {
+  const listed = [], handles = new Map();
+  if (mode !== 'quiz' || !hasQuestion || !sabaAddress(page.url())) return {listed,handles};
+  for (const frame of await visibleFrames(page)) {
+    if (!sabaAddress(frame.url())) continue;
+    const combos = frame.locator('div[role=combobox]').filter({visible:true});
+    const count = Math.min(await combos.count(),12);
+    for (let index=0; index<count; index++) {
+      const combo=combos.nth(index);
+      if (!await combo.isEnabled()) continue;
+      const value=await matchingDisplay(combo);
+      const label=await matchingFieldName(combo,index);
+      const answered=Boolean(value) && !/^(?:select(?: an? (?:answer|option))?(?:\.{3}|…)?|choose(?: an? (?:answer|option))?)$/i.test(value);
+      const id=`m${listed.length+1}`, name=label.slice(0,160);
+      listed.push({id,name,kind:'quiz-navigation',selection:{value,answered}});
+      handles.set(id,combo);
+      matchingTargets.set(combo,{combo,option:false,name,frame,index});
+    }
+    const options=frame.locator('button[role=option]').filter({visible:true});
+    if (!await options.count()) continue;
+    const state=observationFor(page);
+    let combo=null;
+    // Saba variants without aria-expanded are bound to the exact dropdown
+    // opened by our last observed click, never an arbitrary page menu.
+    const expandedIndices=await combos.evaluateAll(nodes=>nodes.map((el,index)=>el.getAttribute('aria-expanded')==='true'?index:-1).filter(index=>index>=0));
+    if(expandedIndices.length===1) combo=combos.nth(expandedIndices[0]);
+    else if(expandedIndices.length===0 && state.matchingFrame===frame && state.matchingCombo && await state.matchingCombo.isVisible().catch(()=>false)) combo=state.matchingCombo;
+    if(!combo)continue;
+    for(let index=0;index<Math.min(await options.count(),20);index++) {
+      const option=options.nth(index), name=await accessibleName(option);
+      if(!name || !await option.isEnabled())continue;
+      const linked=await option.evaluate((el,ids)=>{
+        const list=el.closest('[role=listbox]');
+        return !ids.length || Boolean(list?.id && ids.includes(list.id)) || ids.includes(el.id);
+      },((await combo.getAttribute('aria-controls')) || (await combo.getAttribute('aria-owns')) || '').split(/\s+/).filter(Boolean));
+      if(!linked)continue;
+      const id=`m${listed.length+1}`;
+      listed.push({id,name,kind:'quiz-navigation'});handles.set(id,option);
+      matchingTargets.set(option,{combo,option:true,name,frame});
+    }
+  }
+  return {listed,handles};
+}
+
+function observedQuestion(text, source, controls) {
+  const matches=[...text.matchAll(/\bQuestion\s*:?\s*(\d+)\s*(?:of|\/)\s*(\d+)\b/gi)];
+  if(matches.length!==1)return undefined;
+  const match=matches[0], number=Number(match[1]), total=Number(match[2]);
+  if(number<1 || total<number || total>10000)return undefined;
+  const names=new Set(controls.map(control=>control.name));
+  const before=text.slice(0,match.index);
+  const required=/Fields marked with an asterisk\s*\(\s*\*\s*\)\s*are required\s*/i.exec(before);
+  const questionText=required ? before.slice(required.index+required[0].length) : text.slice(match.index+match[0].length);
+  const stem=questionText.split('\n').map(line=>line.trim())
+    .find(line=>line && !names.has(line) && !/^(?:next|back|previous|exit|select|time remaining|powered by)$/i.test(line))?.slice(0,1000) || '';
+  return {id:createHash('sha256').update(`${source}\n${number}/${total}\n${stem}`).digest('hex'),number,total,stem};
+}
+
 async function readSnapshot(page, mode = 'read') {
   const sections = [];
   const resultViews = [];
@@ -660,6 +747,9 @@ async function readSnapshot(page, mode = 'read') {
     }
   }
   const buttons = await readControls(page, 'button', 'b', true, mode);
+  const matching=await readSabaMatching(page,mode,Boolean(observedQuestion(resultViews.join('\n'),canonicalCourseSource(page.url()),[])));
+  buttons.listed=[...matching.listed,...buttons.listed].slice(0,40);
+  buttons.handles=new Map([...buttons.handles,...matching.handles]);
   const answers = riseResultVisible ? { listed: [], handles: new Map() } : await readControls(page, 'answer', '', false);
   const handles = new Map([...buttons.handles, ...answers.handles]);
   const fields = [];
@@ -696,7 +786,13 @@ async function readSnapshot(page, mode = 'read') {
   } catch { /* A tab closing during observation is not a selectable target. */ }
   const outlines=await readCourseOutlines(page);
   const state=observationFor(page);
+  const question=observedQuestion(resultViews.join('\n'),canonicalCourseSource(page.url()),[...buttons.listed,...answers.listed]);
+  if(state.questionId!==question?.id) {
+    for(const key of ['feedback','blockedControl','screenshotBlocked','lastBlockedControl','image','imageUrl','imageIdentity','captureView','matchingCombo','matchingFrame'])delete state[key];
+    state.questionId=question?.id;
+  }
   const image=state.imageUrl===page.url()?state.image:undefined;
+  const imageIdentity=image?state.imageIdentity:undefined;
   delete state.image;delete state.imageUrl;
   const snapshot = {
       title: (await page.title().catch(() => '')).slice(0,200),
@@ -707,6 +803,8 @@ async function readSnapshot(page, mode = 'read') {
       ...(fields.length ? {fields} : {}),
       tabs,
       ...(image?{image}:{}),
+      ...(question?{question}:{}),
+      ...(imageIdentity?{imageIdentity}:{}),
       ...(outlines.length?{outlines}:{}),
       ...(state.blockedControl ? { blockedControl: true } : {}),
       ...(state.screenshotBlocked ? { screenshotBlocked: true } : {}),
@@ -720,7 +818,7 @@ async function readSnapshot(page, mode = 'read') {
 function sameLearnerView(before, after) {
   const comparable = value => {
     if (!value || typeof value !== 'object') return value;
-    const { image, coordinationStart, playback, ...view } = value;
+    const { image, imageIdentity, coordinationStart, unchangedAction, playback, ...view } = value;
     if (playback) {
       view.playback = { identity: playback.identity, slide: playback.slide, completed: playback.completed, question: playback.question };
       if (typeof view.text === 'string') view.text = view.text.replace(/^(?:\d{1,2}:\d{2}(?::\d{2})?|\/)$/gm, '[playback time]');
@@ -784,6 +882,7 @@ function createActionReader() {
 
 async function applyAction(page, action, snapshot, handles, mode = 'read') {
   if (!localActionAllowed(action, snapshot, mode)) throw new Error('Learner action is not allowed');
+  if(snapshot.question && (await readSnapshot(page,mode)).snapshot.question?.id!==snapshot.question.id)throw new Error('Learner question target changed');
   const state=observationFor(page);delete state.feedback;delete state.blockedControl;delete state.screenshotBlocked;
   if (action.action === 'select-tab') {
     const target = handles.get(action.targetId);
@@ -838,6 +937,29 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
   const handle = handles.get(action.targetId);
   if (!handle) throw new Error('Learner target is not on the page');
   const target = [...(snapshot.buttons || []), ...(snapshot.choices || [])].find(item => item.id === action.targetId);
+  const matching=matchingTargets.get(handle);
+  if(matching) {
+    const name=matching.option?await accessibleName(handle):await matchingFieldName(handle,matching.index);
+    if(mode!=='quiz' || action.action!=='click' || !sabaAddress(page.url()) || !await handle.isVisible() || !await handle.isEnabled()
+      || name!==target?.name)throw new CourseControlBlocked('The matching control changed');
+    if(matching.option) {
+      await handle.click({timeout:5000});
+      const deadline=Date.now()+3000;
+      let selected=await matchingDisplay(matching.combo);
+      while(selected!==matching.name && Date.now()<deadline) {
+        await new Promise(resolve=>setTimeout(resolve,100));
+        selected=await matchingDisplay(matching.combo);
+      }
+      if(selected!==matching.name)throw new CourseControlBlocked('The matching selection could not be confirmed');
+      delete state.matchingCombo;
+      delete state.matchingFrame;
+    } else {
+      await handle.click({timeout:5000});
+      state.matchingCombo=handle;
+      state.matchingFrame=matching.frame;
+    }
+    return;
+  }
   if (!await handle.isVisible() || !await handle.isEnabled() || (await (action.action === 'answer-select' ? answerName(handle) : controlName(handle))) !== target?.name) throw new Error('Learner target changed');
   const point = await handle.evaluate(storylineGraphic);
   if (point) {
@@ -851,6 +973,7 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
     return;
   }
   if (action.action === 'click') {
+    await protectSabaPopups(page);
     if (riseControl && /^(submit|next)$/i.test(target.name)) {
       await handle.press('Enter', { timeout: 5000 });
     } else if (await handle.evaluate(dkiInformationIcon).catch(() => null)) {
@@ -865,9 +988,34 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
   if (brainshark) {
     if (!await handle.isChecked()) await handle.press('Space', {timeout:5000});
     if (!await handle.isChecked()) throw new CourseControlBlocked('The answer selection could not be confirmed');
+  } else if(await handle.evaluate(el=>/^(?:hpi-external|content-na2prd0004-na2hp)\.sabacloud\.com$/.test(location.hostname) && el.matches('input[type=radio],input[type=checkbox]'))) {
+    await selectNativeSabaAnswer(handle);
   } else await handle.check({ timeout: 5000 });
 }
 
+async function selectNativeSabaAnswer(handle) {
+  if(await handle.isChecked())return;
+  try {await handle.check({timeout:1200});}
+  catch(error) {
+    if(error?.name!=='TimeoutError' && !/did not change its state/i.test(error?.message||''))throw error;
+  }
+  if(await handle.isChecked())return;
+  const input=await handle.elementHandle();
+  if(!input)throw new CourseControlBlocked('The native answer changed');
+  try {
+    const labels=handle.locator('xpath=ancestor::label | //label').filter({visible:true});
+    for(let index=0;index<Math.min(await labels.count(),40);index++) {
+      const label=labels.nth(index);
+      if(!await label.evaluate((el,input)=>Array.from(input.labels || []).includes(el),input))continue;
+      try {await label.click({timeout:1200});}
+      catch(error) {if(error?.name!=='TimeoutError')throw error;}
+      if(await handle.isChecked())return;
+    }
+  } finally {await input.dispose();}
+  await handle.focus({timeout:1500});
+  await handle.press('Space',{timeout:1500});
+  if(!await handle.isChecked())throw new CourseControlBlocked('The native answer selection could not be confirmed');
+}
 async function emitQuestion(payload, page, browser) {
   const tabs = await Promise.all(browser.contexts()[0].pages().map(async (page, idx) => ({ idx, url: page.url(), title: await page.title().catch(() => "") })));
   console.log(`LEARNER_TABS ${JSON.stringify(tabs)}`);
@@ -903,8 +1051,9 @@ async function main() {
       return;
     }
     const selected = page;
+    const startedAtCourse=/\/learningeventdetail[;/]/i.test(selected.url());
     page = await launchSelectedCourse(page);
-    landing = page !== selected ? selected : originatingSabaPage(page);
+    landing = startedAtCourse ? selected : originatingSabaPage(page);
     if (/remote_frameset_modern\.html/i.test(page.url())) {
       for(let attempt=0; attempt<15; attempt++) {
         if (await readBrainshark(page)) break;
@@ -918,14 +1067,24 @@ async function main() {
     let playbackAnnouncementAt = 0;
     let playbackStartedAt = Date.now();
     let playbackStalledSince = Date.now();
-    async function verifyCourse() {
-      const verified = await finishSabaCourse(landing, brainsharkCompleted);
+    async function verifyCourse(quizResult) {
+      const verified = await finishSabaCourse(landing, brainsharkCompleted || quizResult?.status==='passed', page,Boolean(quizResult));
       if (!verified) return false;
       const tabs = await Promise.all(browser.contexts()[0].pages().map(async (tab, idx) => ({idx,url:tab.url(),title:await tab.title().catch(()=> '')})));
       console.log(`LEARNER_TABS ${JSON.stringify(tabs)}`);
-      console.log(`AUTOMATION_RESULT ${JSON.stringify({completed:1,total:1,courseResult:{status:'completed',title:verified.title,evidence:verified.evidence}})}`);
+      console.log(`AUTOMATION_RESULT ${JSON.stringify({completed:1,total:1,...(quizResult?{quizResult}:{}),courseResult:{status:'completed',title:verified.title,evidence:verified.evidence}})}`);
       return true;
     }
+    async function terminalResult(result) {
+      if(result.status==='passed' && landing) {
+        if(await verifyCourse(result))return;
+        await emitQuestion({question:'The assessment passed, but the same Saba course is not yet verified Successful. Check its normal Exit or Close Player, then resume without retaking.',options:['Check the course result']},page.isClosed()?landing:page,browser);
+        return;
+      }
+      finish(result.status==='passed',undefined,result);
+    }
+    if(landing===page && await landing.getByText('Successful',{exact:true}).first().isVisible().catch(()=>false) && await verifyCourse())return;
+    let coordinatedStalls=0;
     for (let step = 1; step <= MAX_STEPS; step += 1) {
       if (page.isClosed()) {
         if (await verifyCourse()) return;
@@ -985,7 +1144,15 @@ async function main() {
           continue;
         }
       }
-      const { snapshot, handles } = await readSnapshot(page, mode);
+      let { snapshot, handles } = await readSnapshot(page, mode);
+      if(mode==='quiz' && snapshot.question && observationFor(page).capturedQuestionId!==snapshot.question.id) {
+        await captureCurrentView(page);
+        const state=observationFor(page);
+        const captured=await readSnapshot(page,mode);
+        if(captured.snapshot.question?.id!==snapshot.question.id)continue;
+        state.capturedQuestionId=snapshot.question.id;
+        snapshot=captured.snapshot;handles=captured.handles;
+      }
       if (playback) snapshot.playback=playback;
       if (playback?.question && !observationFor(page).imageQuestion?.includes(`${playback.identity}:${playback.slide}`)) {
         await captureCurrentView(page);
@@ -996,7 +1163,7 @@ async function main() {
       if (coordinated && step === 1) snapshot.coordinationStart = true;
       console.log(`LEARNER_PROGRESS ${JSON.stringify({ message: `Reading ${snapshot.title || 'the current course page'}.` })}`);
       const result = mode === 'quiz' ? recognizeQuizResult(snapshot) : null;
-      if (result) { finish(result.status === 'passed', undefined, result); return; }
+      if (result) { await terminalResult(result); return; }
       let action;
       try {
         action = await reader.request(snapshot);
@@ -1010,7 +1177,11 @@ async function main() {
       const current = await readSnapshot(page, mode);
       if (playback) current.snapshot.playback=await readBrainshark(page);
       const currentResult = mode === 'quiz' ? recognizeQuizResult(current.snapshot) : null;
-      if (currentResult) { finish(currentResult.status === 'passed', undefined, currentResult); return; }
+      if (currentResult) { await terminalResult(currentResult); return; }
+      if(snapshot.question?.id!==current.snapshot.question?.id) {
+        console.log(`Learner step ${step}: question changed while deciding; inspecting again`);
+        continue;
+      }
       if (!localActionAllowed(action, snapshot, mode)) {
         finish(false, 'rejected-action');
         return;
@@ -1038,8 +1209,25 @@ async function main() {
       repeatState = repeated.state;
       if (repeated.question) {
         console.log(`Learner step ${step}: repeated unchanged ${action.action}`);
-        await emitQuestion(repeated.question, page, browser);
-        return;
+        if(coordinated && coordinatedStalls<2) {
+          coordinatedStalls++;
+          let correction;
+          try {correction=await reader.request({...current.snapshot,unchangedAction:true});}
+          catch(error) {if(error?.message!=='Learner step cap reached')throw error;break;}
+          if(page.isClosed()){step-=1;continue;}
+          const fresh=await readSnapshot(page,mode);
+          const coordinatedResult=mode==='quiz'?recognizeQuizResult(fresh.snapshot):null;
+          if(coordinatedResult){await terminalResult(coordinatedResult);return;}
+          if(!localActionAllowed(correction,current.snapshot,mode)) {finish(false,'rejected-action');return;}
+          // Revalidate after the bounded coordinator exchange.
+          if(!sameLearnerView(current.snapshot,fresh.snapshot))continue;
+          if(correction.action==='ask-user') {await emitQuestion(learnerQuestionPayload(current.snapshot,correction),page,browser);return;}
+          action=correction;
+          view=fresh.snapshot;viewHandles=fresh.handles;
+        } else {
+          await emitQuestion(repeated.question, page, browser);
+          return;
+        }
       }
       if (action.action === 'verify') {
         if (mode !== 'quiz' || !pageShowsPass(snapshot)) {
@@ -1077,8 +1265,9 @@ async function main() {
       if (opened) {
         if (!/^https?:/i.test(opened.url())) await opened.waitForURL(url => /^https?:$/.test(url.protocol), {timeout:10_000}).catch(() => undefined);
         await opened.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => undefined);
-        landing = /^https:\/\/hpi-external\.sabacloud\.com\//i.test(page.url()) ? page : landing;
+        landing = landing || originatingSabaPage(opened) || (/^https:\/\/hpi-external\.sabacloud\.com\//i.test(page.url()) ? page : null);
         page = opened;
+        await protectSabaPopups(page);
         console.log('Following the course window opened by the selected control');
       }
       const target = [...(view.buttons || []), ...(view.choices || []), ...(view.tabs || [])].find((item) => item.id === action.targetId);
@@ -1088,7 +1277,7 @@ async function main() {
     }
     const { snapshot } = await readSnapshot(page, mode);
     const result = mode === 'quiz' ? recognizeQuizResult(snapshot) : null;
-    if (result) { finish(result.status === 'passed', undefined, result); return; }
+    if (result) { await terminalResult(result); return; }
     await emitQuestion({
       question: 'Vitriol reached its step limit. Resume to continue from the current course page.',
       options: ['Resume from this page'],
@@ -1124,4 +1313,6 @@ module.exports = {
   clickLabelAllowed,
   screenElementControlName,
   noteRepeatedLearnerAction,
+  observedQuestion,
+  selectNativeSabaAnswer,
 };

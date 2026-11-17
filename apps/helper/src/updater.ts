@@ -4,6 +4,7 @@ import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative } from 'node:path';
 import { finished } from 'node:stream/promises';
+import { saveHelperWindowPlacement } from './window-placement.js';
 
 export const HELPER_RELEASE_REPOSITORY = 'mattduff36/quiztaker';
 
@@ -217,6 +218,7 @@ export async function installHelperUpdate(options: {
   localAppData?: string;
   fetchImpl?: typeof fetch;
   spawnImpl?: (commandLine: string) => void;
+  savePlacement?: (helperHome: string) => boolean;
   onPhase?: (phase: HelperUpdatePhase, version: string) => Promise<void>;
 }): Promise<'restarting' | 'skipped' | 'failed'> {
   const directory = join(options.helperHome, 'updates');
@@ -270,6 +272,7 @@ export async function installHelperUpdate(options: {
       quoteCommandArg(controlPlaneUrl),
     ].join(' ');
     await phase('installing');
+    (options.savePlacement ?? saveHelperWindowPlacement)(options.helperHome);
     (options.spawnImpl ?? defaultSpawn)(`"${command}"`);
     return 'restarting';
   } catch (error) {

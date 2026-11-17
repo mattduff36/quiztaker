@@ -32,11 +32,20 @@ test('written answers require the current observed field and quiz authorization'
   assert.equal(parseLearnerAction({...action,text:'x'.repeat(2001)},view,{mode:'quiz'}).ok,false);
 });
 
-test('expanded browser tools require capability5 rather than an old capability3 plan', () => {
-  const capability=getCapability('quiz-learn');assert.equal(capability.version,5);
-  const plan={script:capability.script,capabilityId:capability.id,capabilityVersion:3,args:['0'],confirmed:true,consumed:false,expiresAt:new Date(Date.now()+60_000).toISOString()};
+test('question-bound Saba matching requires capability6 rather than an old capability5 plan', () => {
+  const capability=getCapability('quiz-learn');assert.equal(capability.version,6);
+  const plan={script:capability.script,capabilityId:capability.id,capabilityVersion:5,args:['0'],confirmed:true,consumed:false,expiresAt:new Date(Date.now()+60_000).toISOString()};
   assert.equal(authorizeRun({script:capability.script,args:['0'],plan}).ok,false);
-  assert.equal(authorizeRun({script:capability.script,args:['0'],plan:{...plan,capabilityVersion:5}}).ok,true);
+  assert.equal(authorizeRun({script:capability.script,args:['0'],plan:{...plan,capabilityVersion:6}}).ok,true);
+});
+
+test('matching uses existing quiz-only clicks and guards all unanswered fields',()=>{
+  const view={buttons:[{id:'m1',name:'Repair step',kind:'quiz-navigation',selection:{value:'Select',answered:false}},{id:'m2',name:'Inspect the part',kind:'quiz-navigation'},{id:'b1',name:'Next',kind:'content'}]};
+  assert.equal(parseLearnerAction({action:'click',targetId:'m1'},view,{mode:'quiz'}).ok,true);
+  assert.equal(parseLearnerAction({action:'click',targetId:'m2'},view,{mode:'read'}).ok,false);
+  assert.equal(parseLearnerAction({action:'click',targetId:'b1'},view,{mode:'quiz'}).ok,false);
+  view.buttons[0].selection={value:'Inspect the part',answered:true};
+  assert.equal(parseLearnerAction({action:'click',targetId:'b1'},view,{mode:'quiz'}).ok,true);
 });
 
 test('browser tool contract validates direction/find text and repairs checked-answer or unanswered Next decisions', () => {
