@@ -22,11 +22,12 @@ completion or an automatic process kill. Normal/manual course starts pause durin
 replacement; browser tabs and guided input stay intact, with session controls
 still available.
 
-Helper 1.0.43 saves the unique visible `Vitriol Helper` console/Windows Terminal
+Helper 1.0.44 saves the unique `Vitriol Helper` console/Windows Terminal
 window immediately before starting its updater, then consumes that placement on
 restart. Normal, maximized and minimized state are preserved; bounds are clamped
 to the nearest available monitor work area if necessary. A restored placement
-also suppresses `--minimize`. Hidden ConPTY handles, unrelated windows and
+also suppresses `--minimize`. A hidden Terminal host is explicitly shown again
+with the saved state. Zero-size ConPTY handles, unrelated windows and
 ambiguous title matches are never moved; unavailable capture/restore is reported
 and leaves the default position.
 
@@ -325,3 +326,10 @@ signature and authentication setup.
 No database migration is required for this workflow: course excerpts reuse the
 owner/helper/browser-session learner memory. Production build, dependency audit
 and release checks remain required before deployment.
+
+## Direct Operations actions in 1.0.44
+
+Clicking an Advanced action now confirms and queues its plan without a second
+modal. The server still checks ownership, target, expiry and job signatures; a
+rejected confirmation never queues a job. Revoke helper also acts on its button
+click without a browser confirmation. Desktop/mobile fixtures cover both paths.

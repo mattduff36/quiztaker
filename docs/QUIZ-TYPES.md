@@ -653,3 +653,8 @@ After submission Saba displayed Test score 100%, Test status Pass. The learner d
 ### Current registration versus historical completion - 17 November 2026
 
 HP Connector Handling Procedures (cours000000001172089) was In Progress for its current registration while Progress History also showed Successful from30-JUN-2023. Never use an arbitrary Successful label anywhere on the detail page to skip launch or verify completion. Read the single visible course--detail__thirdRow__enrollmentStatus__text current enrollment header and verify the exact originating course. Unknown or ambiguous current status is not proof of completion. Helper1.0.41 includes this guard.
+
+
+### HP Connector Handling Procedures live completion - 17 November 2026
+
+The single unfinished activity0001104702_20211206 was detected as class-detail. Operations queued the existing class-batch capability through helper1.0.43. It launched the selected activity, used the supported SCORM executor and verified the class result. The current course enrollment showed Successful, Score100 and completed17-NOV-2026; Operations automatically showed Task complete with Pause session hidden. This run needed no learner-model question loop or manual content/quiz clicks. The old2023 Successful history was not used as verification.

@@ -19,8 +19,9 @@ import{createRoot}from ${JSON.stringify(join(root,'node_modules/react-dom/client
 import{OperationsClient}from ${JSON.stringify(join(root,'apps/web/src/components/operations-client.tsx').replaceAll('\\','/'))};
 import{HelperOnboarding}from ${JSON.stringify(join(root,'apps/web/src/components/helper-onboarding.tsx').replaceAll('\\','/'))};
 import{ReviewList}from ${JSON.stringify(join(root,'apps/web/src/components/review-list.tsx').replaceAll('\\','/'))};
+import{RevokeHelperButton}from ${JSON.stringify(join(root,'apps/web/src/components/revoke-helper-button.tsx').replaceAll('\\','/'))};
 import{AppShell}from ${JSON.stringify(join(root,'apps/web/src/components/app-shell.tsx').replaceAll('\\','/'))};
-function Fixture(){const[away,setAway]=React.useState(false);return <AppShell email="operator@example.invalid"><div className="fixture">{location.pathname==='/setup-test'?<><HelperOnboarding download={{status:'unavailable',url:null}} connection={{state:'not-paired'}}/><ReviewList reviews={[{id:'review-1',type:'test',title:'Review example',detail:'Review this item',next_action:'Retry the page',created_at:new Date().toISOString()}]}/></>:away?<p>Another page</p>:<><button onClick={()=>setAway(true)}>Navigate fixture away</button><OperationsClient helperId="${helperId}"/></>}</div></AppShell>};createRoot(document.getElementById('root')!).render(<Fixture/>);`);
+function Fixture(){const[away,setAway]=React.useState(false);return <AppShell email="operator@example.invalid"><div className="fixture">{location.pathname==='/setup-test'?<><HelperOnboarding download={{status:'unavailable',url:null}} connection={{state:'not-paired'}}/><RevokeHelperButton helperId="${helperId}"/><ReviewList reviews={[{id:'review-1',type:'test',title:'Review example',detail:'Review this item',next_action:'Retry the page',created_at:new Date().toISOString()}]}/></>:away?<p>Another page</p>:<><button onClick={()=>setAway(true)}>Navigate fixture away</button><OperationsClient helperId="${helperId}"/></>}</div></AppShell>};createRoot(document.getElementById('root')!).render(<Fixture/>);`);
 await writeFile(join(temp,'navigation.ts'),`export const useRouter=()=>({refresh:()=>{}}); export const usePathname=()=>location.pathname;`);
 await build({plugins:[{name:'test-router',setup(build){build.onResolve({filter:/^next\/navigation$/},()=>({path:join(temp,'navigation.ts')}));}}],entryPoints:[join(temp,'entry.tsx')],outfile:join(temp,'app.js'),bundle:true,format:'iife',platform:'browser',jsx:'automatic',tsconfig:join(root,'apps/web/tsconfig.json'),define:{'process.env.NODE_ENV':'"test"','process.env':'{}'}});
 const css=await postcss([tailwind({base:join(root,'apps/web')})]).process(await readFile(join(root,'apps/web/src/app/globals.css'),'utf8'),{from:join(root,'apps/web/src/app/globals.css')});
@@ -31,6 +32,7 @@ function reply(path,method,body,now,s){
   const activity=()=>({paused:s.paused,lastActivityAt:new Date(s.last??now).toISOString(),expiresAt:new Date((s.last??now)+1_800_000).toISOString(),serverNow:new Date(now).toISOString()});
   const session=()=>s.noSession?null:({id:'22222222-2222-4222-8222-222222222222',revision:1,cdp_connected:s.connected,updated_at:new Date(now-(s.stale?120_000:0)).toISOString(),tabs:[...(!s.noCourse?[{targetId:'course',index:0,title:'Xerox course overview',url:s.courseUrl||'https://example.invalid/course',fingerprint:'course-fingerprint'}]:[]),{targetId:'blank',index:1,title:'Blank tab',url:'about:blank',fingerprint:'blank'}],roster:null,detection:null});
   function makeJob(capability){const id=`job-${++s.serial}`;const job={id,status:capability==='list-tabs'||capability===s.holdCapability?'running':'completed',capability_id:capability,outcome:{verified:true,status:'verified'},result:{ok:true,result:capability==='detect'?{detection:{detected:'server-assessment',tabIdx:0,url:s.courseUrl||'https://example.invalid/course',fingerprint:'course-fingerprint',detail:'Open a course page before attempting a final assessment.'}}:{}}};s.jobs.set(id,job);s.latest=job;return id;}
+  if(path===`/api/helper/${helperId}/revoke`){s.revokes=(s.revokes||0)+1;return{ok:true};}
   if(path==='/api/helper/pair'){if(s.pairPosts++===0)return{__status:503,error:'Pairing is temporarily unavailable.'};return{code:'ABCD1234',expiresAt:new Date(now+2000).toISOString(),controlPlaneUrl:'https://example.invalid'};}
   if(path==='/api/reviews/review-1/resolve')return{__status:503,error:'Unavailable'};
   if(path==='/api/operations/activity'){
@@ -85,6 +87,45 @@ let passed=false;
 try{
   // Stage matrix uses isolated offline fixtures, including delayed requests and remounts.
   for(const viewport of [{width:1365,height:1000},{width:390,height:844}]) {
+    // The selected action itself authorizes the same signed plan flow.
+    // No second modal or browser confirmation is shown, on desktop or mobile.
+    for(const rejectConfirmation of [false,true]) {
+      const page=await browser.newPage({viewport});const fixture=state();let confirms=0,queues=0;const calls=[];
+      page.on('dialog',dialog=>{void dialog.dismiss();throw Error('Unexpected confirmation dialog');});
+      await page.route('**/api/**',async route=>{
+        const req=route.request(),path=new URL(req.url()).pathname,body=req.postDataJSON()||{};
+        if(path==='/api/operations/actions'&&body.capabilityId==='class-batch') {
+          calls.push('plan');return route.fulfill({json:{plan:{planId:'single-click-plan',label:'Complete class',targets:[],steps:[]}}});
+        }
+        if(path==='/api/plans/single-click-plan/confirm') {
+          confirms++;calls.push('confirm');return route.fulfill({status:rejectConfirmation?409:200,json:{ok:!rejectConfirmation}});
+        }
+        if(path==='/api/jobs'&&body.planId==='single-click-plan') {
+          queues++;calls.push('queue');expect(confirms).toBe(1);
+          fixture.latest={id:'single-click-job',status:'running',capability_id:'class-batch'};fixture.task=fixture.latest;fixture.jobs.set(fixture.latest.id,fixture.latest);fixture.holdCapability='class-batch';
+          return route.fulfill({json:{jobId:fixture.latest.id}});
+        }
+        const {__status,...json}=reply(path,req.method(),body,Date.now(),fixture);
+        if(path==='/api/operations/context')json.session.roster={certTitle:'Fixture class',activities:[{title:'Fixture repair',status:'Not evaluated'}]};
+        await route.fulfill({status:__status||200,json});
+      });
+      await page.goto(url);
+      await page.getByRole('tab',{name:'Advanced',exact:true}).click();
+      await page.getByRole('button',{name:/^Xerox course overview https:\/\/example.invalid\/course/}).click();
+      await page.getByRole('checkbox',{name:'Fixture repair Not evaluated',exact:true}).check();
+      await expect(page.getByRole('button',{name:'Complete class activities',exact:true})).toBeEnabled();
+      await page.getByRole('button',{name:'Complete class activities',exact:true}).click();
+      if(rejectConfirmation) {
+        await expect(page.getByRole('alert')).toContainText('could not be confirmed');expect(queues).toBe(0);
+        expect(calls).toEqual(['plan','confirm']);
+      } else {
+        await expect(page.getByText('Course activities: Working',{exact:true})).toBeVisible();
+        expect(calls).toEqual(['plan','confirm','queue']);expect(queues).toBe(1);
+        await page.screenshot({path:join(artifacts,`${viewport.width}-single-click-action.png`),fullPage:true});
+      }
+      await expect(page.getByRole('button',{name:'Confirm and queue',exact:true})).toHaveCount(0);
+      await page.close();
+    }
     for(const completion of ['verified','operator']) {
       const page=await browser.newPage({viewport});const fixture=state();
       fixture.task={id:'finished-course',capability_id:'quiz-learn',status:'completed',outcome:completion==='verified'
@@ -553,6 +594,8 @@ try{
     await expect(page.getByText('Your pairing code has expired.',{exact:false})).toBeVisible();
     await expect(page.getByRole('button',{name:'Generate code',exact:true})).toBeEnabled();
     await expect(page.getByRole('link',{name:'Launch Vitriol Helper',exact:true})).toHaveCount(0);
+    await page.getByRole('button',{name:'Revoke helper',exact:true}).click();
+    await expect.poll(()=>fixture.revokes||0).toBe(1);
     await page.getByRole('button',{name:'Resolve',exact:true}).click();
     await expect(page.getByRole('alert')).toContainText('Could not resolve this review.');
     await expect(page.getByText('Review example',{exact:true})).toBeVisible();

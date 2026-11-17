@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Check, Download, LoaderCircle, Play, Plus, X } from 'lucide-react';
+import { AlertTriangle, Check, Download, LoaderCircle, Play, Plus } from 'lucide-react';
 import { Panel } from '@/components/page-frame';
 import { GuidedRunner } from '@/components/guided-runner';
 import { connectionState, isWebUrl, operationNeedsBrowser, readJsonResponse } from '@/lib/operations-readiness';
@@ -120,7 +120,6 @@ export function OperationsClient(props: { helperId: string }) {
   const [selectedTitles, setSelectedTitles] = useState<string[]>([]);
   const [url, setUrl] = useState('');
   const [error, setError] = useState('');
-  const [pendingPlan, setPendingPlan] = useState<PlanResponse | null>(null);
   const [output, setOutput] = useState('');
   const [outputJobId, setOutputJobId] = useState('');
   const [job, setJob] = useState<ContextResponse['activeJob']>(null);
@@ -374,12 +373,11 @@ export function OperationsClient(props: { helperId: string }) {
           refreshAfterOpen.current = true;
           browserProbe.current = 0;
         }
-        setPendingPlan(null);
         setJob({ id: value.jobId, status: 'queued', capability_id: capabilityId });
         setOutput('');
         return;
       }
-      if (value.plan) setPendingPlan({ ...value.plan, capabilityId, requiresBrowser: operationNeedsBrowser(capabilityId) });
+      if (value.plan) await queueSelectedPlan(value.plan, capabilityId);
       else setError('The server did not return a plan or job. Retry the action.');
     } catch (cause) {
       setError(errorMessage(cause, 'The request failed. Check your network and retry.'));
@@ -389,47 +387,22 @@ export function OperationsClient(props: { helperId: string }) {
     }
   }
 
-  async function confirmPlan() {
-    if (!pendingPlan || actionLock.current || guidedLock.current || busy || active || !helperReady || (pendingPlan.requiresBrowser !== false && !browserReady)) return;
-    actionLock.current = true; contextRequest.current += 1;
-    setBusy(true);
-    try {
-      const confirmation = await fetch(`/api/plans/${pendingPlan.planId}/confirm`, { method: 'POST' });
-      if (!confirmation.ok) return setError('The plan could not be confirmed.');
-      const response = await fetch('/api/jobs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId: pendingPlan.planId }),
-      });
-      const value = await readJsonResponse<{ jobId?: string; error?: string }>(response, 'The job could not be queued.');
-      if (!value.jobId) return setError(value.error || 'The job could not be queued.');
-      contextRequest.current += 1;
-      if (pendingPlan.capabilityId === 'open-url') {
-        refreshAfterOpen.current = true;
-        browserProbe.current = 0;
-      }
-      setPendingPlan(null);
-      setJob({ id: value.jobId, status: 'queued', capability_id: pendingPlan.capabilityId });
-      setOutput('');
-    } catch (cause) {
-      setError(errorMessage(cause, 'The request failed. Check your network and retry.'));
-    } finally {
-      actionLock.current = false;
-      setBusy(false);
-    }
-  }
-
-  async function dismissPlan() {
-    if (actionLock.current) return;
-    actionLock.current=true;setBusy(true);setActionLabel('Cancelling plan…');
-    try {
-      if (pendingPlan) {
-        const response = await fetch(`/api/plans/${pendingPlan.planId}/cancel`, { method: 'POST' });
-        if (!response.ok) throw new Error('Could not cancel the plan. Retry.');
-      }
-      setPendingPlan(null);
-    } catch (cause) { setError(errorMessage(cause, 'Could not cancel the plan. Check your network and retry.')); }
-    finally {actionLock.current=false;setBusy(false);}
+  // The operator's action click is the confirmation. Keep the same server-side
+  // plan confirmation, ownership, expiry, target and job-signing checks.
+  async function queueSelectedPlan(plan: PlanResponse, capabilityId: string) {
+    const confirmation = await fetch(`/api/plans/${plan.planId}/confirm`, { method: 'POST' });
+    if (!confirmation.ok) throw new Error('The selected action could not be confirmed. Try it again.');
+    const response = await fetch('/api/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planId: plan.planId }),
+    });
+    const value = await readJsonResponse<{jobId?:string;error?:string}>(response, 'The job could not be queued.');
+    if (!value.jobId) throw new Error(value.error || 'The job could not be queued.');
+    contextRequest.current += 1;
+    if (capabilityId === 'open-url') { refreshAfterOpen.current=true; browserProbe.current=0; }
+    setJob({id:value.jobId,status:'queued',capability_id:capabilityId});
+    setOutput('');
   }
 
   function openHelperDownload(installerAvailable: boolean) {
@@ -517,7 +490,7 @@ export function OperationsClient(props: { helperId: string }) {
       finalizedJobs.current.add(jobId); contextRequest.current += 1;
       setFinishedTask({jobId,result,stopping:value.status==='stopping'});
       setTaskRecordedHere(true);
-      setTaskReset(current=>current+1); setPendingPlan(null); setOutput(''); setOutputJobId('');
+      setTaskReset(current=>current+1); setOutput(''); setOutputJobId('');
       setJob(current=>current?.id===jobId ? {...current,status:value.status==='stopping'?'running':result} : current);
       await load();
     } catch(cause) {setError(errorMessage(cause,'Could not record the task result. Your task is still available.'));}
@@ -553,7 +526,6 @@ export function OperationsClient(props: { helperId: string }) {
       setSelectedTarget('');
       setSelectedTitles([]);
       setUrl('');
-      setPendingPlan(null);
       setOutput('');
       setOutputJobId('');
       setPollError('');
@@ -774,30 +746,7 @@ export function OperationsClient(props: { helperId: string }) {
 
 
       </div></div>
-      {pendingPlan ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/70 p-4">
-          <div className="w-full max-w-xl rounded-lg bg-white p-6">
-            <div className="flex items-start justify-between">
-              <h2 className="text-xl font-semibold">{pendingPlan.label}</h2>
-              <button type="button" aria-label="Cancel plan" disabled={operationBusy} onClick={() => void dismissPlan()}><X className="size-4" /></button>
-            </div>
-            {error ? <p role="alert" className="mt-3 text-sm text-rose-800">{error}</p> : null}
-            <p className="mt-3 text-sm text-slate-600">Risk {pendingPlan.risk} · {pendingPlan.verifier}</p>
-            <p className="mt-2 text-sm">{pendingPlan.steps.join(' → ') || 'execute'}</p>
-            {pendingPlan.constraints ? (
-              <p className="mt-2 text-sm text-slate-700">
-                At most {pendingPlan.constraints.maxSteps ?? 20} steps.
-                {pendingPlan.constraints.submissionAuthorized === false ? ' This run will not submit the quiz.' : ''}
-              </p>
-            ) : null}
-            <ul className="mt-3 list-disc pl-5 text-sm text-slate-600">{(pendingPlan.targets.length ? pendingPlan.targets : [{ title: 'Current browser context' }]).map((target) => <li key={target.title}>{target.title}</li>)}</ul>
-            <div className="mt-5 flex justify-end gap-2">
-              <button type="button" disabled={operationBusy} className="rounded-md border px-4 py-2 text-sm" onClick={() => void dismissPlan()}>Cancel</button>
-              <button type="button" disabled={busy || Boolean(active) || !helperReady || (pendingPlan.requiresBrowser !== false && !browserReady)} className="rounded-md bg-amber-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40" onClick={() => void confirmPlan()}>{busy ? <LoaderCircle className="size-4 animate-spin" /> : 'Confirm and queue'}</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+
     </div>
   );
 }

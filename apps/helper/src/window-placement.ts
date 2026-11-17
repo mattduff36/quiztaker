@@ -1,4 +1,5 @@
-// Capture only the helper's unambiguous visible console/Terminal window. Never
+// Capture only the helper's unambiguous console/Terminal window, including a
+// hidden Terminal after restart. Never
 // use the foreground window or the hidden zero-size ConPTY console as a target.
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -37,21 +38,21 @@ public static class VitriolPlacement {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint id);
   [DllImport("user32.dll")] public static extern bool GetWindowPlacement(IntPtr window, ref Placement placement);
   [DllImport("user32.dll")] public static extern bool SetWindowPlacement(IntPtr window, ref Placement placement);
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr window, int command);
   [DllImport("user32.dll")] public static extern IntPtr MonitorFromRect(ref Rect rect, uint flags);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
   public sealed class Candidate {
     public IntPtr Handle; public string Title, ClassName, ProcessName; public bool Visible; public Rect Bounds;
   }
   public static IntPtr UniqueHelperWindow(IEnumerable<Candidate> windows) {
-    IntPtr found=IntPtr.Zero;
+    IntPtr found=IntPtr.Zero,hidden=IntPtr.Zero; int visibleCount=0,hiddenCount=0;
     foreach(var w in windows) {
       bool host=(w.ClassName=="CASCADIA_HOSTING_WINDOW_CLASS" && String.Equals(w.ProcessName,"WindowsTerminal",StringComparison.OrdinalIgnoreCase))
         || (w.ClassName=="ConsoleWindowClass" && (String.Equals(w.ProcessName,"conhost",StringComparison.OrdinalIgnoreCase) || String.Equals(w.ProcessName,"OpenConsole",StringComparison.OrdinalIgnoreCase)));
-      if(!host || !w.Visible || w.Title!="Vitriol Helper" || w.Bounds.Right-w.Bounds.Left<160 || w.Bounds.Bottom-w.Bounds.Top<80)continue;
-      if(found!=IntPtr.Zero)return IntPtr.Zero;
-      found=w.Handle;
+      if(!host || w.Title!="Vitriol Helper" || w.Bounds.Right-w.Bounds.Left<160 || w.Bounds.Bottom-w.Bounds.Top<80)continue;
+      if(w.Visible){found=w.Handle;visibleCount++;}else{hidden=w.Handle;hiddenCount++;}
     }
-    return found;
+    return visibleCount==1?found:visibleCount>1?IntPtr.Zero:hiddenCount==1?hidden:IntPtr.Zero;
   }
   public static IntPtr FindHelperWindow(uint processId) {
     FreeConsole();
@@ -61,7 +62,6 @@ public static class VitriolPlacement {
     if(consoleTitle.ToString()!="Vitriol Helper")return IntPtr.Zero;
     var candidates=new List<Candidate>();
     EnumWindows(delegate(IntPtr window, IntPtr unused) {
-      if(!IsWindowVisible(window))return true;
       var title=new StringBuilder(512); GetWindowText(window,title,512);
       if(title.ToString()!="Vitriol Helper")return true;
       var name=new StringBuilder(256); GetClassName(window,name,256);
@@ -69,7 +69,7 @@ public static class VitriolPlacement {
       string processName;
       try { processName=Process.GetProcessById((int)id).ProcessName; } catch(ArgumentException) { return true; }
       var p=new Placement(); p.Length=Marshal.SizeOf(p);
-      if(GetWindowPlacement(window,ref p))candidates.Add(new Candidate{Handle=window,Title=title.ToString(),ClassName=name.ToString(),ProcessName=processName,Visible=true,Bounds=p.NormalPosition});
+      if(GetWindowPlacement(window,ref p))candidates.Add(new Candidate{Handle=window,Title=title.ToString(),ClassName=name.ToString(),ProcessName=processName,Visible=IsWindowVisible(window),Bounds=p.NormalPosition});
       return true;
     },IntPtr.Zero);
     return UniqueHelperWindow(candidates);
@@ -95,7 +95,7 @@ function windowScript(processId:number):string {
     '$ErrorActionPreference="Stop"',
     `Add-Type -TypeDefinition '${placementNativeTypes}'`,
     `$handle = [VitriolPlacement]::FindHelperWindow(${processId})`,
-    'if ($handle -eq [IntPtr]::Zero) { throw "No unique visible Vitriol Helper window belongs to the attached console." }',
+    'if ($handle -eq [IntPtr]::Zero) { throw "No unique Vitriol Helper window belongs to the attached console." }',
     '$placement = New-Object VitriolPlacement+Placement',
     '$placement.Length = [Runtime.InteropServices.Marshal]::SizeOf($placement)',
     'if (-not [VitriolPlacement]::GetWindowPlacement($handle, [ref]$placement)) { throw "Cannot read helper placement." }',
@@ -126,6 +126,7 @@ export function restorePlacementScript(processId:number, value:HelperWindowPlace
     `$placement.ShowCmd=${value.showCmd}`,
     `$placement.Flags=${value.restoreToMaximized?2:0}`,
     'if (-not [VitriolPlacement]::SetWindowPlacement($handle, [ref]$placement)) { throw "Cannot restore helper placement." }',
+    '[VitriolPlacement]::ShowWindowAsync($handle,$placement.ShowCmd) | Out-Null',
   ].join('\n');
 }
 

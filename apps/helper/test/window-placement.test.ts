@@ -30,6 +30,7 @@ test('an update saves one placement and the new helper restores it only once',{s
     assert.match(restored,/\$bounds.Left=120; \$bounds.Top=60; \$bounds.Right=1020; \$bounds.Bottom=660/);
     assert.match(restored,/\$placement.ShowCmd=2/);
     assert.match(restored,/\$placement.Flags=2/);
+    assert.match(restored,/ShowWindowAsync\(\$handle,\$placement.ShowCmd\)/);
     assert.equal(restoreHelperWindowPlacement(home,()=>assert.fail('Placement was consumed')),false);
   }finally{rmSync(home,{recursive:true,force:true});}
 });
@@ -53,11 +54,13 @@ test('native resolver rejects pseudoconsoles, unrelated/ambiguous windows and cl
     '$normal=[VitriolPlacement]::ToWorkspace($clamped,$m); $screen=[VitriolPlacement]::ToScreen($normal,$m)',
     '@{ unique=[VitriolPlacement]::UniqueHelperWindow([VitriolPlacement+Candidate[]]@($good,$hidden,$zero,$wrong,$other,$wrongProcess)).ToInt64();',
     'ambiguous=[VitriolPlacement]::UniqueHelperWindow([VitriolPlacement+Candidate[]]@($good,(candidate 22))).ToInt64();',
-    'absent=[VitriolPlacement]::UniqueHelperWindow([VitriolPlacement+Candidate[]]@($hidden,$zero,$wrong,$other,$wrongProcess)).ToInt64();',
+    'hidden=[VitriolPlacement]::UniqueHelperWindow([VitriolPlacement+Candidate[]]@($hidden,$zero,$wrong,$other,$wrongProcess)).ToInt64();',
+    'hiddenAmbiguous=[VitriolPlacement]::UniqueHelperWindow([VitriolPlacement+Candidate[]]@($hidden,(candidate 24 "Vitriol Helper" $false))).ToInt64();',
+    'absent=[VitriolPlacement]::UniqueHelperWindow([VitriolPlacement+Candidate[]]@($zero,$wrong,$other,$wrongProcess)).ToInt64();',
     'clamp=@($screen.Left,$screen.Top,$screen.Right,$screen.Bottom); workspaceTop=$normal.Top } | ConvertTo-Json -Compress',
   ].join('\n');
   const result=JSON.parse(execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',windowsHide:true,timeout:20000}));
-  assert.deepEqual(result,{unique:17,ambiguous:0,absent:0,clamp:[0,40,1200,840],workspaceTop:0});
+  assert.deepEqual(result,{unique:17,ambiguous:0,hidden:18,hiddenAmbiguous:0,absent:0,clamp:[0,40,1200,840],workspaceTop:0});
 });
 
 test('stale placement is consumed with a warning and never reaches a native window',{skip:process.platform!=='win32'},()=>{
