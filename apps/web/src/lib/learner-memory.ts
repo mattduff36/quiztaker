@@ -382,7 +382,7 @@ export async function recordLearnerTurn(
     await updateSession(sql, existing, {
       history: boundLearnerHistory([
         ...existing.history,
-        { role: 'assistant', text: decision, at: new Date().toISOString(), ...(input.observed.url ? { url: input.observed.url.slice(0, 500) } : {}) },
+        { role: 'assistant', text: decision, at: new Date().toISOString(), ...(input.observed.url ? { url: input.observed.url.slice(0, 2000) } : {}) },
       ]),
       materials: addLearnerMaterial(existing.materials, input.observed),
     });
@@ -664,7 +664,7 @@ function parseHistory(value: unknown): LearnerHistoryEntry[] {
       at: record.at,
       ...(typeof record.planId === 'string' ? { planId: record.planId } : {}),
       ...(typeof record.requestId === 'string' ? { requestId: record.requestId } : {}),
-      ...(typeof record.url === 'string' ? { url: record.url.slice(0, 500) } : {}),
+      ...(typeof record.url === 'string' ? { url: record.url.slice(0, 2000) } : {}),
     });
   }
   return entries;

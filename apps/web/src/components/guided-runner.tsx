@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { LoaderCircle, Play, Square, RefreshCw, Pause } from 'lucide-react';
-import { decideGuidedFlow, learnerQuestion, learnerStopMessage, observedQuizResult, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab, type GuidedDetection, type GuidedLearningMode } from '@/lib/guided-flow';
+import { decideGuidedFlow, independentIntent, independentPlans, learnerQuestion, learnerStopMessage, observedQuizResult, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab, type GuidedDetection, type GuidedLearningMode, type IndependentIntent } from '@/lib/guided-flow';
 import { learnerActivityUpdates } from '@/lib/learner-activity';
 import { OBJECTIVE_LIMIT } from '@/lib/operations-client-state';
 import { readJsonResponse } from '@/lib/operations-readiness';
@@ -13,8 +13,8 @@ type Tab = { targetId: string; index: number; title: string; url: string; finger
 type Session = { id: string; revision: number; tabs: Tab[]; cdp_connected: boolean };
 type Context = { helper: { id: string; is_online: boolean; version: string } | null; session?: Session | null; learnerEnabled?: boolean; activeJob?: { id: string; status: string; capability_id?: string } | null };
 type Job = { id: string; status: string; outcome?: { verified?: boolean; status?: string }; result?: { ok?: boolean; result?: { detection?: GuidedDetection } } };
-type Question = { question: string; options?: string[]; next?: string; model?: boolean; targetId?: string; sessionId?: string; url?: string };
-type CourseMode = GuidedLearningMode | 'quick';
+type Question = { question: string; options?: string[]; next?: string; model?: boolean; targetId?: string; sessionId?: string; url?: string; intent?: GuidedLearningMode };
+type CourseMode = 'independent' | 'coordinate' | 'quick';
 type RememberedTurn = { role: 'user' | 'assistant'; text: string; url?: string; guidance?: boolean };
 type CourseMemory = { browserSessionId?: string; id: string | null; objective: string | null; history: RememberedTurn[] };
 function rememberedQuestion(memory: CourseMemory | null) {
@@ -38,7 +38,7 @@ export function GuidedRunner(props: {
   refreshing?: boolean;
   onBusy: (value: boolean) => void;
   onRefresh: () => Promise<void>;
-  lastJob?: { result?: unknown; id: string; status: string; capability_id?: string; input?: { target?: { targetId?: string; browserSessionId?: string; fingerprint?: string } } } | null;
+  lastJob?: { result?: unknown; id: string; status: string; capability_id?: string; input?: { mode?: string; intent?: string; target?: { targetId?: string; browserSessionId?: string; fingerprint?: string } } } | null;
   outputJobId?: string;
   lastOutput: string;
   courseLauncher?: ReactNode;
@@ -74,7 +74,8 @@ export function GuidedRunner(props: {
   const [customReply, setCustomReply] = useState(false);
   const [settingsNeeded, setSettingsNeeded] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
-  const [mode, setMode] = useState<CourseMode>('read');
+  const [mode, setMode] = useState<CourseMode>('independent');
+  const [chosenIntent, setChosenIntent] = useState<IndependentIntent | null>(null);
   const [suppressRestoredQuestion, setSuppressRestoredQuestion] = useState(Boolean(props.freshTask));
   const [objective, setObjective] = useState('Read all relevant material in the selected course and retain it for later questions.');
   const [memory, setMemory] = useState<CourseMemory | null>(null);
@@ -106,6 +107,8 @@ export function GuidedRunner(props: {
   const currentProgress = progress.at(-1) ?? '';
   const selected = session?.tabs.find((tab) => tab.targetId === props.selectedTarget);
   const savedTarget = props.lastJob?.input?.target;
+  const rawSavedIntent = props.lastJob?.input?.intent ?? props.lastJob?.input?.mode;
+  const savedIntent = rawSavedIntent === 'read' || rawSavedIntent === 'quiz' || rawSavedIntent === 'read-and-assess' || rawSavedIntent === 'coordinate' ? rawSavedIntent : undefined;
   const outputQuestion = !props.finalized && !busy && props.lastJob?.id === props.outputJobId && props.lastJob?.capability_id === 'quiz-learn' && !running(props.lastJob.status)
     && savedTarget?.browserSessionId === session?.id ? learnerQuestion(props.lastOutput) : null;
   const restoredQuestion = props.finalized || suppressRestoredQuestion ? null : outputQuestion || (!busy ? rememberedQuestion(currentMemory) : null);
@@ -114,7 +117,8 @@ export function GuidedRunner(props: {
   const question: Question | null = props.finalized || mode === 'quick' ? null : (currentQuestion && currentPauseTab && currentQuestion.sessionId === session?.id
     && (currentQuestion.targetId === props.selectedTarget || currentPauseTab.targetId === props.selectedTarget) ? currentQuestion : null)
     || (restoredQuestion && restoredPauseTab && (savedTarget?.targetId === props.selectedTarget || restoredPauseTab.targetId === props.selectedTarget)
-      ? { ...restoredQuestion, model: true, targetId: restoredPauseTab.targetId, sessionId: session?.id } : null);
+      ? { ...restoredQuestion, model: true, targetId: restoredPauseTab.targetId, sessionId: session?.id, intent: savedIntent } : null);
+  const resolvedIntent = question?.intent ?? (mode === 'coordinate' ? 'coordinate' : mode === 'independent' ? chosenIntent ?? independentIntent(objective) : null);
   const openModuleRequest = question?.question === 'Open the intended question or module, then resume.';
   const detachedQuestion = !props.finalized && !question ? currentQuestion || restoredQuestion : null;
   const replies = openModuleRequest ? ['Done, resume now'] : [...new Set(question?.options || [])].filter((option) => option.trim());
@@ -193,16 +197,14 @@ export function GuidedRunner(props: {
     const changedPage = priorPage.current !== props.selectedTarget;
     priorPage.current = props.selectedTarget;
     if (busy) return;
-    if (changedPage) clearPageQuestion();
+    if (changedPage) setChosenIntent(null);
     if (!objectiveEdited.current) {
       const title = selected?.title || 'the selected course page';
-      const goals: Record<GuidedLearningMode, string> = {
-        read: `Read all relevant material on ${title}, follow its topics and panels, and retain it for later questions.`,
-        quiz: `Use retained course material to answer and submit the quiz on ${title}, then inspect the result.`,
-        'read-and-assess': `Work through the required unfinished lessons and interactions on ${title}. Retain the material, then answer and submit the assessment questions and check the result.`,
+      const goals = {
+        independent: 'Read the course material, follow its topics and panels, and retain it for later questions.',
         coordinate: `Use the progress and lesson checklist on ${title} to complete required unfinished lessons, then answer the assessment questions and verify the visible results. Ask the connected Codex chat for guidance if progress is blocked.`,
       };
-      setObjective(goals[mode === 'quick' ? 'read' : mode].slice(0, OBJECTIVE_LIMIT));
+      setObjective(goals[mode === 'quick' ? 'independent' : mode].slice(0, OBJECTIVE_LIMIT));
     }
   }, [mode, props.selectedTarget, selected?.url, selected?.title, busy]);
 
@@ -223,12 +225,12 @@ export function GuidedRunner(props: {
     return { context, tab, target: { browserSessionId: context.session.id, revision: context.session.revision, targetId, fingerprint: tab.fingerprint } };
   }
 
-  async function queue(capabilityId: string, target?: Record<string, unknown>, guidance?: string) {
+  async function queue(capabilityId: string, target?: Record<string, unknown>, guidance?: string, intent?: GuidedLearningMode) {
     checkStopped();
     const learnerInput = {
-      mode: mode === 'quick' || mode === 'read' ? 'read' : 'quiz',
-      ...(mode === 'read-and-assess' || mode === 'coordinate' ? { intent: mode } : {}),
-      objective,
+      mode: intent === 'read' ? 'read' : 'quiz',
+      ...(intent === 'read-and-assess' || intent === 'coordinate' ? { intent } : {}),
+      objective: (guidance && currentMemory?.objective) || objective,
       ...(currentMemory?.id ? { conversationId: currentMemory.id } : {}),
     };
     const planned = await api<{ plan?: { planId: string }; jobId?: string; waitingForJob?: boolean }>('/api/operations/actions', {
@@ -288,14 +290,15 @@ export function GuidedRunner(props: {
   }
 
   async function start(quickReply?: string) {
-    if (locked.current || !(pauseTab || selected) || !props.ready || props.active || props.paused || props.suspended || (mode !== 'quick' && !objective.trim())) return;
+    const intent = resolvedIntent;
+    if (locked.current || !(pauseTab || selected) || !props.ready || props.active || props.paused || props.suspended || (mode !== 'quick' && (!objective.trim() || !intent))) return;
     locked.current = true; stopped.current = false; cancellationRequested.current = false;
     props.onTaskStart?.();
     finalized.current = false;
     const generation = ++runGeneration.current;
     setBusy(true); props.onBusy(true); setSettingsNeeded(false); setReplyError(null); setRunOutput('');
     const reply = quickReply ?? answer.trim();
-    const guidance = question?.model && !(openModuleRequest && quickReply === 'Done, resume now') && reply ? `Previous question: ${question.question}\nUser answer: ${reply}`.slice(0, 2000) : undefined;
+    const guidance = question?.model && reply ? `Previous question: ${question.question}\nUser answer: ${reply}`.slice(0, 2000) : undefined;
     setQuestion(null);
     let targetId = (pauseTab || selected)!.targetId;
     try {
@@ -327,21 +330,24 @@ export function GuidedRunner(props: {
       const detection = detectionRun.job.result.result?.detection;
       const fresh = await freshContext(targetId);
       if (!detection || !sameDetectedTarget(detection, fresh.tab) || before.tab.fingerprint !== fresh.tab.fingerprint) throw new Error('The selected page changed during inspection. Inspect it again before continuing.');
-      const decision = decideGuidedFlow(detection, mode);
+      if (!intent) return;
+      const decision = decideGuidedFlow(detection, intent);
       if (decision.kind === 'question') { setStage('Your input is needed'); setMessage(detection.detail || 'I need your help before continuing.'); setQuestion({ ...decision, targetId, sessionId: fresh.context.session!.id, url: fresh.tab.url }); return; }
       setMessage(decision.message);
       const capability = decision.kind === 'run' ? decision.capability : 'quiz-learn';
       if (decision.kind === 'learn') {
         if (!supportsGuidedLearning(fresh.context.helper!.version)) throw new Error('Update the helper to v1.0.15 or later below, then inspect again. This update fixes page capture and enables learning questions.');
         setStage('Learning the page format');
-        const capture = await waitForJob(await queue('learn-capture', fresh.target));
-        if (capture.job.status !== 'completed') throw new Error('The page capture failed. Check Output and diagnostics in Advanced tools.');
+        if (!guidance) {
+          const capture = await waitForJob(await queue('learn-capture', fresh.target));
+          if (capture.job.status !== 'completed') throw new Error('The page capture failed. Check Output and diagnostics in Advanced tools.');
+        }
         const afterCapture = await freshContext(targetId);
         if (!afterCapture.context.learnerEnabled) { setStage('Connect your AI provider'); setMessage('The page is captured. Add and test your AI connection, then return here to continue learning.'); setSettingsNeeded(true); return; }
       } else { setStage('Running the recognised format'); }
       const launch = await freshContext(targetId);
       if (launch.tab.fingerprint !== fresh.tab.fingerprint) throw new Error('The page changed before the run started. Inspect it again.');
-      const result = await waitForJob(await queue(capability, launch.target, guidance));
+      const result = await waitForJob(await queue(capability, launch.target, guidance, intent));
       const asked = learnerQuestion(result.output);
       if (asked) {
         setAnswer(''); setCustomReply(false);
@@ -353,7 +359,7 @@ export function GuidedRunner(props: {
         checkStopped();
         props.onSelect(pausedTab.targetId);
         setStage('Your input is needed'); setMessage('Learning is paused. Your answer will be used when you continue.');
-        setQuestion({ ...asked, model: true, targetId: pausedTab.targetId, sessionId: paused.session.id });
+        setQuestion({ ...asked, model: true, targetId: pausedTab.targetId, sessionId: paused.session.id, intent });
         return;
       }
       if (result.job.status === 'completed' && result.job.outcome?.verified === true) {
@@ -473,15 +479,22 @@ export function GuidedRunner(props: {
       {selected?<p className="break-all text-xs leading-5 text-slate-500">{new URL(selected.url).origin}</p>:<p className="text-xs leading-5 text-slate-600">{connected&&courseTabs.length===0?'No course page is open yet. Enter its URL above.':'Only website tabs are shown. If your course is missing, open it in the Vitriol browser and refresh.'}</p>}
       {props.refreshError?<p role="alert" className="text-sm text-rose-800">{props.refreshError}</p>:null}
     </div>
-    <div hidden={!selected || courseTabs.length===0} className="min-w-0 space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={draftDisabled} onChange={event => { setMode(event.target.value as CourseMode); clearPageQuestion(); }} className="min-h-12 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 font-normal"><option value="read">Read course material</option><option value="quiz">Take the quiz</option><option value="read-and-assess">Read material and pass assessment questions</option><option value="coordinate">Co-ordinate with ChatGPT</option><option value="quick">Quick scrape</option></select></label>
+    <div hidden={!selected || courseTabs.length===0} className="min-w-0 space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={draftDisabled} onChange={event => { setMode(event.target.value as CourseMode); setChosenIntent(null); clearPageQuestion(); }} className="min-h-12 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 font-normal"><option value="independent">Work independently</option><option value="coordinate">Co-ordinate with ChatGPT</option><option value="quick">Scrape info with the user</option></select></label>
       {mode === 'coordinate' ? <p className="text-sm text-slate-600">Reads material and can submit assessment answers. Vitriol asks the Codex chat connected to your Windows helper when it needs guidance.</p> : null}
       {mode === 'quick' && !recordingId ? <p className="text-sm text-slate-600">Record the course while you click through it. Vitriol saves a replay and transcript on this PC.</p> : null}
-    <label hidden={mode === 'quick'} className={mode === 'quick' ? 'hidden' : 'grid gap-2 text-sm font-semibold text-slate-800'}>What would you like to achieve?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setObjective(event.target.value.slice(0, OBJECTIVE_LIMIT)); }} disabled={draftDisabled} maxLength={OBJECTIVE_LIMIT} rows={3} placeholder="For example: read this module, then help me with its quiz." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6 focus-visible:outline-2 focus-visible:outline-cyan-700" /><span className="text-xs font-normal text-slate-600">Collected course material stays available across pages. Check your goal when changing pages.</span></label></div>
+    <label hidden={mode === 'quick'} className={mode === 'quick' ? 'hidden' : 'grid gap-2 text-sm font-semibold text-slate-800'}>What would you like to achieve?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setChosenIntent(null); if (question) clearPageQuestion(); setObjective(event.target.value.slice(0, OBJECTIVE_LIMIT)); }} disabled={draftDisabled} maxLength={OBJECTIVE_LIMIT} rows={3} placeholder="For example, read the lessons, then take the quiz." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6 focus-visible:outline-2 focus-visible:outline-cyan-700" /><span className="text-xs font-normal text-slate-600">Collected course material stays available across pages. Check your goal when changing pages.</span></label>
+      {mode === 'independent' && !question && !busy && objective.trim() ? (resolvedIntent && resolvedIntent !== 'coordinate'
+        ? <p role="status" className="text-sm font-medium text-slate-700">{independentPlans[resolvedIntent]}</p>
+        : <fieldset className="space-y-2 text-sm text-slate-700"><legend className="font-semibold">What should I do with the assessment?</legend>
+          {([['read', 'Read the material'], ['quiz', 'Take the quiz'], ['read-and-assess', 'Read and take the quiz']] as const).map(([value, label]) =>
+            <button key={value} type="button" disabled={draftDisabled} onClick={() => setChosenIntent(value)} className="mr-2 min-h-10 rounded-md border border-slate-300 px-3 hover:bg-slate-50 disabled:opacity-50">{label}</button>)}
+        </fieldset>) : null}
+    </div>
     </div>
     {replyError ? <p role="alert" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">{replyError}</p> : null}
     {detachedQuestion ? <section className="space-y-2 border-t border-slate-200 pt-5" aria-live="polite"><h3 className="font-semibold text-slate-950">Earlier assistant question</h3><p className="text-slate-800">{detachedQuestion.question}</p><p className="text-sm text-slate-600">The page has changed. Inspect the intended course page to continue with fresh information.</p></section> : null}
-    {question ? <section className="space-y-4 border-t border-slate-200 pt-5" aria-labelledby="assistant-request-title">
-      <h3 id="assistant-request-title" className="text-base font-semibold text-slate-950">{openModuleRequest || !question.model ? 'Action needed in the helper browser' : 'Your AI assistant has a question'}</h3>
+    {question ? <section className="space-y-4 border-t border-slate-200 pt-5" aria-labelledby="assistant-request-title" aria-live="polite">
+      <h3 id="assistant-request-title" className="text-base font-semibold text-slate-950">{openModuleRequest || !question.model ? 'Action needed in the helper browser' : 'Vitriol has a question'}</h3>
       <p className="text-sm leading-6 text-slate-600">{openModuleRequest ? 'Vitriol could not find quiz controls on this page. Learning is paused until you are ready.' : 'Learning is paused. Choose a reply below or write your own to continue.'}</p>
       <div className="rounded-md border border-cyan-200 bg-cyan-50 px-5 py-4 sm:px-6"><p className="text-base font-semibold leading-7 text-slate-950 sm:text-lg sm:leading-8">{openModuleRequest ? 'Open the quiz question or module you want to work on in the helper browser. Then return here and resume.' : question.question}</p></div>
       {question.model ? <>
@@ -499,7 +512,7 @@ export function GuidedRunner(props: {
           <p className="mt-1 text-sm leading-6 text-slate-600">{finishPending ? 'Keep the course window open while the recording saves.' : recordingReady ? 'You can click through the course now.' : recordingId ? 'Wait for the button to turn red before clicking through.' : props.paused ? 'Use Resume session above.' : savedRecording?.folder ? `${savedRecording.pages} page observations · ${savedRecording.frames} frames saved on this PC.` : quizResult?.detail || recordedStop || currentProgress || (!selected ? 'Choose a course tab to start.' : message)}</p>
         </div> : null}
         <div className="flex flex-wrap items-center gap-3">
-          {!recordingId && (selected || busy || question) && (!question?.model || showReplyField || busy) ? <button type="button" onClick={() => void start()} disabled={!props.ready || !(pauseTab || selected) || (mode !== 'quick' && !objective.trim()) || busy || props.active || props.paused || props.suspended || Boolean(question?.model && !answer.trim())} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}{busy ? (mode === 'quick' ? 'Starting recorder…' : 'Working…') : mode === 'quick' ? 'Start recording' : question?.model ? 'Send answer and continue' : question?.next || 'Inspect and start'}</button> : null}
+          {!recordingId && (selected || busy || question) && (!question?.model || showReplyField || busy) ? <button type="button" onClick={() => void start()} disabled={!props.ready || !(pauseTab || selected) || (mode !== 'quick' && (!objective.trim() || !resolvedIntent)) || busy || props.active || props.paused || props.suspended || Boolean(question?.model && !answer.trim())} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}{busy ? (mode === 'quick' ? 'Starting recorder…' : 'Working…') : mode === 'quick' ? 'Start recording' : question?.model ? 'Send answer and continue' : question?.next || 'Inspect and start'}</button> : null}
           {recordingId ? <button type="button" disabled={finishPending} aria-busy={finishPending} onClick={() => void finishRecording()} className={`inline-flex min-h-11 items-center gap-2 rounded-md px-5 py-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 ${recordingReady ? 'bg-red-700 text-white hover:bg-red-800 focus-visible:outline-red-700' : 'border border-slate-300 bg-white text-slate-800 disabled:opacity-60'}`}><Square aria-hidden="true" className={`size-4 ${recordingReady ? 'fill-current' : ''}`}/>{finishPending ? 'Saving recording…' : recordingReady ? 'Finish recording' : 'Stop recorder'}</button> : busy ? <button type="button" disabled={stopPending} aria-busy={stopPending} onClick={() => void stop()} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold"><Square className="size-4" />{stopPending ? 'Requesting stop…' : 'Stop'}</button> : null}
           {settingsNeeded ? <a href="/settings" className="font-semibold text-cyan-800 underline">Connect or test AI in Settings</a> : null}
         </div>

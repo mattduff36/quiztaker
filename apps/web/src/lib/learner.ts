@@ -22,7 +22,7 @@ export const LEARNER_SYSTEM_PROMPT = [
   'Allowed browser actions are exactly {"action":"click","targetId":"b1"} {"action":"answer-select","targetId":"c1"} {"action":"select-tab","targetId":"t1"} {"action":"scroll","direction":"down"} {"action":"scroll","direction":"up"} {"action":"find-text","text":"visible course phrase"} {"action":"wait","ms":500} {"action":"capture"} {"action":"verify"} {"action":"ask-user","question":"Which module should I open?","options":["Module 1","Resume here"]}.',
   'click and answer-select must use a targetId from the snapshot.',
   'Use ask-user when the page is ambiguous, a needed capability is missing, or required information is missing.',
-  'For ask-user, include up to three concise suggested replies in options when a choice or acknowledgement is sufficient; use free text only when needed. Do not invent user facts or imply an action is already done.',
+  'For ask-user, explain what is blocking progress in one short sentence and ask one concrete question. When a choice or acknowledgement is sufficient, include up to three actionable replies with the recommended one first. Use free text when the operator needs to supply information. Do not invent facts or imply an action is already done.',
   'If a control name is only a technical id, such as "Course interaction: <id>", do not offer that string. Suggest "Ask me to identify the control" instead.',
   'Start by inspecting the page structure.',
   'Proactively look for a visible overview, transcript, download, or contents list and collect relevant material efficiently.',

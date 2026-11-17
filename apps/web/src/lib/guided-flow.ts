@@ -1,6 +1,28 @@
 import type { LearnerIntent, LearnerMode } from '@quiztaker/core';
 
 export type GuidedLearningMode = LearnerMode | LearnerIntent;
+export type IndependentIntent = Exclude<GuidedLearningMode, 'coordinate'>;
+
+export const independentPlans: Record<IndependentIntent, string> = {
+  read: 'I’ll read and retain the course material.',
+  quiz: 'I’ll answer and submit the quiz, then check the result.',
+  'read-and-assess': 'I’ll work through the lessons, then take the assessment.',
+};
+
+export function independentIntent(goal: string): IndependentIntent | null {
+  const text = goal.toLowerCase().replace(/[’‘]/g, "'");
+  const reading = /\b(?:read|review|study|learn|collect|retain|summari[sz]e|cover)\b/.test(text)
+    || /\b(?:complete|finish|work through)\s+(?:(?:the|all|required|unfinished)\s+)*(?:lessons?|modules?)\b/.test(text);
+  const material = /\b(?:material|lessons?|modules?|content|slides?|course|transcript|notes)\b/.test(text);
+  const assessment = /\b(?:quiz|quizzes|assessments?|exams?|tests?|knowledge checks?)\b/.test(text);
+  if (!assessment) return reading ? 'read' : null;
+  if (/\b(?:without|skip|do not|don't|never|avoid|no|only read|read only)\b/.test(text)) {
+    return reading && !/\b(?:then|but|also)\s+(?:take|pass|submit|answer|complete)\b/.test(text) ? 'read' : null;
+  }
+  if (/\b(?:how to|whether|if|later|practice|help me|explain|prepare)\b/.test(text)) return null;
+  const action = /\b(?:take|pass|submit|answer|complete|attempt|do|finish|work through)\s+(?:(?:the|this|all|its|final|practice|course)\s+)*(?:quiz|quizzes|assessments?|exams?|tests?|knowledge checks?)\b/.test(text);
+  return action ? (reading && material ? 'read-and-assess' : 'quiz') : null;
+}
 
 export type GuidedDetection = {
   detected?: string;
@@ -24,7 +46,7 @@ export function decideGuidedFlow(detection: GuidedDetection, mode: GuidedLearnin
     kind: 'question', question: 'Can you sign in to the course website in the helper browser?', next: 'I have signed in — inspect again',
   };
   if (detection.detected === 'server-assessment' && mode === 'read') return {
-    kind: 'question', question: 'This page is a quiz. Choose an assessment option to answer and submit it, or choose a course-material page to read.', next: 'Inspect the current page again',
+    kind: 'question', question: 'This page is a quiz. To answer and submit it, update your goal. To keep reading, open a lesson in the course browser.', next: 'Inspect the current page again',
   };
   if (known.has(detection.action?.capabilityId || '') || learnable.has(detection.detected || '') || detection.detected === 'server-assessment') return {
     kind: 'learn', message: {
@@ -45,7 +67,7 @@ export function learnerQuestion(output: string): { question: string; options: st
     const value = JSON.parse(lines.at(-1)?.slice('LEARNER_QUESTION '.length) || 'null');
     if (!value || typeof value.question !== 'string' || !value.question.trim() || value.question.length > 500) return null;
     const options = Array.isArray(value.options) ? value.options.filter((option: unknown) => typeof option === 'string' && option.length <= 120).slice(0, 3) : [];
-    if (value.url != null && (typeof value.url !== 'string' || !value.url || value.url.length > 500 || !/^https?:\/\//i.test(value.url))) return null;
+    if (value.url != null && (typeof value.url !== 'string' || !value.url || value.url.length > 2000 || !/^https?:\/\//i.test(value.url))) return null;
     return { question: value.question, options, ...(value.url ? { url: value.url } : {}) };
   } catch { return null; }
 }

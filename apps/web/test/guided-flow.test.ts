@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { decideGuidedFlow, learnerQuestion, learnerStopMessage, observedQuizResult, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab } from '../src/lib/guided-flow';
+import { decideGuidedFlow, independentIntent, learnerQuestion, learnerStopMessage, observedQuizResult, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab } from '../src/lib/guided-flow';
 
 test('uses actual detector capability IDs, including SCORM and SlickQuiz', () => {
   for (const [detected, capability] of [['scorm-player', 'scorm-complete'], ['slickquiz-exam', 'slickquiz-solve'], ['container', 'container-batch']]) {
@@ -43,11 +43,20 @@ test('learning requires the helper version containing capture and question fixes
 });
 
 test('question recovery carries the bounded pause URL rather than the launch page', () => {
-  const paused = 'https://example.com/course/next';
+  const paused = 'https://example.com/course/next?' + 'x'.repeat(1100);
   assert.deepEqual(learnerQuestion(`LEARNER_QUESTION ${JSON.stringify({ question: 'Which module?', options: ['A'], url: paused })}`), { question: 'Which module?', options: ['A'], url: paused });
-  for (const url of ['', 'https://example.com/' + 'x'.repeat(500), 123, 'javascript:alert(1)']) {
+  for (const url of ['', 'https://example.com/' + 'x'.repeat(2000), 123, 'javascript:alert(1)']) {
     assert.equal(learnerQuestion(`LEARNER_QUESTION ${JSON.stringify({ question: 'Which module?', url })}`), null);
   }
+});
+
+test('independent goals select a plan and leave ambiguous submission for the operator', () => {
+  assert.equal(independentIntent('Read the material without taking the quiz'), 'read');
+  assert.equal(independentIntent('Take the quiz'), 'quiz');
+  assert.equal(independentIntent('Complete the lessons then pass the assessment'), 'read-and-assess');
+  assert.equal(independentIntent('Read the course then take the quiz'), 'read-and-assess');
+  assert.equal(independentIntent('Complete the course'), null);
+  assert.equal(independentIntent('Explain how to pass the quiz'), null);
 });
 
 test('resume resolves a new target ID only for one exact matching pause URL', () => {

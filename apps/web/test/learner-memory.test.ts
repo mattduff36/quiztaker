@@ -489,7 +489,7 @@ test('local pause questions persist for the stored job scope and do not duplicat
   const db = createHarness();
   const scope = { userId: userA, helperId: helperA, browserSessionId: browserA };
   const created = await ensureLearnerSession(scope, db);
-  const pausedUrl = 'https://content.example/module';
+  const pausedUrl = 'https://content.example/module?launch=' + 'x'.repeat(1100);
   const question = 'Open the intended question or module, then resume.';
   const line = `progress\nLEARNER_QUESTION ${JSON.stringify({ question, url: pausedUrl })}\n`;
   const storedInput = {
@@ -550,7 +550,8 @@ test('local pause questions persist for the stored job scope and do not duplicat
   assert.equal(await recordLocalPausedQuestion({ ...scope, helperId: helperB, conversationId: created.id, output: line }, db), false);
   assert.equal(await recordLocalPausedQuestion({ ...scope, browserSessionId: browserB, conversationId: created.id, output: line }, db), false);
   assert.equal(await recordLocalPausedQuestion({ ...scope, conversationId: created.id, output: 'LEARNER_QUESTION {"question":""}' }, db), false);
-  const other = `LEARNER_QUESTION ${JSON.stringify({ question: 'Which module?', options: ['Module 1'], url: 'http://content.example/other' })}`;
+  const otherUrl = 'http://content.example/other?launch=' + 'y'.repeat(1100);
+  const other = `LEARNER_QUESTION ${JSON.stringify({ question: 'Which module?', options: ['Module 1'], url: otherUrl })}`;
   assert.equal(await recordLocalPausedQuestion({ ...scope, conversationId: created.id, output: other }, db), true);
   const stored = await readLearnerSessionForModel({ ...scope, conversationId: created.id }, db);
   assert.equal(stored?.history.filter((entry) => entry.role === 'assistant').length, 2);
@@ -559,7 +560,7 @@ test('local pause questions persist for the stored job scope and do not duplicat
     question: 'Which module?',
     options: ['Module 1'],
   });
-  assert.equal(stored?.history.at(-1)?.url, 'http://content.example/other');
+  assert.equal(stored?.history.at(-1)?.url, otherUrl);
   assert.equal(stored?.userId, userA);
   assert.equal(stored?.helperId, helperA);
   assert.equal(stored?.browserSessionId, browserA);

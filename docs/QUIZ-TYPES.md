@@ -100,7 +100,7 @@ if the fast path fails.
 
 - **Fingerprint** - The Saba SCORM 1.2 player contains a Rise course with a lesson menu, course completion percentage, and a separate Check your Knowledge lesson. Each active quiz card offers labelled radio buttons or checkboxes and separate SUBMIT and NEXT controls.
 - **Strategy** - For course completion, work through the unfinished lessons using the lesson menu and complete required interactions as prompted. The direct Check your Knowledge link is useful for quiz-only goals. On an active card, select the named controls with Space, submit once, and use NEXT after feedback.
-- **Verification** - Quiz Results showed 91% with an 80% pass mark. After opening Summary and the final lesson and using EXIT COURSE, the course still showed In Progress in Saba and the reopened player showed 30% complete. Check the lesson checklist and the portal result independently before marking the course complete.
+- **Verification** - Quiz Results showed 91% with an 80% pass mark. After opening Summary and the final lesson and using EXIT COURSE, the course still showed In Progress in Saba and the reopened player showed 30% complete. In Poly Lens Fundamentals, opening each of the seven unfinished lessons and scrolling through its nested page panel to the bottom brought the player from 30% to 100%. Exit Course then led to Successful in Saba. Check the lesson checklist and the portal result independently before marking the course complete.
 
 Ordered from fastest / most-common to slowest / rarest.
 

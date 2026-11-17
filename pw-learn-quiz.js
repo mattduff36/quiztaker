@@ -633,7 +633,10 @@ async function readSnapshot(page, mode = 'read') {
             break;
           }
         }
-        return { heading: heading?.textContent?.trim() || document.title, text: lines.join('\n'), riseResult, position: Math.round(scrollY), end: scrollY + innerHeight >= document.documentElement.scrollHeight - 2,
+        const scrollArea = document.querySelector('a.nav-sidebar__outline-item__link') ? document.querySelector('.page-wrap') : null;
+        const position = scrollArea ? scrollArea.scrollTop : scrollY;
+        const end = scrollArea ? position + scrollArea.clientHeight >= scrollArea.scrollHeight - 2 : position + innerHeight >= document.documentElement.scrollHeight - 2;
+        return { heading: heading?.textContent?.trim() || document.title, text: lines.join('\n'), riseResult, position: Math.round(position), end,
           storylineResult: /^slide:\s*Results Slide$/i.test(slideLabel || '') && Boolean(document.querySelector('.slide-layer.base-layer.shown')) };
       });
       if (!observed.text.trim()) continue;
@@ -761,7 +764,11 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
   }
   if (action.action === 'scroll') {
     // Scroll each visible course frame as well as the outer wrapper.
-    for (const frame of await visibleFrames(page)) await frame.evaluate(direction => window.scrollBy(0, (direction==='up'?-1:1)*Math.max(300, innerHeight * 0.8)),action.direction||'down').catch(() => undefined);
+    for (const frame of await visibleFrames(page)) await frame.evaluate(direction => {
+      const scrollArea = document.querySelector('a.nav-sidebar__outline-item__link') ? document.querySelector('.page-wrap') : null;
+      const distance = (direction === 'up' ? -1 : 1) * Math.max(300, (scrollArea?.clientHeight || innerHeight) * 0.8);
+      (scrollArea || window).scrollBy(0, distance);
+    }, action.direction || 'down').catch(() => undefined);
     await page.waitForTimeout(100);
     return;
   }
@@ -816,10 +823,10 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
   await handle.check({ timeout: 5000 });
 }
 
-async function emitQuestion(payload, snapshot, browser) {
+async function emitQuestion(payload, page, browser) {
   const tabs = await Promise.all(browser.contexts()[0].pages().map(async (page, idx) => ({ idx, url: page.url(), title: await page.title().catch(() => "") })));
   console.log(`LEARNER_TABS ${JSON.stringify(tabs)}`);
-  console.log(learnerQuestionLine({ ...payload, url: snapshot.url }));
+  console.log(learnerQuestionLine({ ...payload, url: page.url() }));
   finish(false, LEARNER_NEEDS_INPUT);
 }
 
@@ -875,7 +882,7 @@ async function main() {
           finish(false, 'rejected-action');
           return;
         }
-        await emitQuestion(question, snapshot, browser);
+        await emitQuestion(question, page, browser);
         return;
       }
       let view = snapshot;
@@ -892,7 +899,7 @@ async function main() {
       repeatState = repeated.state;
       if (repeated.question) {
         console.log(`Learner step ${step}: repeated unchanged ${action.action}`);
-        await emitQuestion(repeated.question, view, browser);
+        await emitQuestion(repeated.question, page, browser);
         return;
       }
       if (action.action === 'verify') {
@@ -907,15 +914,20 @@ async function main() {
       let switched;
       try {
         switched = await applyAction(page, action, view, viewHandles, mode);
+        if (['click', 'answer-select'].includes(action.action)) delete observationFor(page).lastBlockedControl;
       } catch (error) {
         if (!['click', 'answer-select'].includes(action.action) || page.isClosed()
           || !(error instanceof CourseControlBlocked || error?.name === 'TimeoutError' || /element is not attached|target changed/i.test(error?.message || ''))) throw error;
         const state = observationFor(page);
         const control = [...(view.buttons || []), ...(view.choices || [])].find(item => item.id === action.targetId);
-        if (!coordinated) {
-          finish(false, 'blocked-control');
+        if (!coordinated && state.lastBlockedControl === control?.name) {
+          await emitQuestion({
+            question: `Vitriol could not use ${control?.name || 'the selected control'}. Can you open the next step in the course browser?`,
+            options: ['Done, resume now'],
+          }, page, browser);
           return;
         }
+        state.lastBlockedControl = control?.name;
         state.blockedControl = true;
         state.feedback = `${action.action === 'answer-select' ? 'Selection of' : 'Click on'} ${control?.name || 'the selected control'} could not be confirmed. Check the current slide before trying again.`;
         console.log('Learner click blocked; asking for guidance on the fresh page.');
@@ -940,7 +952,7 @@ async function main() {
     await emitQuestion({
       question: 'Vitriol reached its step limit. Resume to continue from the current course page.',
       options: ['Resume from this page'],
-    }, snapshot, browser);
+    }, page, browser);
   } finally {
     reader?.close();
     await browser.close().catch(() => undefined);

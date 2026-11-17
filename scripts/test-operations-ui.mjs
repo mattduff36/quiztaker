@@ -29,8 +29,8 @@ await writeFile(join(temp,'app.css'),css.css+'\n:root{--font-plex:Arial}body{mar
 function state(){return{last:null,paused:false,online:true,connected:true,updatePhase:null,refreshes:0,checks:0,statusFailed:false,statusStale:false,activityPosts:0,pausePosts:0,jobs:new Map(),latest:null,serial:0,selected:null,blocked:false,retries:0,task:null,finishPosts:0,questionOutput:'',pairPosts:0,holdCapability:null};}
 function reply(path,method,body,now,s){
   const activity=()=>({paused:s.paused,lastActivityAt:new Date(s.last??now).toISOString(),expiresAt:new Date((s.last??now)+1_800_000).toISOString(),serverNow:new Date(now).toISOString()});
-  const session=()=>s.noSession?null:({id:'22222222-2222-4222-8222-222222222222',revision:1,cdp_connected:s.connected,updated_at:new Date(now-(s.stale?120_000:0)).toISOString(),tabs:[...(!s.noCourse?[{targetId:'course',index:0,title:'Xerox course overview',url:'https://example.invalid/course',fingerprint:'course-fingerprint'}]:[]),{targetId:'blank',index:1,title:'Blank tab',url:'about:blank',fingerprint:'blank'}],roster:null,detection:null});
-  function makeJob(capability){const id=`job-${++s.serial}`;const job={id,status:capability==='list-tabs'||capability===s.holdCapability?'running':'completed',capability_id:capability,outcome:{verified:true,status:'verified'},result:{ok:true,result:capability==='detect'?{detection:{detected:'server-assessment',tabIdx:0,url:'https://example.invalid/course',fingerprint:'course-fingerprint',detail:'Open a course page before attempting a final assessment.'}}:{}}};s.jobs.set(id,job);s.latest=job;return id;}
+  const session=()=>s.noSession?null:({id:'22222222-2222-4222-8222-222222222222',revision:1,cdp_connected:s.connected,updated_at:new Date(now-(s.stale?120_000:0)).toISOString(),tabs:[...(!s.noCourse?[{targetId:'course',index:0,title:'Xerox course overview',url:s.courseUrl||'https://example.invalid/course',fingerprint:'course-fingerprint'}]:[]),{targetId:'blank',index:1,title:'Blank tab',url:'about:blank',fingerprint:'blank'}],roster:null,detection:null});
+  function makeJob(capability){const id=`job-${++s.serial}`;const job={id,status:capability==='list-tabs'||capability===s.holdCapability?'running':'completed',capability_id:capability,outcome:{verified:true,status:'verified'},result:{ok:true,result:capability==='detect'?{detection:{detected:'server-assessment',tabIdx:0,url:s.courseUrl||'https://example.invalid/course',fingerprint:'course-fingerprint',detail:'Open a course page before attempting a final assessment.'}}:{}}};s.jobs.set(id,job);s.latest=job;return id;}
   if(path==='/api/helper/pair'){if(s.pairPosts++===0)return{__status:503,error:'Pairing is temporarily unavailable.'};return{code:'ABCD1234',expiresAt:new Date(now+2000).toISOString(),controlPlaneUrl:'https://example.invalid'};}
   if(path==='/api/reviews/review-1/resolve')return{__status:503,error:'Unavailable'};
   if(path==='/api/operations/activity'){
@@ -237,12 +237,16 @@ try{
   }
   console.log('PASS browser close progress clears after success and reports failure.');
   for (const [label, intent, goal] of [
-    ['Read material and pass assessment questions', 'read-and-assess', /required unfinished lessons.*submit the assessment/],
+    ['Work independently', 'read-and-assess', 'Read the lessons, then take the quiz'],
     ['Co-ordinate with ChatGPT', 'coordinate', /progress and lesson checklist.*connected Codex chat/],
   ]) {
     const page = await browser.newPage();
     const fixture = state();
     fixture.helperVersion = '1.0.32';
+    const independent = intent === 'read-and-assess';
+    fixture.courseUrl = 'https://example.invalid/course?launch=' + 'x'.repeat(1100);
+    if (independent) fixture.questionOutput = 'LEARNER_QUESTION ' + JSON.stringify({question:'Which lesson should I open?',options:['Paper types','Paper storage'],url:fixture.courseUrl});
+    const queuedLearnerInputs = [];
     let learnerInput;
     await page.route('**/api/**', async route => {
       const req = route.request();
@@ -250,6 +254,7 @@ try{
       const body = req.postDataJSON() || {};
       if (path === '/api/operations/actions' && body.capabilityId === 'quiz-learn') {
         learnerInput = body.capabilityInput;
+        queuedLearnerInputs.push(learnerInput);
       }
       const { __status, ...json } = reply(path, req.method(), body, Date.now(), fixture);
       if (json.job?.capability_id === 'quiz-learn') {
@@ -260,11 +265,22 @@ try{
     await page.goto(url);
     await page.getByRole('combobox', { name: 'Course tab', exact: true }).selectOption('course');
     const activity = page.getByRole('combobox', { name: 'Course activity', exact: true });
-    await expect(activity).toHaveValue('read');
+    await expect(activity).toHaveValue('independent');
     await activity.selectOption({ label });
-    await expect(page.getByRole('textbox', { name: /What would you like to achieve/ })).toHaveValue(goal);
+    const objective = page.getByRole('textbox', { name: /What would you like to achieve/ });
+    if (typeof goal === 'string') await objective.fill(goal);
+    await expect(objective).toHaveValue(goal);
     await page.getByRole('button', { name: 'Inspect and start', exact: true }).click();
     await expect.poll(() => learnerInput).toMatchObject({ mode: 'quiz', intent });
+    if (independent) {
+      await expect(page.getByRole('heading',{name:'Vitriol has a question',exact:true})).toBeVisible();
+      const captureCount = [...fixture.jobs.values()].filter(job => job.capability_id === 'learn-capture').length;
+      fixture.questionOutput = '';
+      await page.getByRole('button',{name:'Paper types',exact:true}).click();
+      await expect.poll(() => queuedLearnerInputs.length).toBe(2);
+      expect(learnerInput).toMatchObject({mode:'quiz',intent,guidance:'Previous question: Which lesson should I open?\nUser answer: Paper types'});
+      expect([...fixture.jobs.values()].filter(job => job.capability_id === 'learn-capture')).toHaveLength(captureCount);
+    }
     await expect(page.getByText('Quiz passed · 91%', { exact: true })).toBeVisible();
     await expect(page.getByText(/Pass mark 80%.*course progress in the learning portal/)).toBeVisible();
     await page.close();
@@ -325,18 +341,25 @@ try{
     await select.selectOption('course');
     const goal=page.getByRole('textbox',{name:/What would you like to achieve/});
     const mode=page.getByRole('combobox',{name:'Course activity',exact:true});
-    await expect(mode).toHaveValue('read');
-    await expect(goal).toHaveValue(/Read all relevant material.*Xerox course overview/);
+    await expect(mode).toHaveValue('independent');
+    await expect(goal).toHaveValue(/Read the course material/);
     await goal.fill('x'.repeat(1005));
     await expect(goal).toHaveValue('x'.repeat(1000));
     await goal.fill('');
     // User edits are preserved; this fixture now checks default mode goals on a fresh mount.
     await page.reload();
     await select.selectOption('course');
-    await mode.selectOption('quiz');
-    await expect(goal).toHaveValue(/answer and submit.*Xerox course overview/);
-    await mode.selectOption('read');
-    await expect(goal).toHaveValue(/Read all relevant material/);
+    await expect(mode.getByRole('option')).toHaveText(['Work independently','Co-ordinate with ChatGPT','Scrape info with the user']);
+    await goal.fill('Complete the course');
+    await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeDisabled();
+    await page.getByRole('button',{name:'Read and take the quiz',exact:true}).click();
+    await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
+    await page.reload();
+    await select.selectOption('course');
+    await mode.selectOption('coordinate');
+    await expect(goal).toHaveValue(/lesson checklist.*Xerox course overview/);
+    await mode.selectOption('independent');
+    await expect(goal).toHaveValue(/Read the course material/);
     await goal.fill('Read this course overview and ask me before continuing.');
     await page.getByText('Course material checklist',{exact:true}).click();
     await expect(page.getByText('3 topics found · 1 with collected material · 1 unchecked',{exact:true})).toBeVisible();
@@ -375,9 +398,9 @@ try{
     await page.clock.fastForward(46_000);
     await expect.poll(()=>fixture.refreshes).toBeGreaterThan(before);
     await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
-    await mode.selectOption('quiz');
+    await mode.selectOption('coordinate');
     await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
-    await mode.selectOption('read');
+    await mode.selectOption('independent');
     await expect(goal).toBeFocused();
     await expect(select).toHaveValue('course');
     await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
@@ -386,9 +409,9 @@ try{
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
     await expect(page.getByText('This page is a quiz.',{exact:false})).toBeVisible();
-    await mode.selectOption('quiz');
+    await mode.selectOption('coordinate');
     await expect(page.getByText('This page is a quiz.',{exact:false})).toHaveCount(0);
-    await mode.selectOption('read');
+    await mode.selectOption('independent');
     await expect(page.getByText('This page is a quiz.',{exact:false})).toHaveCount(0);
     expect(fixture.retries).toBe(2);
     await page.clock.fastForward(28*60_000+5_000);
@@ -420,7 +443,7 @@ try{
     fixture.jobs.set(task.id,task);fixture.latest=task;fixture.task=task;
     fixture.questionOutput='LEARNER_QUESTION '+JSON.stringify({question:'Which module should I read next?',options:['Paper storage','Paper types'],url:'https://example.invalid/course'});
     await page.clock.fastForward(16_000);
-    await expect(page.getByRole('heading',{name:'Your AI assistant has a question',exact:true})).toBeVisible();
+    await expect(page.getByRole('heading',{name:'Vitriol has a question',exact:true})).toBeVisible();
     const refreshesWithQuestion=fixture.refreshes;
     fixture.latest={id:'background-observation',status:'completed',capability_id:'list-tabs'};
     await page.clock.fastForward(46_000);
@@ -467,7 +490,7 @@ try{
     await expect(page.getByText('Recording saved',{exact:true})).toBeVisible();
     await page.getByText('Recording folder',{exact:true}).click();
     await expect(page.getByText('C:/Fixtures/recording',{exact:true})).toBeVisible();
-    await activityPicker.selectOption('read');
+    await activityPicker.selectOption('independent');
     // Finishing during a guided wait stops the local orchestrator before another step can queue.
     fixture.online=true;fixture.paused=false;fixture.holdCapability='detect';
     await page.clock.fastForward(61_000);

@@ -40,6 +40,11 @@ test('Rise uses the current quiz card, selects labelled choices and reads the se
     assert.equal(result?.status, 'passed');
     assert.equal(result?.scorePercent, 91);
     assert.equal(result?.passingScorePercent, 80);
+    await page.setContent(`<a class="nav-sidebar__outline-item__link" href="#lesson">Lesson</a>
+      <main class="page-wrap" style="height:250px;overflow:auto"><h2>Lesson</h2><div style="height:1600px">Material</div></main>`);
+    const { snapshot, handles } = await readSnapshot(page, 'read');
+    await applyAction(page, { action: 'scroll', direction: 'down' }, snapshot, handles, 'read');
+    assert.equal(await page.locator('.page-wrap').evaluate(el => el.scrollTop), 300);
   } finally { await browser.close(); }
 });
 
@@ -203,7 +208,9 @@ test('learner process recognizes results and returns a resume prompt at the step
       assert.equal(payload.completed,status==='Passed'?1:0);
       assert.match(await page.locator('body').innerText(),/Test Results/);
     }
-    await page.setContent('<h1>Course activity</h1><p>Read this slide, then continue.</p><button>Next</button>');
+    const courseUrl = `https://example.invalid/course?launch=${'a'.repeat(1100)}`;
+    await page.route(courseUrl, route => route.fulfill({ contentType: 'text/html', body: '<h1>Course activity</h1><p>Read this slide, then continue.</p><button>Next</button>' }));
+    await page.goto(courseUrl);
     const paused = await new Promise((resolve, reject) => {
       const child = spawn(process.execPath, ['pw-learn-quiz.js', '0'], {
         cwd: __dirname, env: { ...process.env, VITRIOL_LEARNER_MODE: 'quiz', PLAYWRIGHT_CDP_URL: `http://127.0.0.1:${port}` },
@@ -225,7 +232,7 @@ test('learner process recognizes results and returns a resume prompt at the step
     assert.equal(paused.code, 1);
     const question = JSON.parse(paused.output.match(/^LEARNER_QUESTION (.+)$/m)[1]);
     assert.deepEqual(question.options, ['Resume from this page']);
-    assert.equal(question.url, page.url());
+    assert.equal(question.url, courseUrl);
   } finally {await browser.close();}
 });
 
