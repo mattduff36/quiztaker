@@ -20,6 +20,20 @@ async function readJson(file: string): Promise<unknown> {
   }
 }
 
+function describeReply(action: LearnerAction, snapshot: LearnerSnapshot): string {
+  switch (action.action) {
+    case 'click': return `Click ${snapshot.buttons?.find(button => button.id === action.targetId)?.name ?? 'the course control'}.`;
+    case 'answer-select': return `Select ${snapshot.choices?.find(choice => choice.id === action.targetId)?.name ?? 'the answer'}.`;
+    case 'select-tab': return 'Switch to the selected course tab.';
+    case 'scroll': return `Scroll ${action.direction === 'up' ? 'up' : 'down'}.`;
+    case 'find-text': return 'Find the requested text on the page.';
+    case 'capture': return 'Capture the current course screen.';
+    case 'verify': return 'Check the visible course result.';
+    case 'wait': return 'Wait for the page to respond.';
+    case 'ask-user': return action.question;
+  }
+}
+
 /** Exchange one time-limited, observation-bound request with the active local Codex chat. */
 export async function askCoordinator(
   home: string,
@@ -28,7 +42,7 @@ export async function askCoordinator(
   reason: string,
   timeoutMs = 70_000,
   cancelled?: () => boolean,
-  onRequest?: () => void,
+  showExchange?: (line: string) => void,
 ): Promise<LearnerAction | undefined> {
   const directory = join(home, 'coordination');
   const connection = await readJson(join(directory, 'connection.json')) as Connection | null;
@@ -47,12 +61,15 @@ export async function askCoordinator(
       snapshot: sanitizeLogValue({ title, url, text, buttons, choices, tabs, outlines }),
     }), { flag: 'wx' });
     await rename(temporary, request);
-    onRequest?.();
+    showExchange?.(`Vitriol → ChatGPT · ${reason}`);
     while (Date.now() < expiresAt && !cancelled?.()) {
       const value = await readJson(reply) as { id?: string; connectionId?: string; action?: unknown } | null;
       if (value?.id === id && value.connectionId === connection.id && Date.now() < expiresAt && !cancelled?.()) {
         const checked = parseLearnerAction(value.action, snapshot, { mode: 'quiz' });
-        if (checked.ok) return checked.action;
+        if (checked.ok) {
+          showExchange?.(`ChatGPT → Vitriol · ${describeReply(checked.action, snapshot)}`);
+          return checked.action;
+        }
         await rm(reply, { force: true });
       }
       await delay(350);

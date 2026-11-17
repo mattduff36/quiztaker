@@ -18,17 +18,59 @@ test('Storyline matches a shadow button to the visible SVG with the same model i
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   try {
     const page = await browser.newPage();
-    await page.setContent(`<style>.slide-object,button{position:absolute;left:10px;top:10px;width:150px;height:50px}</style>
-      <button class="acc-shadow-el" data-represents="_player.slide.control12" aria-label="Next"></button>
-      <div class="slide-object" data-model-id="control12">
-        <svg width="150" height="50"><g class="eventable"><rect width="150" height="50" onclick="document.querySelector('output').textContent='Opened'"/></g></svg>
+    await page.setContent(`<style>#group,button{position:absolute;left:10px;top:10px;width:150px;height:50px}</style>
+      <button class="acc-shadow-el" data-represents="_player.slide.control12.control12" aria-label="Next"></button>
+      <div class="slide-object" id="group" data-model-id="control12">
+        <div class="slide-object" data-model-id="shape13"><svg width="150" height="50"><g class="eventable"><rect width="150" height="50" onclick="document.querySelector('output').textContent='Opened'"/></g></svg></div>
       </div><output></output>`);
     await act(page, 'Next');
     assert.equal(await page.locator('output').textContent(), 'Opened');
-    await page.locator('.slide-object').evaluate(el => { el.dataset.modelId = 'unrelated'; });
+    await page.locator('button').evaluate(button => {
+      button.textContent = '>';
+      button.removeAttribute('aria-label');
+      const duplicate = button.cloneNode(true);
+      duplicate.setAttribute('data-represents', '_player.slide.alternate');
+      button.before(duplicate);
+    });
+    assert.equal((await readSnapshot(page)).snapshot.buttons.filter(button => button.name === '>').length, 1);
+    await page.locator('#group').evaluate(el => { el.dataset.modelId = 'unrelated'; });
     await page.locator('output').evaluate(el => { el.textContent = ''; });
-    await assert.rejects(act(page, 'Next'), /Timeout/);
+    await assert.rejects(act(page, '>'), /Timeout/);
     assert.equal(await page.locator('output').textContent(), '');
+  } finally { await browser.close(); }
+});
+
+test('Storyline uses the label beside a quiz checkbox and changes the actual selection', async () => {
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<style>
+      input,#graphic { position:absolute; margin:0; left:10px; top:10px; width:40px; height:40px }
+      button { position:absolute; left:66px; top:14px; height:32px }
+      label { display:none }
+    </style>
+    <input id="choice" class="acc-shadow-el" data-represents="_player.slide.layer.answer.answer" type="checkbox">
+    <label for="choice">Rectangle 24</label>
+    <button class="acc-shadow-el acc-button" data-represents="_player.slide.layer.text">Poly Lens</button>
+    <div id="graphic" class="slide-object" data-model-id="answer">
+      <svg width="40" height="40"><g class="eventable"><rect width="40" height="40" onclick="document.querySelector('input').checked=true"/></g></svg>
+    </div>`);
+    await act(page, 'Poly Lens', 'quiz', true);
+    assert.equal(await page.locator('#choice').isChecked(), true);
+  } finally { await browser.close(); }
+});
+
+test('Storyline verifies the displayed score against its passing threshold on the results slide', async () => {
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<div id="slide-label" hidden>slide: Results Slide</div>
+      <div class="slide-layer base-layer shown"><p>Your Score:</p><p id="score">100% (100 points)</p><p>Passing Score:</p><p>80% (80 points)</p></div>`);
+    assert.equal(recognizeQuizResult((await readSnapshot(page, 'quiz')).snapshot).status, 'passed');
+    await page.locator('#score').evaluate(el => { el.textContent = '70% (70 points)'; });
+    assert.equal(recognizeQuizResult((await readSnapshot(page, 'quiz')).snapshot).status, 'failed');
+    await page.locator('#slide-label').evaluate(el => { el.textContent = 'slide: Introduction'; });
+    assert.equal(recognizeQuizResult((await readSnapshot(page, 'quiz')).snapshot), null);
   } finally { await browser.close(); }
 });
 

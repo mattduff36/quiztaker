@@ -11,11 +11,12 @@ test('the connected chat can answer a bounded observation, with only observed ac
   const directory = join(home, 'coordination');
   await mkdir(directory);
   await writeFile(join(directory, 'connection.json'), JSON.stringify({ id: 'connection', expiresAt: Date.now() + 30_000 }));
+  const exchange: string[] = [];
   const waiting = askCoordinator(home, 'job', {
     url: 'https://example.com/course?token=private-value',
     buttons: [{ id: 'b1', name: 'Next', kind: 'content' }],
     image: 'data:image/jpeg;base64,private-image',
-  }, 'Select the next step', 5_000);
+  }, 'Select the next step', 5_000, undefined, line => exchange.push(line));
   try {
     let filename;
     for (let attempt = 0; attempt < 50 && !filename; attempt++) {
@@ -34,6 +35,7 @@ test('the connected chat can answer a bounded observation, with only observed ac
     await delay(800);
     await respond('b1');
     assert.deepEqual(await waiting, { action: 'click', targetId: 'b1' });
+    assert.deepEqual(exchange, ['Vitriol → ChatGPT · Select the next step', 'ChatGPT → Vitriol · Click Next.']);
     assert.deepEqual(await readdir(directory), ['connection.json']);
   } finally {
     await waiting;

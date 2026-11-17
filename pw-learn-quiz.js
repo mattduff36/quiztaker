@@ -240,11 +240,55 @@ async function accessibleName(locator) {
 async function answerName(handle) {
   const name = await accessibleName(handle);
   if (!name) return '';
+  if (/^Rectangle \d+$/i.test(name)) {
+    const label = await handle.evaluate(el => {
+      if (!el.matches('input.acc-shadow-el[data-represents]')) return '';
+      const parts = el.getAttribute('data-represents').split('.');
+      const id = parts.pop();
+      if (parts.at(-1) === id) parts.pop();
+      const scope = `${parts.join('.')}.`;
+      const row = el.getBoundingClientRect();
+      const labels = [...el.ownerDocument.querySelectorAll('button.acc-shadow-el.acc-button[data-represents]')]
+        .filter(candidate => {
+          if (!candidate.getAttribute('data-represents').startsWith(scope)) return false;
+          const rect = candidate.getBoundingClientRect();
+          return rect.width && rect.height && rect.left >= row.right && rect.left - row.right < row.width * 2
+            && Math.abs((rect.top + rect.height / 2) - (row.top + row.height / 2)) < row.height / 3;
+        });
+      return labels.length === 1 ? labels[0].textContent.trim() : '';
+    }).catch(() => '');
+    if (label) return label.replace(/\s+/g, ' ').slice(0, 160);
+  }
   const question = await handle.evaluate(el => {
     const block = el.closest('fieldset.testEngine-question')?.parentElement;
     return block?.innerText?.trim().match(/^Question\s+(\d+)\s+of\s+\d+\b/i)?.[1];
   }).catch(() => undefined);
   return question ? `Q${question}: ${name}`.slice(0,160) : name;
+}
+
+// Runs in the course frame. Match the topmost graphic to the exact observed
+// control, including a nested SVG shape inside the control's state group.
+function storylineGraphic(el, findDuplicate = false) {
+  const graphicAt = control => {
+    const id = control.getAttribute('data-represents')?.split('.').at(-1);
+    if (!id) return null;
+    const rect = control.getBoundingClientRect();
+    const hit = control.ownerDocument.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    const object = hit?.closest(`.slide-object[data-model-id="${CSS.escape(id)}"]`);
+    const eventTarget = hit?.closest('svg .eventable');
+    return object && eventTarget && object.contains(eventTarget) ? hit : null;
+  };
+  if (!el.matches('button.acc-shadow-el[data-represents],input.acc-shadow-el[data-represents][type=radio],input.acc-shadow-el[data-represents][type=checkbox]')) return null;
+  if (!findDuplicate) return graphicAt(el);
+  if (graphicAt(el)) return false;
+  const point = el.getBoundingClientRect();
+  return [...el.ownerDocument.querySelectorAll('button.acc-shadow-el[data-represents]')].some(candidate => {
+    if (candidate === el || candidate.textContent.trim() !== el.textContent.trim()) return false;
+    const rect = candidate.getBoundingClientRect();
+    return Math.abs(rect.x - point.x) < 1 && Math.abs(rect.y - point.y) < 1
+      && Math.abs(rect.width - point.width) < 1 && Math.abs(rect.height - point.height) < 1
+      && Boolean(graphicAt(candidate));
+  });
 }
 
 async function isSubmitControl(locator) {
@@ -394,6 +438,7 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
     if (!await handle.isVisible().catch(() => false) || !await handle.isEnabled().catch(() => false)) continue;
     const name = role === 'answer' ? await answerName(handle) : await accessibleName(handle);
     if (!name || (navigationOnly && UNSAFE_LABEL.test(name))) continue;
+    if (navigationOnly && /^[<>]$/.test(name) && await handle.evaluate(storylineGraphic, true).catch(() => false)) continue;
     let kind;
     if (navigationOnly) {
       const link = await handle.evaluate(el => {
@@ -494,10 +539,12 @@ async function readSnapshot(page, mode = 'read') {
         }
         const headings = Array.from(document.querySelectorAll('h1,h2,[role=heading]'));
         const heading = headings.find(el => visible(el)) || headings.find(el => visible(el, false));
-        return { heading: heading?.textContent?.trim() || document.title, text: lines.join('\n'), position: Math.round(scrollY), end: scrollY + innerHeight >= document.documentElement.scrollHeight - 2 };
+        const slideLabel = document.getElementById('slide-label')?.textContent.trim();
+        return { heading: heading?.textContent?.trim() || document.title, text: lines.join('\n'), position: Math.round(scrollY), end: scrollY + innerHeight >= document.documentElement.scrollHeight - 2,
+          storylineResult: /^slide:\s*Results Slide$/i.test(slideLabel || '') && Boolean(document.querySelector('.slide-layer.base-layer.shown')) };
       });
       if (!observed.text.trim()) continue;
-      resultViews.push(observed.text);
+      resultViews.push(observed.storylineResult ? `Quiz Results\n${observed.text}` : observed.text);
       const source = frame.url().split(/[?#]/)[0].slice(0, 500);
       sections.push(`[Source: ${source} | ${observed.heading || ''} | scroll ${observed.position}${observed.end ? ' | end of page' : ''}]\n${observed.text}`);
     } catch {
@@ -641,26 +688,16 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
   if (!handle) throw new Error('Learner target is not on the page');
   const target = [...(snapshot.buttons || []), ...(snapshot.choices || [])].find(item => item.id === action.targetId);
   if (!await handle.isVisible() || !await handle.isEnabled() || (await (action.action === 'answer-select' ? answerName(handle) : accessibleName(handle))) !== target?.name) throw new Error('Learner target changed');
+  const visibleControl = await handle.evaluateHandle(storylineGraphic);
+  try {
+    const graphic = visibleControl.asElement();
+    if (graphic) {
+      if (action.action === 'answer-select' && await handle.isChecked()) return;
+      await graphic.click({ timeout: 5000 });
+      return;
+    }
+  } finally { await visibleControl.dispose(); }
   if (action.action === 'click') {
-    const visibleControl = await handle.evaluateHandle(el => {
-      if (!el.matches('button.acc-shadow-el[data-represents]')) return null;
-      const id = el.getAttribute('data-represents')?.split('.').at(-1);
-      if (!id) return null;
-      const rect = el.getBoundingClientRect();
-      const hit = el.ownerDocument.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-      const object = hit?.closest('.slide-object[data-model-id]');
-      const eventTarget = hit?.closest('svg .eventable');
-      // The visible Storyline graphic and the accessibility button must
-      // represent the same object. An unrelated covering layer stays blocked.
-      return object?.getAttribute('data-model-id') === id && eventTarget && object.contains(eventTarget) ? hit : null;
-    });
-    try {
-      const target = visibleControl.asElement();
-      if (target) {
-        await target.click({ timeout: 5000 });
-        return;
-      }
-    } finally { await visibleControl.dispose(); }
     if (await handle.evaluate(dkiInformationIcon).catch(() => null)) {
       if (!await handle.isVisible() || !await handle.isEnabled()) throw new Error('Learner target changed');
       // Pointer movement creates a covering rollover image on these DKI icons.
@@ -758,9 +795,9 @@ async function main() {
       try {
         switched = await applyAction(page, action, view, viewHandles, mode);
       } catch (error) {
-        if (action.action !== 'click' || error?.name !== 'TimeoutError' || page.isClosed()) throw error;
+        if (!['click', 'answer-select'].includes(action.action) || error?.name !== 'TimeoutError' || page.isClosed()) throw error;
         const state = observationFor(page);
-        const control = view.buttons?.find(item => item.id === action.targetId);
+        const control = [...(view.buttons || []), ...(view.choices || [])].find(item => item.id === action.targetId);
         if (!coordinated) {
           finish(false, 'blocked-control');
           return;

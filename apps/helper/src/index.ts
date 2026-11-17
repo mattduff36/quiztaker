@@ -170,7 +170,7 @@ async function main(): Promise<void> {
                     view => client.proposeLearnerStep(jobId, view),
                     (view, reason) => askCoordinator(getHelperHome(), jobId, view, reason, 70_000,
                       () => isStopping || runningJob?.jobId !== jobId || runningJob.cancelRequested,
-                      () => terminal?.activity('Waiting for guidance from the connected Codex chat…')),
+                      line => terminal?.activity(line)),
                     snapshot as LearnerSnapshot,
                   )
                 : client.proposeLearnerStep(jobId, snapshot),
