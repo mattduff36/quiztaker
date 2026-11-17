@@ -1,0 +1,9 @@
+{
+  "name": "@vitriol/lint-glob",
+  "version": "0.2.17",
+  "private": true,
+  "main": "index.cjs",
+  "dependencies": {
+    "glob": "14.0.6"
+  }
+}

@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { createRequire } = require('node:module');
 const minimatch = require('minimatch');
 
 test('patched matcher supports old callable and modern named APIs', async () => {
@@ -13,8 +14,9 @@ test('patched matcher supports old callable and modern named APIs', async () => 
 });
 
 test('matcher uses the fixed upstream implementation for adversarial glob patterns', () => {
-  const metadata = require('minimatch-modern/package.json');
-  assert.equal(metadata.version, '11.0.4');
+  const adapterRequire = createRequire(require.resolve('minimatch'));
+  const metadata = adapterRequire('minimatch-modern/package.json');
+  assert.equal(metadata.version, '11.0.5');
   const matcher = new minimatch.Minimatch('a/**/../**/../**/../b', { optimizationLevel: 2 });
   assert.equal(typeof matcher.match('a/b'), 'boolean');
 });
