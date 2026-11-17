@@ -128,6 +128,7 @@ export function OperationsClient(props: { helperId: string }) {
   const [contextBusy, setContextBusy] = useState(true);
   const [refreshPending, setRefreshPending] = useState(false);
   const [refreshJobId, setRefreshJobId] = useState<string | null>(null);
+  const [closingJobId, setClosingJobId] = useState<string | null>(null);
   const [actionLabel, setActionLabel] = useState('Sending request…');
   const [guidedBusy, setGuidedBusy] = useState(false);
   const [finishedTask, setFinishedTask] = useState<{jobId: string; result: 'completed' | 'failed'; stopping: boolean} | null>(null);
@@ -154,7 +155,7 @@ export function OperationsClient(props: { helperId: string }) {
   const browserProbe = useRef(0);
   const refreshAfterOpen = useRef(false);
   const observedJob = context?.activeJob;
-  const active = Boolean(finishedTask?.stopping || context?.latestTask?.stopping) || isRunningJob(observedJob) || (!finishedTask && isRunningJob(job));
+  const active = Boolean(closingJobId || finishedTask?.stopping || context?.latestTask?.stopping) || isRunningJob(observedJob) || (!finishedTask && isRunningJob(job));
   const backgroundRefresh = Boolean(isRunningJob(observedJob) && observedJob?.capability_id === 'list-tabs' && (!isRunningJob(job) || job?.capability_id === 'list-tabs') && !finishedTask?.stopping && !guidedBusy && !operationBusy);
   const foregroundActive = Boolean(active && !backgroundRefresh);
   const onGuidedBusy = useCallback((value: boolean) => { guidedLock.current = value; setGuidedBusy(value); }, []);
@@ -243,6 +244,38 @@ export function OperationsClient(props: { helperId: string }) {
     return()=>{disposed=true;window.clearInterval(timer);};
   },[refreshJobId,load]);
 
+  useEffect(() => {
+    if (!closingJobId) return;
+    const controller = new AbortController();
+    let timer: number | undefined;
+    async function checkClose() {
+      try {
+        const response = await fetch(`/api/jobs/${closingJobId}`, {
+          cache: 'no-store',
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+        });
+        const missing = response.status === 404 || response.status === 410;
+        const value = missing ? null : await readJsonResponse<{ job: { status: string } }>(response, 'Could not check browser close.');
+        if (controller.signal.aborted) return;
+        if (!missing && !value?.job?.status) throw new Error('Browser close status is unavailable.');
+        if (missing || !isRunningJob(value?.job)) {
+          setClosingJobId(null);
+          if (value?.job?.status !== 'completed') setError('Vitriol could not confirm that the browser closed. Check the browser and try again.');
+          void load();
+          return;
+        }
+      } catch {
+        // Retry temporary connection failures without treating them as a completed close.
+      }
+      if (!controller.signal.aborted) timer = window.setTimeout(() => void checkClose(), 2_000);
+    }
+    void checkClose();
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [closingJobId, load]);
+
   const jobId = job?.id;
   const jobStatus = job?.status;
   useEffect(() => {
@@ -282,7 +315,7 @@ export function OperationsClient(props: { helperId: string }) {
   const snapshotStale = readiness === 'connected' && (!context?.session?.updated_at || !Number.isFinite(Date.parse(context.session.updated_at)) || Date.now()-Date.parse(context.session.updated_at)>SNAPSHOT_STALE_MS) && !foregroundActive && !guidedBusy;
   const normalCourseVisible = readiness === 'connected' && !snapshotStale && !replacingHelper;
   const hasCourseTab = Boolean(context?.session?.tabs?.some(tab=>/^https?:\/\//.test(tab.url)));
-  const canEndBrowser = helperReady && readiness === 'connected' && !replacingHelper;
+  const canEndBrowser = helperReady && readiness === 'connected' && !replacingHelper && !closingJobId;
   const browserReady = readiness === 'connected' && !snapshotStale;
   const session = context?.session;
   const selected = session?.tabs?.find((tab) => tab.targetId === selectedTarget) ?? null;
@@ -447,7 +480,7 @@ export function OperationsClient(props: { helperId: string }) {
   }
 
   async function endSession(forceClose: boolean) {
-    if (actionLock.current) return;
+    if (actionLock.current || closingJobId) return;
     actionLock.current = true; contextRequest.current += 1;
     stopGuided.current?.();
     setBusy(true); setActionLabel('Ending browser session…');
@@ -458,9 +491,10 @@ export function OperationsClient(props: { helperId: string }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'end-session', helperId: props.helperId, idempotencyKey: crypto.randomUUID(), forceClose }),
     });
-    const value = await readJsonResponse<{ error?: string; status?: string }>(response, 'Could not end the session.');
+    const value = await readJsonResponse<{ status?: string; closeJobId?: string | null }>(response, 'Could not end the session.');
     setForceCloseOffer(false);
-    setError(value.status === 'close_failed' ? 'The session was recorded, but the browser close did not queue.' : value.status === 'ending' ? 'Browser close is queued. The session ends when that job finishes.' : '');
+    if (value.status === 'ending' && value.closeJobId) setClosingJobId(value.closeJobId);
+    else if (value.status !== 'ended') setError('Vitriol could not confirm that the browser closed. Check the browser and try again.');
     await load();
     } catch (cause) {
       const message = errorMessage(cause, 'Could not end the session. Check your network and retry.');
@@ -602,7 +636,7 @@ export function OperationsClient(props: { helperId: string }) {
         <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 id="current-task-title" className="font-semibold text-slate-950">Current task</h2><p role="status" className="mt-1 text-sm leading-6 text-slate-600">{finishedTask ? `Marked ${finishedTask.result} by you.${finishedTask.stopping ? ' Waiting for the current helper job to stop.' : ' You can choose a page and set a new goal.'}` : isTaskJob(job) ? describeTaskJob(job) : 'Choose a course and goal to begin.'}</p></div><button type="button" disabled={operationBusy || !canEndBrowser} onClick={()=>void endSession(false)} className="min-h-11 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 disabled:opacity-40">End browser session</button>{forceCloseOffer ? <button type="button" disabled={operationBusy} onClick={()=>void endSession(true)} className="min-h-11 rounded-md bg-rose-700 px-4 text-sm font-semibold text-white disabled:opacity-40">Force close browser</button> : null}</div>
         {isTaskJob(job) && job?.capability_id !== 'quick-scrape' && !finishedTask ? <><p className="text-xs leading-5 text-slate-600">Record your assessment of this task. This does not change or verify the course result in the learning portal.</p><div className="flex flex-wrap gap-3"><button type="button" disabled={operationBusy} onClick={()=>void finishTask('completed')} className="min-h-11 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-800 disabled:opacity-40">Mark complete</button><button type="button" disabled={operationBusy} onClick={()=>void finishTask('failed')} className="min-h-11 rounded-md border border-rose-300 px-4 text-sm font-semibold text-rose-800 disabled:opacity-40">Mark failed</button></div></> : null}
       </section> : canEndBrowser ? <div className="flex justify-end"><button type="button" disabled={operationBusy || !canEndBrowser} onClick={()=>void endSession(false)} className="min-h-11 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 disabled:opacity-40">End browser session</button></div> : null}
-      {(operationBusy || refreshPending || (active && !guidedBusy) || (freshDraft && guidedBusy)) ? <p role="status" aria-busy="true" className="flex items-center gap-2 text-sm text-slate-700"><LoaderCircle className="size-4 animate-spin"/>{operationBusy ? actionLabel : freshDraft && (foregroundActive || guidedBusy) ? 'The helper is finishing the previous operation. You can prepare your next task now.' : refreshPending ? 'Waiting for the helper to check browser tabs…' : job?.status === 'queued' ? 'Queued — waiting for the helper…' : 'Waiting for the current helper job…'}</p> : null}
+      {(operationBusy || closingJobId || refreshPending || (active && !guidedBusy) || (freshDraft && guidedBusy)) ? <p role="status" aria-busy="true" className="flex items-center gap-2 text-sm text-slate-700"><LoaderCircle className="size-4 animate-spin"/>{operationBusy ? actionLabel : closingJobId ? 'Closing the course browser…' : freshDraft && (foregroundActive || guidedBusy) ? 'The helper is finishing the previous operation. You can prepare your next task now.' : refreshPending ? 'Waiting for the helper to check browser tabs…' : job?.status === 'queued' ? 'Queued — waiting for the helper…' : 'Waiting for the current helper job…'}</p> : null}
       <div role="tabpanel" id={`${viewId}-normal-panel`} aria-labelledby={`${viewId}-normal-tab`} hidden={view !== 'normal'}>
       {normalCourseVisible && (!hasCourseTab || freshDraft) ? <form className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-5" onSubmit={(event) => {
         event.preventDefault();

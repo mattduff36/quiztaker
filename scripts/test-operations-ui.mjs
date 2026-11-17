@@ -200,6 +200,41 @@ try{
     await page.close();
   }
   console.log('PASS new task from a blank browser and a running task, with separate draft and stop states.');
+  for (const status of ['completed', 'failed']) {
+    const page = await browser.newPage();
+    const fixture = state();
+    fixture.holdCapability = 'close-browser';
+    const job = { id: 'closing-browser', status: 'queued', capability_id: 'close-browser' };
+    await page.route('**/api/**', async route => {
+      const req = route.request();
+      const path = new URL(req.url()).pathname;
+      const body = req.postDataJSON() || {};
+      if (path === '/api/operations/actions' && body.action === 'end-session') {
+        fixture.jobs.set(job.id, job);
+        fixture.latest = job;
+        return route.fulfill({ json: { status: 'ending', closeJobId: job.id } });
+      }
+      const { __status, ...json } = reply(path, req.method(), body, Date.now(), fixture);
+      await route.fulfill({ status: __status || 200, json });
+    });
+    await page.goto(url);
+    await page.getByRole('button', { name: 'End browser session', exact: true }).click();
+    const closing = page.getByText('Closing the course browser…', { exact: true });
+    await expect(closing).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    fixture.connected = status === 'failed';
+    job.status = status;
+    await expect(closing).toBeHidden();
+    if (status === 'completed') {
+      await expect(page.getByRole('button', { name: 'Start browser', exact: true })).toBeEnabled();
+      await expect(page.getByRole('alert')).toHaveCount(0);
+    } else {
+      await expect(page.getByRole('alert')).toContainText('could not confirm that the browser closed');
+      await expect(page.getByRole('button', { name: 'End browser session', exact: true })).toBeEnabled();
+    }
+    await page.close();
+  }
+  console.log('PASS browser close progress clears after success and reports failure.');
   for(const transition of ['navigate', 'stop', 'new-task']) {
     const page=await browser.newPage();const fixture=state();fixture.paused=true;
     let release;const held=new Promise(done=>{release=done;});let queued=0,deletes=0;
