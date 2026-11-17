@@ -132,6 +132,26 @@ test('real offline browser: image-only changes create new timestamped JPEGs', as
   assert.equal((await recorder.done).reason, 'stop');
 });
 
+test('real offline browser: privacy masking changes only the saved image', async t => {
+  const { page, recorder } = await fixture(t);
+  const input = page.locator('#private');
+  const box = await input.boundingBox();
+  const screenshots = fs.readdirSync(recorder.folder).filter(name => name.endsWith('.jpg'));
+  assert.ok(screenshots.length > 0);
+  const pixel = await require('sharp')(path.join(recorder.folder, screenshots[0]))
+    .extract({ left: Math.floor(box.x + box.width / 2), top: Math.floor(box.y + box.height / 2), width: 1, height: 1 })
+    .raw().toBuffer();
+  assert.ok([...pixel].every(channel => channel >= 28 && channel <= 38));
+
+  await page.evaluate(() => {
+    window.captureStyles = [];
+    new MutationObserver(records => window.captureStyles.push(...records.map(r => r.target.tagName)))
+      .observe(document, { subtree: true, childList: true, attributes: true });
+  });
+  await sleep(400);
+  assert.deepEqual(await page.evaluate(() => window.captureStyles), []);
+});
+
 test('real offline browser: unsafe pages excluded, editable values never transcribed, close stops', async t => {
   const { page, events, recorder } = await fixture(t);
   await waitFor(() => events.some(e => e.kind === 'QUICK_SCRAPE_PAGE'), 'initial course observation');

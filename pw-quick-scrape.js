@@ -19,9 +19,10 @@
  * be missed. No OCR/AI/audio. Only the selected tab and up to 2 direct same-origin
  * popups are eligible. Other tabs are never inspected.
  *
- * Only the selected HTTPS course origin is allowed (including Canon and Xerox). Authentication/account/payment
- * pages and frames are skipped. All editable controls are omitted/masked;
- * other-origin frames are masked. URLs lose query, fragment, userinfo and
+ * The selected HTTPS course origin is allowed, along with the known HP Saba content host
+ * inside its course player. Authentication/account/payment
+ * pages and frames are skipped. Editable controls and unapproved frames are
+ * masked in the saved image after capture. URLs lose query, fragment, userinfo and
  * semicolon parameters. Potential credential assignments/emails are redacted.
  * A privacy gate runs before and after each JPEG; unsafe transitions discard it.
  * Course content must itself be non-sensitive; this is not a general browser
@@ -34,6 +35,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const readline = require('node:readline');
 const { USER_HOME } = require('./lib/paths');
+const EDITABLE = 'input,textarea,select,[contenteditable]';
 
 const DEFAULT_LIMITS = Object.freeze({
   durationMs: 15 * 60 * 1000, bytes: 200 * 1024 * 1024, frames: 4500,
@@ -60,6 +62,23 @@ function cleanText(value, origins = []) {
     .replace(/https?:\/\/[^\s<>"')]+/gi, raw => sanitizedUrl(raw, origins))
     .replace(/\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/gi, '[email redacted]')
     .replace(/\b(password|passwd|secret|token|authorization|api[_ -]?key)\s*[:=]\s*\S+/gi, '$1=[redacted]');
+}
+
+async function redactImage(png, { viewport, rectangles }) {
+  const image = require('sharp')(png);
+  const { width, height } = await image.metadata();
+  if (width !== viewport.width || height !== viewport.height) return null;
+  const overlays = rectangles.map(box => {
+    const left = Math.max(0, Math.floor(box.x) - 2);
+    const top = Math.max(0, Math.floor(box.y) - 2);
+    const right = Math.min(width, Math.ceil(box.x + box.width) + 2);
+    const bottom = Math.min(height, Math.ceil(box.y + box.height) + 2);
+    return {
+      left, top,
+      input: { create: { width: right - left, height: bottom - top, channels: 3, background: '#212121' } },
+    };
+  });
+  return image.composite(overlays).jpeg({ quality: 55 }).toBuffer();
 }
 
 // Executed in a single frame. Never access .value, cookies, storage or globals
@@ -172,6 +191,9 @@ function parseArgs(argv) {
 async function startRecorder(page, options = {}) {
   const selected = new URL(page.url());
   const origins = [selected.origin];
+  if (selected.origin === 'https://hpi-external.sabacloud.com' && /\/app\/content-player\/?$/.test(selected.pathname)) {
+    origins.push('https://content-na2prd0004-na2hp.sabacloud.com');
+  }
   if (options.expectedUrl && options.expectedUrl !== page.url()) throw new Error('The selected course tab changed. Refresh the tabs and try again.');
   if (!courseUrl(page.url(), origins)) throw new Error('Selected tab is not an allowed course page');
   const limits = { ...DEFAULT_LIMITS, ...options.limits };
@@ -236,6 +258,30 @@ async function startRecorder(page, options = {}) {
     }
   }
 
+  async function captureLayout(target, states) {
+    const viewport = await target.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    const examined = new Map(states.map(state => [state.frame, state.safe]));
+    const frames = target.frames();
+    const rectangles = [];
+    for (const frame of frames) {
+      if (examined.get(frame)) {
+        const inputs = await frame.locator(EDITABLE).all();
+        for (const input of inputs) rectangles.push(await input.boundingBox({ timeout: 500 }));
+      } else {
+        const owner = await frame.frameElement();
+        try { rectangles.push(await owner.boundingBox()); }
+        finally { await owner.dispose(); }
+      }
+    }
+    return {
+      viewport,
+      frames: frames.map(frame => [frame.url(), examined.get(frame) === true]),
+      rectangles: rectangles.filter(box => box && box.width > 0 && box.height > 0
+        && box.x < viewport.width && box.y < viewport.height
+        && box.x + box.width > 0 && box.y + box.height > 0),
+    };
+  }
+
   function persist(watermark = Infinity) {
     pending.sort((a, b) => a.at - b.at);
     while (pending.length && pending[0].at <= watermark) {
@@ -275,28 +321,25 @@ async function startRecorder(page, options = {}) {
         if (reason || Date.now() - lastVisual < limits.visualMs) continue;
         lastVisual = Date.now();
         if (frames >= limits.frames) { requestStop('frame-limit'); break; }
-        // Mask every editable element, even if currently empty, and every
-        // unapproved child frame. Include unexamined frames beyond the cap.
-        const mask = [target.locator('input,textarea,select,[contenteditable]')];
-        const safeFrames = new Set(states.filter(state => state.safe).map(state => state.frame));
-        for (const frame of target.frames()) {
-          if (frame === target.mainFrame()) continue;
-          if (safeFrames.has(frame)) mask.push(frame.locator('input,textarea,select,[contenteditable]'));
-          else {
-            const parent = frame.parentFrame();
-            if (parent) mask.push(parent.locator('iframe,frame'));
-          }
+        // Redact the captured pixels without drawing overlays in the browser.
+        let before, after, pixels;
+        try {
+          before = await captureLayout(target, states);
+          if (before.viewport.width * before.viewport.height > 8000000) { requestStop('viewport-limit'); break; }
+          const imageFormat = before.rectangles.length ? { type: 'png' } : { type: 'jpeg', quality: 55 };
+          pixels = await target.screenshot({
+            ...imageFormat, scale: 'css', caret: 'initial', timeout: 3000,
+          });
+          const checked = await inspect(target, false);
+          if (checked) after = await captureLayout(target, checked);
+        } catch (error) {
+          if (/detached|destroyed|navigation|closed|timeout/i.test(error.message)) continue;
+          throw error;
         }
-        const dimensions = await target.evaluate(() => ({ width: innerWidth, height: innerHeight }));
-        if (dimensions.width * dimensions.height > 8000000) { requestStop('viewport-limit'); break; }
-        const before = states.map(state => `${state.frame.url()}:${state.safe}`).join('\n');
-        const jpeg = await target.screenshot({
-          type: 'jpeg', quality: 55, fullPage: false, scale: 'css', mask, timeout: 3000,
-          style: 'input,textarea,select,[contenteditable]{visibility:hidden!important}',
-        });
         if (reason) break;
-        const after = await inspect(target, false);
-        if (!after || before !== after.map(state => `${state.frame.url()}:${state.safe}`).join('\n')) continue;
+        if (!after || JSON.stringify(before) !== JSON.stringify(after)) continue;
+        const jpeg = before.rectangles.length ? await redactImage(pixels, before) : pixels;
+        if (!jpeg) continue;
         if (jpeg.length > limits.frameBytes) { requestStop('frame-byte-limit'); break; }
         const hash = crypto.createHash('sha256').update(jpeg).digest('hex');
         if (hash === lastHash) continue;

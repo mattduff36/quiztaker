@@ -134,6 +134,7 @@ function stageAutomation() {
     dependencies: {
       express: packageValue.dependencies?.express || '^4.21.2',
       playwright: '^1.58.2',
+      sharp: packageValue.dependencies.sharp,
     },
   }, null, 2));
 }
