@@ -22,7 +22,7 @@ completion or an automatic process kill. Normal/manual course starts pause durin
 replacement; browser tabs and guided input stay intact, with session controls
 still available.
 
-Helper 1.0.40 saves the unique visible `Vitriol Helper` console/Windows Terminal
+Helper 1.0.41 saves the unique visible `Vitriol Helper` console/Windows Terminal
 window immediately before starting its updater, then consumes that placement on
 restart. Normal, maximized and minimized state are preserved; bounds are clamped
 to the nearest available monitor work area if necessary. A restored placement
@@ -48,7 +48,7 @@ or unknown inventory and never equates these observations with learned material
 or verified full coverage. Internal coverage records are excluded from strategy
 promotion metrics.
 
-## Saba native assessments in helper 1.0.40
+## Saba native assessments in helper 1.0.41
 
 Quiz capability 6 prioritizes course Continue over activity Launch and retains
 popup protection through later Proceed documents, only between the two supported
@@ -66,7 +66,7 @@ and resumes the existing attempt, not a retake.
 Visible Saba Test score/Test status feedback is recognized as an assessment
 result, not authoritative course completion. Normal Close Player/Yes or observed
 Exit must return to the originating course's Successful detail before a
-`courseResult` is published. A completed course is never relaunched.
+`courseResult` is published. Only the current enrollment header establishes Successful; historical attempts are excluded. A completed current registration is never relaunched.
 Offline Chrome fixtures exercise these paths; they are not a new live pass claim.
 
 ## Guided Operations and inactivity protection

@@ -23,6 +23,12 @@ const snapshot = {
   ],
 };
 
+test('observed repair matching options stay quiz-only even when their label says Remove',()=>{
+  const view={buttons:[{id:'m1',name:'Remove the base enclosure',kind:'quiz-navigation'}]};
+  assert.equal(parseLearnerAction({action:'click',targetId:'m1'},view,{mode:'quiz'}).ok,true);
+  assert.equal(parseLearnerAction({action:'click',targetId:'m1'},view,{mode:'read'}).ok,false);
+});
+
 test('written answers require the current observed field and quiz authorization',()=>{
   const action={action:'answer-text',targetId:'f1',text:'The socket pins are bent.'};
   const view={...snapshot,fields:[{id:'f1',name:'Type your answer'}]};

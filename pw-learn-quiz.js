@@ -40,7 +40,7 @@ const { chromium } = require('playwright');
 const { observePlayerEvidence } = require('./lib/player-evidence');
 const { recognizeQuizResult, quizResultPayload } = require('./lib/quiz-result');
 const { readBrainshark, listeningQuestion, playbackApproved, playbackControl, setPlaybackSpeed, closeBrainsharkReaders, CONTINUE_LISTENING_QUESTION } = require('./lib/brainshark-player');
-const { launchSelectedCourse, originatingSabaPage, finishSabaCourse, protectSabaPopups, sabaAddress } = require('./lib/course-launch');
+const { launchSelectedCourse, originatingSabaPage, finishSabaCourse, protectSabaPopups, sabaAddress, currentCourseSuccessful } = require('./lib/course-launch');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 const MAX_STEPS = 80;
@@ -1083,7 +1083,7 @@ async function main() {
       }
       finish(result.status==='passed',undefined,result);
     }
-    if(landing===page && await landing.getByText('Successful',{exact:true}).first().isVisible().catch(()=>false) && await verifyCourse())return;
+    if(landing===page && await currentCourseSuccessful(landing) && await verifyCourse())return;
     let coordinatedStalls=0;
     for (let step = 1; step <= MAX_STEPS; step += 1) {
       if (page.isClosed()) {

@@ -1,7 +1,7 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const {chromium}=require('playwright');
-const {launchSelectedCourse,protectSabaPopups,finishSabaCourse}=require('./lib/course-launch');
+const {launchSelectedCourse,protectSabaPopups,finishSabaCourse,currentCourseSuccessful}=require('./lib/course-launch');
 const {readSnapshot,applyAction,localActionAllowed,sameLearnerView}=require('./pw-learn-quiz');
 const {recognizeQuizResult}=require('./lib/quiz-result');
 
@@ -29,9 +29,8 @@ test('native Saba matching reads sibling selected text and repair labels with a 
     view=await readSnapshot(page,'quiz');
     const option=view.snapshot.buttons.find(item=>item.name===label && !item.selection);
     assert.ok(option);
-    const {parseLearnerAction}=await import('./packages/core/dist/learner.js');
-    assert.equal(parseLearnerAction({action:'click',targetId:option.id},view.snapshot,{mode:'quiz'}).ok,true);
-    assert.equal(parseLearnerAction({action:'click',targetId:option.id},view.snapshot,{mode:'read'}).ok,false);
+    assert.equal(localActionAllowed({action:'click',targetId:option.id},view.snapshot,'quiz'),true);
+    assert.equal(localActionAllowed({action:'click',targetId:option.id},view.snapshot,'read'),false);
     await applyAction(page,{action:'click',targetId:option.id},view.snapshot,view.handles,'quiz');
     view=await readSnapshot(page,'quiz');
     assert.deepEqual(view.snapshot.buttons.find(item=>item.selection).selection,{value:label,answered:true});
@@ -41,6 +40,23 @@ test('native Saba matching reads sibling selected text and repair labels with a 
 
 const host='https://hpi-external.sabacloud.com';
 const course=`${host}/app/me/learningeventdetail/coursfixture`;
+
+test('old Successful history cannot finish or block launching an In Progress current registration',async()=>{
+  const browser=await chromium.launch({channel:'chrome',headless:true});
+  try {
+    const context=await browser.newContext();
+    await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:route.request().url()===course
+      ? `<div class="course--detail__thirdRow__enrollmentStatus__text">In Progress</div><section>Progress History<p>Successful</p></section><button onclick="window.open('/player','course','width=400')">CONTINUE</button>`
+      : '<p>Current course player</p>'}));
+    const landing=await context.newPage();await landing.goto(course);
+    assert.equal(await currentCourseSuccessful(landing),false);
+    assert.equal(await finishSabaCourse(landing),null);
+    const player=await launchSelectedCourse(landing);
+    assert.notEqual(player,landing);
+    await landing.locator('[class*="enrollmentStatus__text"]').evaluate(el=>el.textContent='Successful');
+    assert.equal(await currentCourseSuccessful(landing),true);
+  }finally{await browser.close();}
+});
 async function click(page,name,mode='quiz',choice=false) {
   const view=await readSnapshot(page,mode);
   const target=(choice?view.snapshot.choices:view.snapshot.buttons).find(item=>item.name===name);
@@ -159,7 +175,7 @@ test('real Saba pass finalizes through Close Player and Yes, verifying only the 
   try {
     const context=await browser.newContext();
     await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:route.request().url()===course
-      ? `<title>Fixture course</title><p>Not evaluated</p><button onclick="window.open('/app/content-player?contextid=fixture','player','width=500')">CONTINUE</button><button>LAUNCH</button>`
+      ? `<title>Fixture course</title><p class="course--detail__thirdRow__enrollmentStatus__text">Not evaluated</p><button onclick="window.open('/app/content-player?contextid=fixture','player','width=500')">CONTINUE</button><button>LAUNCH</button>`
       : `<p>Congratulations, you passed the assessment</p><p>Test score 100%</p><p>Test status Pass</p><p>Passing threshold 80%</p>
         <button onclick="document.body.textContent='UNEXPECTED EXIT'">EXIT</button><button onclick="document.querySelector('#yes').hidden=false">CLOSE PLAYER</button>
         <button id="yes" hidden onclick="window.opener.document.querySelector('p').textContent='Successful';window.close()">YES</button>`}));
@@ -170,11 +186,11 @@ test('real Saba pass finalizes through Close Player and Yes, verifying only the 
     assert.equal(result.status,'passed');assert.equal(result.scorePercent,100);assert.equal(result.passingScorePercent,80);
     const finished=await finishSabaCourse(landing,true,player);
     assert.equal(finished.status,'completed');assert.match(finished.evidence.join(),/Saba course detail shows Successful/);
-    await landing.locator('body').evaluate(body=>body.insertAdjacentHTML('beforeend','<p>Successful</p>'));
+    await landing.locator('body').evaluate(body=>body.insertAdjacentHTML('beforeend','<section>Progress History<p>Successful</p></section>'));
     await launchSelectedCourse(landing);
     assert.equal(context.pages().length,1,'Never relaunch a completed course');
     await landing.goto(`${host}/app/me/learningeventdetail/courswrong`);
-    await landing.setContent('<p>Successful</p>');
+    await landing.setContent('<p class="course--detail__thirdRow__enrollmentStatus__text">Successful</p>');
     assert.equal(await finishSabaCourse(landing),null,'Another course success is not this result');
   }finally{await browser.close();}
 });
@@ -187,7 +203,7 @@ test('the real runner finalizes a Saba assessment launched by same-tab Continue 
   try {
     const context=await browser.newContext();
     await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:route.request().url().includes('?done=1')
-      ? '<title>Completed originating course</title><p>Successful</p>'
+      ? '<title>Completed originating course</title><p class="course--detail__thirdRow__enrollmentStatus__text">Successful</p>'
       : route.request().url()===course
         ? `<button onclick="location.href='/proceed'">CONTINUE</button><button>LAUNCH</button>`
         : route.request().url()===`${host}/proceed`

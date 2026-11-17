@@ -54,7 +54,7 @@ test('an ordinary course-looking page cannot claim Saba success',async()=>{
   const browser=await chromium.launch({channel:'chrome',headless:true});
   try {
     const page=await browser.newPage();
-    await page.route('https://example.invalid/learningeventdetail/course',route=>route.fulfill({contentType:'text/html',body:'<p>Successful</p>'}));
+    await page.route('https://example.invalid/learningeventdetail/course',route=>route.fulfill({contentType:'text/html',body:'<p class="course--detail__thirdRow__enrollmentStatus__text">Successful</p>'}));
     await page.goto('https://example.invalid/learningeventdetail/course');
     assert.equal(await finishSabaCourse(page),null);
   }finally{await browser.close();}
@@ -72,7 +72,7 @@ test('the actual runner asks before listening, resumes a written question and ve
     const context=await browser.newContext();
     const wrapper=await context.newPage();
     await wrapper.route('https://hpi-external.sabacloud.com/**',route=>route.fulfill({contentType:'text/html',body:route.request().url().includes('learningeventdetail')
-      ? '<title>Saba fixture course</title><h1>Fixture course</h1><p>Successful</p>'
+      ? '<title>Saba fixture course</title><h1>Fixture course</h1><p class="course--detail__thirdRow__enrollmentStatus__text">Successful</p>'
       : `<button onclick="location.href='/app/me/learningeventdetail/coursfixture'">CLOSE PLAYER</button>`}));
     await wrapper.goto('https://hpi-external.sabacloud.com/app/content-player?contextid=fixture');
     const player=await context.newPage();
