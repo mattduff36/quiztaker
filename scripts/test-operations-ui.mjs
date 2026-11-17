@@ -160,6 +160,9 @@ try{
       if (path === '/api/operations/actions' && body.capabilityId === 'open-url') {
         expect(body.confirm).toBe(true);
         opened = body.capabilityInput.url;
+      }
+      if (path === '/api/operations/activity' && body.action === 'refresh' && opened) {
+        expect(body.force).toBe(true);
         fixture.noCourse = false;
       }
       const { __status, ...json } = reply(path, req.method(), body, Date.now(), fixture);
@@ -191,6 +194,7 @@ try{
       await expect(open).toBeEnabled();
       await open.click();
       await expect.poll(() => opened).toBe('https://example.invalid/course');
+      await expect(page.getByRole('combobox', { name: 'Course tab', exact: true }).getByRole('option')).toHaveCount(2);
     }
     expect(fixture.finishPosts).toBe(0);
     await page.close();

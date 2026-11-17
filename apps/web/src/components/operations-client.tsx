@@ -152,6 +152,7 @@ export function OperationsClient(props: { helperId: string }) {
   const contextRequest = useRef(0);
   const loadingContext = useRef(false);
   const browserProbe = useRef(0);
+  const refreshAfterOpen = useRef(false);
   const observedJob = context?.activeJob;
   const active = Boolean(finishedTask?.stopping || context?.latestTask?.stopping) || isRunningJob(observedJob) || (!finishedTask && isRunningJob(job));
   const backgroundRefresh = Boolean(isRunningJob(observedJob) && observedJob?.capability_id === 'list-tabs' && (!isRunningJob(job) || job?.capability_id === 'list-tabs') && !finishedTask?.stopping && !guidedBusy && !operationBusy);
@@ -209,21 +210,23 @@ export function OperationsClient(props: { helperId: string }) {
 
   const refreshBrowser = useCallback(async(force=false)=>{
     if ((!force && (!context?.session?.cdp_connected || awaitingQuestion)) || refreshLock.current || refreshPending || actionLock.current || guidedLock.current || updateBusy || !activity.ready || activity.paused || !visible || operationBusy || guidedBusy || active || replacingHelper || !context?.helper?.is_online) return;
-    if(!force && Date.now()-browserProbe.current<BROWSER_REFRESH_MS)return;
+    const afterOpen = refreshAfterOpen.current;
+    if (!force && Date.now() - browserProbe.current < (afterOpen ? 2_000 : BROWSER_REFRESH_MS)) return;
     browserProbe.current=Date.now();
     refreshLock.current=true; setRefreshPending(true);
     try {
-      const response=await fetch('/api/operations/activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({helperId:props.helperId,action:'refresh',force}),signal:AbortSignal.timeout(15_000)});
+      const response=await fetch('/api/operations/activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({helperId:props.helperId,action:'refresh',force:force || afterOpen}),signal:AbortSignal.timeout(15_000)});
       const value=await readJsonResponse<{status?:string;jobId?:string}>(response,'Could not refresh browser tabs.');
+      if (afterOpen && value.jobId) refreshAfterOpen.current = false;
       setRefreshJobId(value.jobId ?? null); if (!value.jobId) setRefreshPending(false);
       setRefreshError('');await load();
-    } catch(cause){setRefreshPending(false);setRefreshError(errorMessage(cause,'Could not refresh browser tabs. Check the helper and retry.'));}
+    } catch(cause){if(afterOpen)refreshAfterOpen.current=false;setRefreshPending(false);setRefreshError(errorMessage(cause,'Could not refresh browser tabs. Check the helper and retry.'));}
     finally { refreshLock.current=false; }
   },[refreshPending,awaitingQuestion,activity.ready,activity.paused,visible,operationBusy,guidedBusy,active,replacingHelper,updateBusy,finishedTask,context?.helper?.is_online,context?.session?.cdp_connected,props.helperId,load]);
 
   useEffect(()=>{
     void refreshBrowser();
-    const timer=window.setInterval(()=>void refreshBrowser(),BROWSER_REFRESH_MS);
+    const timer=window.setInterval(()=>void refreshBrowser(),refreshAfterOpen.current ? 2_000 : BROWSER_REFRESH_MS);
     return()=>window.clearInterval(timer);
   },[refreshBrowser]);
 
@@ -333,6 +336,10 @@ export function OperationsClient(props: { helperId: string }) {
       const value = await readJsonResponse<{ error?: string; plan?: PlanResponse; jobId?: string }>(response, 'Could not queue the action.');
       if (value.jobId) {
         contextRequest.current += 1;
+        if (capabilityId === 'open-url') {
+          refreshAfterOpen.current = true;
+          browserProbe.current = 0;
+        }
         setPendingPlan(null);
         setJob({ id: value.jobId, status: 'queued', capability_id: capabilityId });
         setOutput('');
@@ -363,6 +370,10 @@ export function OperationsClient(props: { helperId: string }) {
       const value = await readJsonResponse<{ jobId?: string; error?: string }>(response, 'The job could not be queued.');
       if (!value.jobId) return setError(value.error || 'The job could not be queued.');
       contextRequest.current += 1;
+      if (pendingPlan.capabilityId === 'open-url') {
+        refreshAfterOpen.current = true;
+        browserProbe.current = 0;
+      }
       setPendingPlan(null);
       setJob({ id: value.jobId, status: 'queued', capability_id: pendingPlan.capabilityId });
       setOutput('');
