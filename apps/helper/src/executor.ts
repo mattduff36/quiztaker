@@ -29,6 +29,7 @@ export interface RunningJob {
 export interface JobHooks {
   proposeLearnerStep?: (snapshot: unknown) => Promise<{ action?: unknown; stop?: boolean; error?: string }>;
   isCancellationRequested?: () => Promise<boolean>;
+  onProgress?: (message: string) => void;
 }
 
 export function startJob(
@@ -111,7 +112,7 @@ export function startJob(
     };
   }
 
-  const selectedCapture = capability.id === 'quick-scrape'
+  const selectedCapture = ['quick-scrape','quiz-learn'].includes(capability.id)
     ? readBrowserSession()?.tabs.find(tab => tab.index === Number(scriptArgs[0])) : undefined;
   if (capability.id === 'quick-scrape' && !selectedCapture?.url) throw new Error('The selected course tab is no longer available.');
   const child = spawn(process.env.QUIZTAKER_NODE_PATH || process.execPath, [
@@ -125,6 +126,8 @@ export function startJob(
       ...(selectedCapture ? { VITRIOL_CAPTURE_TARGET: selectedCapture.url } : {}),
       VITRIOL_LEARNER_MODE: capability.id === 'quiz-learn' ? parseLearnerMode(envelope.payload.input?.mode) : 'read',
       VITRIOL_COORDINATE: capability.id === 'quiz-learn' && envelope.payload.input?.mode === 'quiz' && envelope.payload.input.intent === 'coordinate' ? '1' : '',
+      VITRIOL_LEARNER_CONVERSATION: capability.id === 'quiz-learn' ? String(envelope.payload.input?.conversationId || '') : '',
+      VITRIOL_LEARNER_GUIDANCE: capability.id === 'quiz-learn' ? String(envelope.payload.input?.guidance || '') : '',
       QUIZTAKER_HOME: getHelperHome(),
       CDP_PROFILE_DIR: join(getHelperHome(), 'chrome-profile'),
       SABA_ATTEMPT_DIR: join(getHelperHome(), 'data', 'attempts'),
@@ -175,7 +178,15 @@ export function startJob(
     function readLearnerOutput(chunk: string) {
       const lines = (pendingLine + chunk).split('\n');
       pendingLine = lines.pop() || '';
-      for (const line of lines) if (!line.startsWith('LEARNER_SNAPSHOT ')) reportOutput(`${line}\n`);
+      for (const line of lines) if (!line.startsWith('LEARNER_SNAPSHOT ')) {
+        if(line.startsWith('LEARNER_PROGRESS ')) {
+          try {
+            const message=JSON.parse(line.slice('LEARNER_PROGRESS '.length)).message;
+            if(typeof message==='string' && message.trim() && message.length<=240 && !/[\r\n\x00-\x1f]/.test(message)) hooks.onProgress?.(message);
+          } catch { /* A malformed progress message never interrupts the job. */ }
+        }
+        reportOutput(`${line}\n`);
+      }
     }
     child.stdout.on('data', (value: Buffer) => {
       if (capability.id === 'quick-scrape') { readRecordingLines(decoder.write(value)); return; }

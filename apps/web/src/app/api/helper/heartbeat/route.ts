@@ -11,6 +11,7 @@ import { reportedUpdatePhase } from '@/lib/helper-update';
 const schema = z.object({
   status: z.enum(['online', 'busy']),
   activeJobId: z.string().uuid().optional(),
+  attentionJobId: z.string().uuid().optional(),
   version: z.string().min(1).max(50),
   cdpPort: z.number().int().min(1024).max(65535),
   protocolVersion: z.number().int().min(1).max(100).optional(),
@@ -91,7 +92,12 @@ async function handleHeartbeat(request: Request) {
   const update = row?.supports_self_update
     ? await pendingUpdate(helper.helperId, reportedVersion, requestedVersion, requestedAt)
     : null;
-  return NextResponse.json({ ok: true, minimumProtocolVersion: 2, update });
+  const resolved = parsed.data.attentionJobId && !parsed.data.activeJobId ? await queryOne<{id:string}>(
+    `select id from jobs where id=$1 and helper_id=$2 and user_id=$3
+      and (status='completed' or outcome->'operatorResolution'->>'reportedBy'='operator')`,
+    [parsed.data.attentionJobId,helper.helperId,helper.userId],
+  ) : null;
+  return NextResponse.json({ ok: true, minimumProtocolVersion: 2, update, taskResolved: resolved?.id ?? null });
 }
 
 async function pendingUpdate(

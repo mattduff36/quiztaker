@@ -8,6 +8,7 @@ export interface LearnerPolicy { mode: LearnerMode; intent?: LearnerIntent }
 export const learnerActions = new Set([
   'click',
   'answer-select',
+  'answer-text',
   'scroll',
   'find-text',
   'wait',
@@ -36,6 +37,8 @@ export interface LearnerSnapshot {
   url?: string;
   text?: string;
   choices?: LearnerControl[];
+  fields?: Array<LearnerControl & {value?:string}>;
+  playback?: {provider: 'brainshark'; identity: string; slide: number | null; completed: boolean; requirements: {requiredAudio: number | null; requiredSlides: number | null; audioPercent: number | null; durationSeconds: number | null} | null};
   buttons?: LearnerControl[];
   tabs?: Array<{id: string; name: string; url: string}>;
   /** Operator resume note. At most 2000 characters. */
@@ -49,6 +52,7 @@ export interface LearnerSnapshot {
 export type LearnerAction =
   | { action: 'click'; targetId: string }
   | { action: 'answer-select'; targetId: string }
+  | { action: 'answer-text'; targetId: string; text: string }
   | { action: 'select-tab'; targetId: string }
   | { action: 'scroll'; direction?: 'up' | 'down' }
   | { action: 'find-text'; text: string }
@@ -97,7 +101,7 @@ export function confirmShortcutAllowed(capabilityId: string): boolean {
 }
 
 export function learnerOfferedFor(detected: string | null | undefined, mode: LearnerMode = 'read'): boolean {
-  return ['unknown', 'document-wbt', 'none', 'csod-curriculum', 'csod-learning', 'scorm-player', 'container', 'slickquiz-exam'].includes(detected ?? '') || (mode === 'quiz' && detected === 'server-assessment');
+  return ['unknown', 'document-wbt', 'none', 'csod-curriculum', 'csod-learning', 'scorm-player', 'container', 'slickquiz-exam', 'class-detail'].includes(detected ?? '') || (mode === 'quiz' && detected === 'server-assessment');
 }
 
 export function parseLearnerAction(
@@ -136,6 +140,13 @@ export function parseLearnerAction(
       return {ok:false,error:'Select an answer on this question before choosing Next.'};
     }
     return { ok: true, action: { action: name, targetId } };
+  }
+  if (name === 'answer-text') {
+    const targetId = typeof record.targetId === 'string' ? record.targetId : '';
+    const text = typeof record.text === 'string' ? record.text : '';
+    if (policy.mode !== 'quiz' || !/^f\d{1,3}$/.test(targetId) || !snapshot.fields?.some(field=>field.id===targetId)
+      || !text.trim() || text.length>2000) return {ok:false,error:'Written answers require an observed response field in quiz mode'};
+    return {ok:true,action:{action:'answer-text',targetId,text}};
   }
   if (name === 'ask-user') return parseAskUser(record);
   if (name === 'wait') {

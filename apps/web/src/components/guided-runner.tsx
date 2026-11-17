@@ -97,6 +97,7 @@ export function GuidedRunner(props: {
   const memoryRequest = useRef(0);
   const guidanceAttempt = useRef<{ text: string; requestId: string } | null>(null);
   const guidanceLock = useRef(false);
+  const freshConversation = useRef(Boolean(props.freshTask));
   const session = props.session;
   const scopeRef = useRef('');
   scopeRef.current = `${props.helperId}:${session?.id || ""}`;
@@ -230,8 +231,8 @@ export function GuidedRunner(props: {
     const learnerInput = {
       mode: intent === 'read' ? 'read' : 'quiz',
       ...(intent === 'read-and-assess' || intent === 'coordinate' ? { intent } : {}),
-      objective: (guidance && currentMemory?.objective) || objective,
-      ...(currentMemory?.id ? { conversationId: currentMemory.id } : {}),
+      objective,
+      ...(freshConversation.current ? {newConversation:true} : currentMemory?.id ? { conversationId: currentMemory.id } : {}),
     };
     const planned = await api<{ plan?: { planId: string }; jobId?: string; waitingForJob?: boolean }>('/api/operations/actions', {
       action: 'plan', helperId: props.helperId, capabilityId,
@@ -259,6 +260,10 @@ export function GuidedRunner(props: {
       if (!jobId) throw new Error('The browser refresh is still finishing. Try starting again.');
     }
     ownedJob.current = jobId;
+    if(capabilityId==='quiz-learn') {
+      if(freshConversation.current)setMemory(null);
+      freshConversation.current=false;
+    }
     // Navigation stops this page's orchestration, not an acknowledged helper job.
     if (cancellationRequested.current) { await api(`/api/jobs/${jobId}`, undefined, 'DELETE'); checkStopped(); }
     if (!mounted.current) checkStopped();
@@ -270,7 +275,7 @@ export function GuidedRunner(props: {
 
   async function waitForJob(id: string, recording = false): Promise<{ job: Job; output: string }> {
     let reportedStatus = 'queued';
-    for (let count = 0; count < (recording ? 7200 : 450); count += 1) {
+    for (let count = 0; count < (recording ? 7200 : 900); count += 1) {
       checkStopped();
       const value = await api<{ job: Job; events: Array<{ data?: { text?: string } }> }>(`/api/jobs/${id}`);
       checkStopped();
@@ -459,7 +464,8 @@ export function GuidedRunner(props: {
   const draftDisabled = busy || (props.active && !props.preparing) || props.paused || props.suspended;
   const recordedStop = !props.finalized && !busy && props.lastJob?.status === 'failed' && props.lastJob.capability_id === 'quiz-learn'
     && props.lastJob.id === props.outputJobId ? learnerStopMessage(props.lastOutput) : null;
-  const quizResult = !props.finalized && !busy && props.lastJob?.capability_id === 'quiz-learn' && !running(props.lastJob.status)
+  const quizResult = !busy && props.lastJob?.capability_id === 'quiz-learn' && !running(props.lastJob.status)
+    && (!savedTarget?.targetId || savedTarget.targetId===props.selectedTarget || props.finalized)
     ? observedQuizResult(props.lastJob.result) : null;
 
   return <section className="overflow-hidden rounded-xl border border-slate-300 bg-white" aria-labelledby="guided-title">

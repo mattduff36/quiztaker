@@ -37,6 +37,19 @@ const helperB = '22222222-2222-4222-8222-222222222222';
 const browserA = '33333333-3333-4333-8333-333333333333';
 const browserB = '44444444-4444-4444-8444-444444444444';
 
+test('a new task creates empty course memory while preserving the previous conversation',async()=>{
+  const db=createHarness();
+  const scope={userId:userA,helperId:helperA,browserSessionId:browserA};
+  const first=await ensureLearnerSession({...scope,objective:'Read the old course'},db);
+  await appendPlanGuidance({...scope,conversationId:first.id,planId:randomUUID(),guidance:'A choice from the old course'},db);
+  const next=await ensureLearnerSession({...scope,objective:'Finish a new course',newConversation:true},db);
+  assert.notEqual(next.id,first.id);
+  assert.deepEqual(next.history,[]);
+  assert.deepEqual(next.materials,[]);
+  const previous=await readLearnerSessionForModel({...scope,conversationId:first.id},db);
+  assert.ok(previous?.history.length);
+});
+
 test('a later recording preserves earlier module material and ranks exact product codes', () => {
   let materials: LearnerMaterial[] = [];
   for (const module of ['room', 'audio']) {

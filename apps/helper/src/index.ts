@@ -30,6 +30,7 @@ import { askCoordinator, coordinateDecision } from './coordination.js';
 let isStopping = false;
 let hasAnnouncedOnline = false;
 let runningJob: { jobId: string; run: RunningJob; cancelRequested: boolean } | null = null;
+let attentionJobId: string | null = null;
 let nextSyncAt = 0;
 let nextStrategyPullAt = 0;
 let nextReleaseCheckAt = 0;
@@ -73,6 +74,7 @@ async function main(): Promise<void> {
     try {
       await replayBeforeHeartbeat((jobId, event) => client.sendEvent(jobId, event));
       const heartbeat = await client.heartbeat({
+        ...(attentionJobId ? {attentionJobId} : {}),
         ...(runningJob
           ? { status: 'busy' as const, activeJobId: runningJob.jobId }
           : { status: 'online' as const }),
@@ -80,6 +82,10 @@ async function main(): Promise<void> {
         ...await helperUpdateProgress(getHelperHome()),
       });
       if (!isStopping) terminal.setConnection('online');
+      if (!runningJob && heartbeat.taskResolved && heartbeat.taskResolved === attentionJobId) {
+        attentionJobId = null;
+        terminal.activity('Ready · Task finished.', 'ready');
+      }
       if (heartbeat.update && !runningJob && !isStopping) {
         let phase: HelperUpdatePhase | null = null;
         const updateLines: Record<HelperUpdatePhase, string> = {
@@ -172,6 +178,7 @@ async function main(): Promise<void> {
             client.deviceSecret,
             (event) => client.sendEvent(jobId, event),
             {
+              onProgress: (message) => terminal?.activity(message),
               proposeLearnerStep: (snapshot) => coordinated
                 ? coordinateDecision(
                     propose,
@@ -196,13 +203,15 @@ async function main(): Promise<void> {
                 if (existsSync(file) && isAllowedArtifact(file)) await client.uploadArtifact(jobId, file);
               }
               if (!action || isStopping) return;
+              if (capability === 'quiz-learn' || capability === 'class-batch' || capability === 'cert-batch') attentionJobId = outcome.outcome === 'success' ? null : jobId;
               if (outcome.status === 'needs-user-input') terminal?.activity('Waiting for your input in Operations.', 'warning');
-              else if (outcome.outcome === 'success') terminal?.activity(`Done · ${action}`, 'ready');
+              else if (outcome.outcome === 'success') terminal?.activity(`Ready · Finished ${action}`, 'ready');
               else if (outcome.outcome === 'cancelled' || activeJob.cancelRequested) terminal?.activity(`Stopped · ${action}`);
               else terminal?.activity(`Needs attention · ${action}. See Operations.`, 'warning');
             })
             .catch((error: unknown) => {
               console.error('Job failed:', error);
+              if (action) attentionJobId = jobId;
               if (action && !isStopping) terminal?.activity(`Needs attention · ${action}. See Operations.`, 'warning');
             })
             .finally(() => {

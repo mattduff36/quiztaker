@@ -89,6 +89,7 @@ export interface LearnerMemoryScope {
   browserSessionId: string;
   conversationId?: string | null;
   objective?: string | null;
+  newConversation?: boolean;
 }
 
 interface MemoryRow {
@@ -200,6 +201,8 @@ export function composeLearnerSnapshot(
     url: current.url,
     text: currentText,
     choices: current.choices,
+    fields: current.fields,
+    playback: current.playback,
     buttons: current.buttons,
     tabs: current.tabs,
     ...(current.image ? { image: current.image } : {}),
@@ -238,7 +241,7 @@ export async function ensureLearnerSession(
       }
       return existing;
     }
-    const latest = await lockLatest(sql, input);
+    const latest = input.newConversation ? null : await lockLatest(sql, input);
     if (latest) {
       if (objective && objective !== latest.objective) {
         return updateSession(sql, latest, { objective });

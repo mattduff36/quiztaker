@@ -60,6 +60,49 @@ if the fast path fails.
   "Completed unsuccessfully / 0%" you cannot re-launch it — ask the user
   to reset the registration first.
 
+### Brainshark presentation embedded in a Saba content player
+
+- **Fingerprint** - the Saba wrapper starts a `remote_frameset_modern.html`
+  player. Inside is a Brainshark frame with a Content outline, a `scrub-bar`
+  slider, a current-slide counter, and a Completion Criteria indicator.
+  The browser's frame URL can be blank even when the frame's own location
+  identifies Brainshark. This variant was observed in Servicing HP PCs 2024,
+  Pillar 3 Before Replacing Parts (138 slides).
+- **Launch** - apply the existing `PATCH_OPEN` from `lib/cert-status.js` to
+  the selected Saba course detail page before clicking Continue. It drops
+  window features so Chrome can open the real player as a second tab. Keep
+  the originating Saba tab open to receive the player's result.
+- **Playback** - start with Play, then confirm the scrub value advances.
+  When the operator has asked to expedite playback, seek close to the end
+  with the visible slider and allow the slide to end and auto-advance.
+  The outline's played marker verifies progress. Jumping through the outline
+  can leave unplayed slides behind, even when the slide counter advances.
+  Here, seeking produced 100% slides viewed while audio remained below the
+  separate requirement. Use continuous playback for audio credit. During
+  diagnosis, the player's read-only completion state exposed the exact
+  settings and progress without changing the result: 75% slides, 75% audio,
+  and 0% minimum question score. These settings are per presentation.
+  In timed samples, 2x playback credited 41 audio seconds in 24 wall-clock
+  seconds and 4x credited 26 in 15. Both earned approximately 1.7 seconds
+  of credit per second. At 2x, more credit was collected per slide, so it
+  required less revisiting. Replayed questions retained their original
+  answers and could be advanced with Next once playback stopped.
+- **Knowledge checks** - playback can stop at the end of a slide until a
+  response is submitted. Use the visible question and material to answer.
+  A custom radio control may need keyboard Space after focus. Verify the
+  answer selected and Submit enabled. Other checks use checkboxes or a
+  written response, followed by a separate answer or model answer slide.
+- **Vitriol diagnosis** - this Brainshark frame exposed a Document in the
+  element ancestor chain. Passing it to `getComputedStyle` threw and caused
+  an empty snapshot. Guard visibility reads for element nodes and prioritize
+  question and playback controls ahead of long outlines. Use slide identity
+  and available controls for stale-action checks during playback, since the
+  displayed counter changes continuously.
+- **Result verification** - the Saba wrapper exposes a SCORM 1.2 status,
+  while Brainshark independently checks its own audio and slide progress.
+  Verify the Brainshark indicator and the Saba course status separately when
+  testing the player flow.
+
 ### Multi-activity container (`.../app/content-player?contextid=...`)
 
 - **Fingerprint** — URL contains `/app/content-player?`. Body shows
@@ -579,3 +622,22 @@ name, score and percent sign across text nodes. On 4 November the visible
 summary showed 14/20 (70%), with 75% required. Its six incorrect review rows
 gave a category and blank explanations. Keep that distinction in memory;
 a category alone does not identify the correct answer.
+
+### Work independently findings from the Brainshark live test (17 November 2026)
+
+- Goal planner treats the ordinary phrase "if needed" anywhere as ambiguous, even when "submit the assessment" is explicit; separate clause-level detection.
+- Saba class-detail detector found one unfinished activity, but Work independently stopped with generic ask to open course; add narrowly scoped Continue/Launch in same Chrome window from landing and auto-select associated player.
+- Vitriol retained prior Poly course objective/history after New task; first model ask chosen HP vs Poly. Scope task objectives/dialogue and retained course content by actual course, reuse same course while switching to authorized player. Old score was visible without a selected course.
+- Brainshark DOM ancestor traversal can return Document from HTML.parentElement; getComputedStyle throws and loses all controls and text. Guard element nodeType at every visibility ancestry scan; use in-frame location for source when OOPIF Playwright URL is blank.
+- Player exposes 138 slides via Table of Contents, actual started/played markers and scrub slider. Need a playback-aware wait and narrowly scoped opt-in seek via real player range. Avoid repeated provider calls during autoplay and keep old question available through tab refresh.
+- Observed old reply requested "Enable control detection", which is not an Operations control. Ask for a concrete action the operator can actually take.
+- Live elapsed time changes made the same-view guard discard proposed actions during normal autoplay. Compare stable slide ID and actionable controls, with running time tracked separately.
+- Brainshark custom radio selection needed focus and Space before SUBMIT enabled. Put active question controls before the 40-control limit occupied by table-of-contents items. Free-text checks need an actionable operator handoff or a bounded text action.
+- After approximately 90 seconds, Operations hid a live user question behind a browser check. Refresh restored the question. Keep pending questions visible while rechecking the browser in the background.
+- The live player completed after continuous audio playback reached its 75% requirement. The SCORM wrapper then reported completed through a read-only status check. Operator intervention was needed for launch, visibility recovery, playback and quiz controls. This run does not establish unassisted completion.
+
+- Final live verification on 17 November 2026: Brainshark displayed COMPLETED at 75.4% audio, and its Saba wrapper reported completed. The player subsequently closed and Saba displayed Successful with a completion date of 17-NOV-2026 and Print Certificate. Operations reported a failed resumed job after the player closed, leaving an obsolete question visible. Its task record was manually marked complete only after Saba success was verified. Add landing-page result reconciliation after player closure to the next batch.
+
+### Follow-up performance work requested for the following release
+
+Recognize repeated assessment layouts and execute observed answer, selection verification, Submit, feedback verification and Next as a bounded sequence. Measure model requests and elapsed time before and after, preserve question identity and stop if the page changes unexpectedly. This is future work. Version 1.0.39 monitors approved Brainshark playback locally, avoiding model requests for each playback check.

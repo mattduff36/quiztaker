@@ -16,6 +16,14 @@ export function structuredResult(
     return { ...resultEnvelope(capabilityId, code === 0 && Boolean(recording), recording || {}) };
   }
   if (capabilityId === 'quiz-learn') {
+    let courseResult: {status:'completed';title:string;evidence:string[]} | undefined;
+    try {
+      const raw=JSON.parse([...output.matchAll(/^AUTOMATION_RESULT (.+)$/gm)].at(-1)?.[1]||'null')?.courseResult;
+      if(code===0 && raw?.status==='completed' && typeof raw.title==='string' && Array.isArray(raw.evidence)
+        && raw.evidence.some((value:unknown)=>typeof value==='string'&&value.includes('Saba course detail shows Successful'))) {
+        courseResult={status:'completed',title:raw.title.slice(0,200),evidence:raw.evidence.filter((value:unknown)=>typeof value==='string').slice(0,4).map((value:string)=>value.slice(0,500))};
+      }
+    } catch { /* Only bounded executor evidence is transported. */ }
     let quizResult: Record<string,unknown> | undefined;
     try {
       const raw=JSON.parse([...output.matchAll(/^AUTOMATION_RESULT (.+)$/gm)].at(-1)?.[1]||'null')?.quizResult;
@@ -32,10 +40,10 @@ export function structuredResult(
     try {
       const tabs: unknown = marker ? JSON.parse(marker) : null;
       if (Array.isArray(tabs) && tabs.every((tab) => tab && Number.isInteger(tab.idx) && typeof tab.url === 'string' && typeof tab.title === 'string')) {
-        return { ...resultEnvelope(capabilityId, code === 0, { browserSession: replaceBrowserSession(tabs), ...(quizResult?{quizResult}:{}) }) };
+        return { ...resultEnvelope(capabilityId, code === 0, { browserSession: replaceBrowserSession(tabs), ...(quizResult?{quizResult}:{}), ...(courseResult?{courseResult}:{}) }) };
       }
     } catch { /* Invalid evidence must not change the current browser session. */ }
-    if(quizResult)return {...resultEnvelope(capabilityId,code===0,{quizResult})};
+    if(quizResult||courseResult)return {...resultEnvelope(capabilityId,code===0,{...(quizResult?{quizResult}:{}),...(courseResult?{courseResult}:{})})};
   }
   if (capabilityId === 'cdp-check') {
     const connected = Boolean((parsed as { ok?: boolean } | null)?.ok);

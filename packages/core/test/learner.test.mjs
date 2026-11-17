@@ -23,11 +23,20 @@ const snapshot = {
   ],
 };
 
-test('expanded browser tools require capability4 rather than an old capability3 plan', () => {
-  const capability=getCapability('quiz-learn');assert.equal(capability.version,4);
+test('written answers require the current observed field and quiz authorization',()=>{
+  const action={action:'answer-text',targetId:'f1',text:'The socket pins are bent.'};
+  const view={...snapshot,fields:[{id:'f1',name:'Type your answer'}]};
+  assert.equal(parseLearnerAction(action,view,{mode:'quiz'}).ok,true);
+  assert.equal(parseLearnerAction(action,view,{mode:'read'}).ok,false);
+  assert.equal(parseLearnerAction(action,snapshot,{mode:'quiz'}).ok,false);
+  assert.equal(parseLearnerAction({...action,text:'x'.repeat(2001)},view,{mode:'quiz'}).ok,false);
+});
+
+test('expanded browser tools require capability5 rather than an old capability3 plan', () => {
+  const capability=getCapability('quiz-learn');assert.equal(capability.version,5);
   const plan={script:capability.script,capabilityId:capability.id,capabilityVersion:3,args:['0'],confirmed:true,consumed:false,expiresAt:new Date(Date.now()+60_000).toISOString()};
   assert.equal(authorizeRun({script:capability.script,args:['0'],plan}).ok,false);
-  assert.equal(authorizeRun({script:capability.script,args:['0'],plan:{...plan,capabilityVersion:4}}).ok,true);
+  assert.equal(authorizeRun({script:capability.script,args:['0'],plan:{...plan,capabilityVersion:5}}).ok,true);
 });
 
 test('browser tool contract validates direction/find text and repairs checked-answer or unanswered Next decisions', () => {

@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { decideGuidedFlow, independentIntent, learnerQuestion, learnerStopMessage, observedQuizResult, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab } from '../src/lib/guided-flow';
 
+test('ordinary optional wording does not erase an explicit assessment goal and Saba course pages can launch',()=>{
+  assert.equal(independentIntent('Read the course, then take the assessment. Review the material again if needed.'),'read-and-assess');
+  assert.equal(independentIntent('Read the course and tell me whether I should take the assessment'),null);
+  assert.equal(decideGuidedFlow({detected:'class-detail'},'read-and-assess').kind,'learn');
+});
+
 test('uses actual detector capability IDs, including SCORM and SlickQuiz', () => {
   for (const [detected, capability] of [['scorm-player', 'scorm-complete'], ['slickquiz-exam', 'slickquiz-solve'], ['container', 'container-batch']]) {
     assert.equal(decideGuidedFlow({ detected, action: { capabilityId: capability } }).kind, 'learn');

@@ -27,15 +27,17 @@ export class ControlPlaneClient {
   async heartbeat(state: {
     status: 'online' | 'busy';
     activeJobId?: string;
+    attentionJobId?: string;
     updateError?: string;
     updatePhase?: import('./updater.js').HelperUpdatePhase;
     updateVersion?: string;
-  }): Promise<{ update: HelperUpdateOffer | null }> {
+  }): Promise<{ update: HelperUpdateOffer | null; taskResolved: string | null }> {
     const response = await this.request('/api/helper/heartbeat', {
       method: 'POST',
       body: JSON.stringify({
         status: state.status,
         ...(state.activeJobId ? { activeJobId: state.activeJobId } : {}),
+        ...(state.attentionJobId ? { attentionJobId: state.attentionJobId } : {}),
         ...(state.updateError ? { updateError: state.updateError } : {}),
         ...(state.updatePhase && state.updateVersion ? { updatePhase: state.updatePhase, updateVersion: state.updateVersion } : {}),
         version: HELPER_VERSION,
@@ -45,8 +47,8 @@ export class ControlPlaneClient {
         supportsSelfUpdate: true,
       }),
     });
-    const payload = await response.json().catch(() => null) as { update?: unknown } | null;
-    return { update: readUpdateOffer(payload?.update) };
+    const payload = await response.json().catch(() => null) as { update?: unknown; taskResolved?: unknown } | null;
+    return { update: readUpdateOffer(payload?.update), taskResolved: typeof payload?.taskResolved === 'string' && payload.taskResolved === state.attentionJobId ? payload.taskResolved : null };
   }
 
   async poll(): Promise<JobEnvelope | null> {

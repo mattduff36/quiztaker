@@ -19,7 +19,8 @@ export function independentIntent(goal: string): IndependentIntent | null {
   if (/\b(?:without|skip|do not|don't|never|avoid|no|only read|read only)\b/.test(text)) {
     return reading && !/\b(?:then|but|also)\s+(?:take|pass|submit|answer|complete)\b/.test(text) ? 'read' : null;
   }
-  if (/\b(?:how to|whether|if|later|practice|help me|explain|prepare)\b/.test(text)) return null;
+  const decisionText = text.replace(/\b(?:if needed|if necessary|when needed)\b/g, '');
+  if (/\b(?:how to|whether|if|later|practice|help me|explain|prepare)\b/.test(decisionText)) return null;
   const action = /\b(?:take|pass|submit|answer|complete|attempt|do|finish|work through)\s+(?:(?:the|this|all|its|final|practice|course)\s+)*(?:quiz|quizzes|assessments?|exams?|tests?|knowledge checks?)\b/.test(text);
   return action ? (reading && material ? 'read-and-assess' : 'quiz') : null;
 }
@@ -39,7 +40,7 @@ export type GuidedDecision =
   | { kind: 'question'; question: string; next: string };
 
 const known = new Set(['scorm-complete', 'container-batch', 'slickquiz-solve']);
-const learnable = new Set(['unknown', 'none', 'document-wbt', 'csod-curriculum', 'csod-learning']);
+const learnable = new Set(['unknown', 'none', 'document-wbt', 'csod-curriculum', 'csod-learning', 'class-detail']);
 
 export function decideGuidedFlow(detection: GuidedDetection, mode: GuidedLearningMode = 'read'): GuidedDecision {
   if (detection.detected === 'session-dead') return {

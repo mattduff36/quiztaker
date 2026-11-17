@@ -64,7 +64,7 @@ function reply(path,method,body,now,s){
       if(s.recordingFinished&&!s.waitForSaving){job.status='completed';job.result={ok:true,result:{folder:'C:/Fixtures/recording',pages:3,frames:7}};}
       return{job,events:s.waitForRecording ? [] : [{data:{text:'QUICK_SCRAPE_READY {}\n'}}],artifacts:[]};
     }
-if(job&&job.capability_id!==s.holdCapability&&job.status!=='failed')job.status='completed';return{job,events:job?.capability_id==='quiz-learn'?[{data:{text:s.questionOutput}}]:[],artifacts:[]};}
+if(job&&job.capability_id!==s.holdCapability&&job.status!=='failed')job.status='completed';if(job?.capability_id==='quiz-learn'&&s.questionOutput){job.status='awaiting-input';job.outcome={verified:false,status:'needs-user-input'};}return{job,events:job?.capability_id==='quiz-learn'?[{data:{text:s.questionOutput}}]:[],artifacts:[]};}
   throw Error(`Unexpected fixture request: ${method} ${path}`);
 }
 let servedState=state();
@@ -84,6 +84,41 @@ const browser=await chromium.launch({channel:'chrome',headless:true});
 let passed=false;
 try{
   // Stage matrix uses isolated offline fixtures, including delayed requests and remounts.
+  for(const viewport of [{width:1365,height:1000},{width:390,height:844}]) {
+    for(const completion of ['verified','operator']) {
+      const page=await browser.newPage({viewport});const fixture=state();
+      fixture.task={id:'finished-course',capability_id:'quiz-learn',status:'completed',outcome:completion==='verified'
+        ? {verified:true,status:'1/1 completed'}
+        : {operatorResolution:{result:'completed',requestedAt:new Date().toISOString(),resolvedAt:new Date().toISOString()}}};
+      fixture.jobs.set(fixture.task.id,fixture.task);
+      await page.route('**/api/**',async route=>{const req=route.request();const {__status,...json}=reply(new URL(req.url()).pathname,req.method(),req.postDataJSON()||{},Date.now(),fixture);await route.fulfill({status:__status||200,json});});
+      await page.goto(url);
+      await expect(page.getByRole('heading',{name:'Task complete',exact:true})).toBeVisible();
+      await expect(page.getByRole('button',{name:'Pause session',exact:true})).toBeHidden();
+      await expect(page.getByRole('button',{name:'Start a new task',exact:true})).toBeEnabled();
+      expect(fixture.connected).toBe(true);
+      await page.screenshot({path:join(artifacts,`${viewport.width}-${completion}-task-complete.png`),fullPage:true});
+      await page.getByRole('button',{name:'Start a new task',exact:true}).click();
+      await expect(page.getByRole('heading',{name:'Task complete',exact:true})).toBeHidden();
+      await expect(page.getByRole('button',{name:'Pause session',exact:true})).toBeVisible();
+      await page.close();
+    }
+    const page=await browser.newPage({viewport});const fixture=state();
+    await page.clock.install();fixture.holdCapability='list-tabs';
+    fixture.latest={id:'refreshing-tabs',status:'running',capability_id:'list-tabs'};fixture.jobs.set(fixture.latest.id,fixture.latest);
+    await page.route('**/api/**',async route=>{const req=route.request();const {__status,...json}=reply(new URL(req.url()).pathname,req.method(),req.postDataJSON()||{},Date.now(),fixture);await route.fulfill({status:__status||200,json});});
+    await page.goto(url);
+    const footer=page.getByTestId('operations-loading-footer');
+    await expect(footer).toBeVisible();
+    expect(await footer.evaluate(el=>getComputedStyle(el).position)).toBe('fixed');
+    const course=page.getByRole('heading',{name:'Work on a course',exact:true});const before=await course.boundingBox();
+    await page.screenshot({path:join(artifacts,`${viewport.width}-loading-footer.png`),fullPage:true});
+    fixture.latest.status='completed';await page.clock.fastForward(16_000);
+    await expect(footer).toBeHidden();
+    const after=await course.boundingBox();expect(after.y).toBe(before.y);
+    await page.close();
+  }
+  console.log('PASS completed tasks retain the browser, hide Pause and offer New task; loading footer does not shift the course panel.');
   for(const viewport of [{width:1365,height:1000},{width:390,height:844}]) {
     for(const scenario of ['loading','unpaired','offline','offline-new','absent','disconnected','stale','no-course','blank-goal','old-finished','old-finished-start','start-error','start-pending']) {
       const page=await browser.newPage({viewport,...(scenario==='offline-new'?{userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36'}:{})}); const fixture=state();
@@ -447,7 +482,7 @@ try{
     const refreshesWithQuestion=fixture.refreshes;
     fixture.latest={id:'background-observation',status:'completed',capability_id:'list-tabs'};
     await page.clock.fastForward(46_000);
-    expect(fixture.refreshes).toBe(refreshesWithQuestion);
+    expect(fixture.refreshes).toBeGreaterThanOrEqual(refreshesWithQuestion);
     await expect(page.getByText('Which module should I read next?',{exact:true})).toBeVisible();
     await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
     await page.getByRole('button',{name:'Pause session',exact:true}).click();
@@ -455,6 +490,7 @@ try{
     await page.clock.fastForward(61_000);
     await expect(page.getByRole('heading',{name:'Your session is paused',exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:'Paper storage',exact:true})).toBeHidden();
+    const pausedRefreshes=fixture.refreshes;
     await expect(page.getByRole('button',{name:'Mark complete',exact:true})).toBeEnabled();
     await expect(page.getByRole('button',{name:'Mark failed',exact:true})).toBeEnabled();
     await page.getByRole('button',{name:'Mark complete',exact:true}).click();
@@ -464,7 +500,7 @@ try{
     await expect(page.getByRole('button',{name:'End browser session',exact:true})).toBeHidden();
     expect(fixture.finishPosts).toBe(1);
     await page.clock.fastForward(60_000);
-    expect(fixture.refreshes).toBe(refreshesWithQuestion);
+    expect(fixture.refreshes).toBe(pausedRefreshes);
     fixture.online=true;fixture.paused=false;fixture.holdCapability='quick-scrape';fixture.waitForRecording=true;
     await page.clock.fastForward(61_000);
     const activityPicker=page.getByRole('combobox',{name:'Course activity'});

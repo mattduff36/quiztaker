@@ -64,13 +64,15 @@ test('signed learner intent reaches the executor and old jobs override inherited
   process.env.QUIZTAKER_HOME = join(directory, 'home');
   process.env.QUIZTAKER_AUTOMATION_ROOT = directory;
   process.env.VITRIOL_LEARNER_MODE = 'quiz';
-  writeFileSync(join(directory,'pw-learn-quiz.js'), 'console.log("MODE=" + process.env.VITRIOL_LEARNER_MODE);');
+  writeFileSync(join(directory,'pw-learn-quiz.js'), `console.log("MODE=" + process.env.VITRIOL_LEARNER_MODE); console.log('LEARNER_PROGRESS {"message":"Playing course audio"}');`);
   const helperId = randomUUID();
   const secret = deriveHelperSecret('integration-master-key-32-characters', helperId);
   try {
     for (const mode of [undefined, 'read', 'quiz']) {
-      const envelope = signJob({jobId:randomUUID(),planId:randomUUID(),attemptId:randomUUID(),helperId,capabilityId:'quiz-learn',capabilityVersion:4,script:'pw-learn-quiz.js',args:[],fingerprint:null,nonce:randomUUID(),issuedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60_000).toISOString(),input:mode?{mode}:{}},secret);
-      const result = await startJob(envelope,helperId,secret,async()=>{}, {proposeLearnerStep:async()=>({stop:true})}).completion;
+      const envelope = signJob({jobId:randomUUID(),planId:randomUUID(),attemptId:randomUUID(),helperId,capabilityId:'quiz-learn',capabilityVersion:5,script:'pw-learn-quiz.js',args:[],fingerprint:null,nonce:randomUUID(),issuedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60_000).toISOString(),input:mode?{mode}:{}},secret);
+      const progress:string[]=[];
+      const result = await startJob(envelope,helperId,secret,async()=>{}, {proposeLearnerStep:async()=>({stop:true}),onProgress:message=>progress.push(message)}).completion;
+      assert.deepEqual(progress,['Playing course audio']);
       assert.equal(result.code,0);
       assert.match(result.output,new RegExp(`MODE=${mode || 'read'}`));
       envelope.payload.input = {mode: mode==='quiz'?'read':'quiz'};

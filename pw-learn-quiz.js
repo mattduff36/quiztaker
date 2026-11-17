@@ -24,6 +24,10 @@
 // Course outlines include unvisited headings as inventory, never read coverage.
 // Canon instruction panels name a hotspot only when one visible target and
 // one emphasized instruction subject exist on the same slide.
+// Brainshark requirements are checked before playback. Listening requires an
+// explicit operator reply scoped to the current conversation and presentation.
+// Approved playback is monitored locally, including inline questions and the
+// real Saba completion result. Written answers use observed course fields only.
 //
 // Usage:
 //   node pw-learn-quiz.js <tabIdx> [--dry]
@@ -32,6 +36,8 @@ const readline = require('node:readline');
 const { chromium } = require('playwright');
 const { observePlayerEvidence } = require('./lib/player-evidence');
 const { recognizeQuizResult, quizResultPayload } = require('./lib/quiz-result');
+const { readBrainshark, listeningQuestion, playbackApproved, playbackControl, setPlaybackSpeed, closeBrainsharkReaders, CONTINUE_LISTENING_QUESTION } = require('./lib/brainshark-player');
+const { launchSelectedCourse, originatingSabaPage, finishSabaCourse } = require('./lib/course-launch');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 const MAX_STEPS = 80;
@@ -43,7 +49,7 @@ const OPEN_TOPIC_LABEL = /^Open topic: .{1,140}$/;
 const COURSE_INTERACTION_LABEL = /^Course interaction: \d+_\d+_click_?\d+$/;
 const REPEATED_VIEW_LIMIT = 3;
 const REPEATED_VIEW_OPTION = 'Done, resume now';
-const ALLOWED = new Set(['click', 'answer-select', 'select-tab', 'scroll', 'find-text', 'wait', 'capture', 'verify', 'ask-user']);
+const ALLOWED = new Set(['click', 'answer-select', 'answer-text', 'select-tab', 'scroll', 'find-text', 'wait', 'capture', 'verify', 'ask-user']);
 const observationState = new WeakMap();
 const MAX_CAPTURE_DATA_URL = 900_000;
 const LEARNER_NEEDS_INPUT = 'needs-user-input';
@@ -141,6 +147,9 @@ function localActionAllowed(action, snapshot, mode = 'read') {
   if (action.action === 'scroll') return action.direction == null || action.direction === 'up' || action.direction === 'down';
   if (action.action === 'find-text') return typeof action.text === 'string' && action.text.trim().length > 0 && action.text.length <= 160;
   if (action.action === 'ask-user') return learnerQuestionPayload(snapshot, action) != null;
+  if (action.action === 'answer-text') return mode === 'quiz' && /^f\d{1,3}$/.test(action.targetId)
+    && snapshot.fields?.some(field => field.id === action.targetId) && typeof action.text === 'string'
+    && action.text.trim().length > 0 && action.text.length <= 2000;
   if (action.action === 'select-tab') {
     const target = snapshot.tabs?.find(tab => tab.id === action.targetId);
     if (!target || !/^t\d{1,3}$/.test(action.targetId) || UNSAFE_LABEL.test(target.name)) return false;
@@ -212,7 +221,7 @@ async function accessibleName(locator) {
         if (slide && parent.ownerDocument) {
           const visible = node => {
             if (!node || !node.getClientRects().length) return false;
-            for (let item = node; item; item = item.parentElement) {
+            for (let item = node; item?.nodeType === 1; item = item.parentElement) {
               const style = getComputedStyle(item);
               if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
             }
@@ -391,7 +400,7 @@ function canonicalCourseSource(value) {
 async function readCourseOutlines(page) {
   const outlines=[];
   for(const frame of await visibleFrames(page)) {
-    const url=canonicalCourseSource(frame.url());
+    const url=canonicalCourseSource(await frame.evaluate(() => location.href).catch(() => frame.url()));
     if(!url || /(?:evallaunch|evaluation|assessment|quiz|exam)(?:[/.]|$)|\b(?:login\d*|signin|oauth|sso)\b/i.test(url)) continue;
     const inventory=await frame.evaluate(()=>{
       if(document.querySelector('input[type=password]') || /\bQuestion\s+\d+\s+of\s+\d+\b/i.test((document.body?.innerText||'').slice(0,2000))) return null;
@@ -422,7 +431,7 @@ async function captureCurrentView(page) {
   if(frames.length>32){state.feedback='Screenshot skipped: this page has too many frames to check safely.';return;}
   for(const frame of frames) {
     if(frame.parentFrame()&&!await frame.frameElement().then(el=>el.isVisible()).catch(()=>false))continue;
-    const address=canonicalCourseSource(frame.url());
+    const address=canonicalCourseSource(await frame.evaluate(() => location.href).catch(() => frame.url()));
     if(/\b(?:login\d*|signin|sign-in|oauth|sso|authenticate)\b/i.test(address)) {state.feedback='Screenshot skipped on an authentication page.';return;}
     const sensitive=frame.locator('input[type=password],input[autocomplete*=password],input[autocomplete=one-time-code],input[name*=password i],input[id*=password i],input[name*=token i],input[id*=token i],input[name*=secret i],input[id*=secret i],input[name*=api_key i],input[id*=api_key i],input[name*=apikey i],input[id*=apikey i],textarea[name*=secret i],form[action*=login i],form[action*=signin i]');
     const count=await sensitive.count().catch(()=>-1);
@@ -444,10 +453,10 @@ async function findRenderedText(page,text) {
     for(let index=0;index<count;index++) {
       const target=matches.nth(index);
       const facing=await target.evaluate(el=>{
-        for(let face=el;face;face=face.parentElement) {
+        for(let face=el;face?.nodeType===1;face=face.parentElement) {
           if(getComputedStyle(face).backfaceVisibility!=='hidden')continue;
           let matrix=new DOMMatrix();
-          for(let node=face;node;node=node.parentElement){const transform=getComputedStyle(node).transform;if(transform!=='none')matrix=new DOMMatrix(transform).multiply(matrix);}
+          for(let node=face;node?.nodeType===1;node=node.parentElement){const transform=getComputedStyle(node).transform;if(transform!=='none')matrix=new DOMMatrix(transform).multiply(matrix);}
           if(matrix.m33 < -0.001)return false;
         }
         return true;
@@ -468,7 +477,7 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
   for (const frame of await visibleFrames(page)) {
     const box = frame.parentFrame() ? await frame.frameElement().then(element => element.boundingBox()).catch(() => null) : {x:0,y:0};
     if (!box) continue;
-    const locator = navigationOnly ? frame.locator('button, a, [role=button], [role=tab], summary, [onclick], [data-toggle], [data-bs-toggle], [aria-controls], input[type=button], input[type=submit], input[type=image], .dki-element-content.speech-bubble, img.dki-element-content.hasRollover, img.dki-element-content.dki-image-rollover[data-id]') : role === 'answer' ? frame.getByRole('radio').or(frame.getByRole('checkbox')) : frame.getByRole(role);
+    const locator = navigationOnly ? frame.locator('button, a, [role=button], [role=tab], summary, [onclick], [data-toggle], [data-bs-toggle], [aria-controls], input[type=button], input[type=submit], input[type=image], .dki-element-content.speech-bubble, img.dki-element-content.hasRollover, img.dki-element-content.dki-image-rollover[data-id]') : role === 'answer' ? frame.locator('input[type=radio]:not([role]),input[type=checkbox]:not([role]),[role=radio],[role=checkbox]') : frame.getByRole(role);
     const indices = await locator.evaluateAll((elements, view) => {
       const indices = [];
       for (let index = 0; index < elements.length; index += 1) {
@@ -489,10 +498,10 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
           if (!base?.matches('img.dki-element-content.hasRollover') || el.id !== `${base.id}_rollover` || getComputedStyle(base).cursor !== 'pointer') continue;
         }
         let facing = true;
-        for (let face = el; face; face = face.parentElement) {
+        for (let face = el; face?.nodeType === 1; face = face.parentElement) {
           if (getComputedStyle(face).backfaceVisibility !== 'hidden') continue;
           let matrix = new DOMMatrix();
-          for (let node = face; node; node = node.parentElement) {
+          for (let node = face; node?.nodeType === 1; node = node.parentElement) {
             const transform = getComputedStyle(node).transform;
             if (transform !== 'none') matrix = new DOMMatrix(transform).multiply(matrix);
           }
@@ -503,7 +512,8 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
           && rect.right > Math.max(0,view.left) && rect.left < Math.min(innerWidth,view.right);
         const explicitRole = el.getAttribute('role')?.trim().split(/\s+/)[0];
         const checkbox = explicitRole ? explicitRole === 'checkbox' : el.matches('input[type=checkbox]');
-        indices.push({index,inViewport,checkbox});
+        const outline = location.hostname === 'www.brainshark.com' && Boolean(el.closest('[id^="slide-list-slide-"]'));
+        indices.push({index,inViewport,checkbox,outline});
       }
       return indices;
     }, {left:-box.x,top:-box.y,right:viewport.width-box.x,bottom:viewport.height-box.y}).catch(() => []);
@@ -511,7 +521,7 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
   }
   // Stable viewport-first order makes a scroll reveal later modules, while
   // keeping offscreen course controls as an auto-scroll fallback.
-  candidates.sort((a,b) => Number(b.inViewport)-Number(a.inViewport));
+  candidates.sort((a,b) => Number(a.outline)-Number(b.outline) || Number(b.inViewport)-Number(a.inViewport));
   for (const {locator,index,checkbox} of candidates.slice(0,120)) {
     const handle = locator.nth(index);
     if (!await handle.isVisible().catch(() => false) || !await handle.isEnabled().catch(() => false)) continue;
@@ -575,12 +585,12 @@ async function readSnapshot(page, mode = 'read') {
         exposed = await element.evaluate(el => {
           const r = el.getBoundingClientRect();
           if (!(r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth)) return false;
-          for (let face = el; face; face = face.parentElement) {
+          for (let face = el; face?.nodeType === 1; face = face.parentElement) {
             const style = getComputedStyle(face);
             if (Number(style.opacity) === 0) return false;
             if (style.backfaceVisibility !== 'hidden') continue;
             let matrix = new DOMMatrix();
-            for (let node = face; node; node = node.parentElement) {
+            for (let node = face; node?.nodeType === 1; node = node.parentElement) {
               const transform = getComputedStyle(node).transform;
               if (transform !== 'none') matrix = new DOMMatrix(transform).multiply(matrix);
             }
@@ -596,11 +606,11 @@ async function readSnapshot(page, mode = 'read') {
           const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
           if (!r.width || !r.height || s.display === 'none' || s.visibility === 'hidden' || !el.getClientRects().length) return false;
           if (inViewport && !(r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth)) return false;
-          for (let face = el; face; face = face.parentElement) {
+          for (let face = el; face?.nodeType === 1; face = face.parentElement) {
             if (Number(getComputedStyle(face).opacity) === 0) return false;
             if (getComputedStyle(face).backfaceVisibility !== 'hidden') continue;
             let matrix = new DOMMatrix();
-            for (let node = face; node; node = node.parentElement) {
+            for (let node = face; node?.nodeType === 1; node = node.parentElement) {
               const transform = getComputedStyle(node).transform;
               if (transform !== 'none') matrix = new DOMMatrix(transform).multiply(matrix);
             }
@@ -614,6 +624,7 @@ async function readSnapshot(page, mode = 'read') {
           const node = walker.currentNode;
           const parent = node.parentElement;
           if (!parent || parent.closest('script,style,noscript') || !visible(parent)) continue;
+          if (location.hostname === 'www.brainshark.com' && parent.closest('[id^="slide-list-slide-"]')) continue;
           const quizCard = parent.closest('.quiz-card');
           if (quizCard && !quizCard.classList.contains('quiz-card--active')) continue;
           const value = node.textContent.replace(/\s+/g, ' ').trim();
@@ -642,7 +653,7 @@ async function readSnapshot(page, mode = 'read') {
       if (!observed.text.trim()) continue;
       riseResultVisible ||= Boolean(observed.riseResult);
       resultViews.push(observed.riseResult || (observed.storylineResult ? `Quiz Results\n${observed.text}` : observed.text));
-      const source = frame.url().split(/[?#]/)[0].slice(0, 500);
+      const source = canonicalCourseSource(await frame.evaluate(() => location.href).catch(() => frame.url()));
       sections.push(`[Source: ${source} | ${observed.heading || ''} | scroll ${observed.position}${observed.end ? ' | end of page' : ''}]\n${observed.text}`);
     } catch {
       // A cross-origin frame has no readable body.
@@ -651,6 +662,21 @@ async function readSnapshot(page, mode = 'read') {
   const buttons = await readControls(page, 'button', 'b', true, mode);
   const answers = riseResultVisible ? { listed: [], handles: new Map() } : await readControls(page, 'answer', '', false);
   const handles = new Map([...buttons.handles, ...answers.handles]);
+  const fields = [];
+  for (const frame of await visibleFrames(page)) {
+    const courseFrame = await frame.evaluate(() => location.hostname === 'www.brainshark.com').catch(() => false);
+    if (!courseFrame || mode !== 'quiz') continue;
+    const inputs = frame.locator('input:not([type]),input[type=text],textarea').filter({visible:true});
+    for (let index=0; index<Math.min(await inputs.count(), 8); index++) {
+      const handle = inputs.nth(index);
+      if (!await handle.isEditable()) continue;
+      const name = await controlName(handle) || await handle.getAttribute('placeholder');
+      if (!name || /password|secret|email|login|username|token/i.test(name)) continue;
+      const id = `f${fields.length+1}`;
+      fields.push({id,name:name.slice(0,160),value:(await handle.inputValue()).slice(0,2000)});
+      handles.set(id,handle);
+    }
+  }
   const tabs = [];
   // Only already-observed course tabs on this website are offered. There is
   // no model-supplied URL, browser-wide arbitrary selection or navigation.
@@ -678,6 +704,7 @@ async function readSnapshot(page, mode = 'read') {
       text: `${await observePlayerEvidence(page)}\n${state.feedback?`Tool feedback: ${state.feedback}\n`:''}${sections.map(section => section.slice(0, Math.floor(7400 / Math.max(1, sections.length)))).join('\n')}`.slice(0, 8000),
       buttons: buttons.listed,
       choices: answers.listed,
+      ...(fields.length ? {fields} : {}),
       tabs,
       ...(image?{image}:{}),
       ...(outlines.length?{outlines}:{}),
@@ -693,7 +720,11 @@ async function readSnapshot(page, mode = 'read') {
 function sameLearnerView(before, after) {
   const comparable = value => {
     if (!value || typeof value !== 'object') return value;
-    const { image, coordinationStart, ...view } = value;
+    const { image, coordinationStart, playback, ...view } = value;
+    if (playback) {
+      view.playback = { identity: playback.identity, slide: playback.slide, completed: playback.completed, question: playback.question };
+      if (typeof view.text === 'string') view.text = view.text.replace(/^(?:\d{1,2}:\d{2}(?::\d{2})?|\/)$/gm, '[playback time]');
+    }
     // Canon renders this labelled countdown as its own text line. Answers,
     // question text, expiry notices and every other page change stay significant.
     if (typeof view.text === 'string') view.text = view.text.replace(/(^|\n)(Time remaining[ \t]*\n)\d{1,3}:\d{2}(?::\d{2})?(?=\n|$)/gi, '$1$2[countdown]');
@@ -777,6 +808,16 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
     state.feedback=found?`Found rendered text: ${action.text.trim()}`:`Text was not found in rendered course content: ${action.text.trim()}`;
     return;
   }
+  if (action.action === 'answer-text') {
+    const field = handles.get(action.targetId);
+    const observed = snapshot.fields?.find(item => item.id === action.targetId);
+    if (!field || !observed || !await field.isVisible() || !await field.isEditable()
+      || (await controlName(field) || await field.getAttribute('placeholder')) !== observed.name) throw new CourseControlBlocked('The response field changed');
+    await field.fill(action.text, {timeout:5000});
+    if (await field.inputValue() !== action.text) throw new CourseControlBlocked('The written response could not be confirmed');
+    state.feedback='Entered a written answer. Inspect the enabled Submit control to send it.';
+    return;
+  }
   if (action.action === 'wait') {
     const ms = Math.max(0, Math.min(1000, Number(action.ms) || 500));
     await page.waitForTimeout(ms);
@@ -820,7 +861,11 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
     } else await handle.click({ timeout: 5000 });
     return;
   }
-  await handle.check({ timeout: 5000 });
+  const brainshark = await handle.evaluate(el => location.hostname === 'www.brainshark.com' && el.matches('input[type=radio],input[type=checkbox]'));
+  if (brainshark) {
+    if (!await handle.isChecked()) await handle.press('Space', {timeout:5000});
+    if (!await handle.isChecked()) throw new CourseControlBlocked('The answer selection could not be confirmed');
+  } else await handle.check({ timeout: 5000 });
 }
 
 async function emitQuestion(payload, page, browser) {
@@ -844,18 +889,110 @@ async function main() {
   const coordinated = mode === 'quiz' && process.env.VITRIOL_COORDINATE === '1';
   const browser = await chromium.connectOverCDP(CDP_URL);
   let reader = null;
+  let landing = null;
+  let brainsharkCompleted = false;
   try {
-    let page = browser.contexts()[0]?.pages()?.[options.tabIdx];
+    const pages=browser.contexts()[0]?.pages() || [];
+    const selectedAddress=process.env.VITRIOL_CAPTURE_TARGET;
+    const matching=selectedAddress ? pages.filter(tab=>tab.url()===selectedAddress) : [];
+    let page = selectedAddress ? matching.length===1 ? matching[0] : null : pages[options.tabIdx];
     if (!page) throw new Error('Tab index is not open');
     if (options.dryRun) {
       const { snapshot } = await readSnapshot(page, mode);
       console.log(`Dry run: quiz-learn observed "${snapshot.title || 'untitled'}"`);
       return;
     }
+    const selected = page;
+    page = await launchSelectedCourse(page);
+    landing = page !== selected ? selected : originatingSabaPage(page);
+    if (/remote_frameset_modern\.html/i.test(page.url())) {
+      for(let attempt=0; attempt<15; attempt++) {
+        if (await readBrainshark(page)) break;
+        await new Promise(resolve=>setTimeout(resolve,1000));
+      }
+    }
     reader = createActionReader();
     let repeatState = null;
+    let lastPlayback = null;
+    let idlePlaybackSince = Date.now();
+    let playbackAnnouncementAt = 0;
+    let playbackStartedAt = Date.now();
+    let playbackStalledSince = Date.now();
+    async function verifyCourse() {
+      const verified = await finishSabaCourse(landing, brainsharkCompleted);
+      if (!verified) return false;
+      const tabs = await Promise.all(browser.contexts()[0].pages().map(async (tab, idx) => ({idx,url:tab.url(),title:await tab.title().catch(()=> '')})));
+      console.log(`LEARNER_TABS ${JSON.stringify(tabs)}`);
+      console.log(`AUTOMATION_RESULT ${JSON.stringify({completed:1,total:1,courseResult:{status:'completed',title:verified.title,evidence:verified.evidence}})}`);
+      return true;
+    }
     for (let step = 1; step <= MAX_STEPS; step += 1) {
+      if (page.isClosed()) {
+        if (await verifyCourse()) return;
+        if (landing && !landing.isClosed()) {page=landing;continue;}
+        throw Error('The course player closed before its result could be verified');
+      }
+      const playback = await readBrainshark(page);
+      if (playback?.completed) {
+        brainsharkCompleted = true;
+        if (!landing) landing = originatingSabaPage(page);
+        if (await verifyCourse()) return;
+        await emitQuestion({question:'The course player shows Completed. Can you confirm its result in the learning portal?',options:['Check the course result']},page,browser);
+        return;
+      }
+      if (playback) {
+        const question = listeningQuestion(playback);
+        const approved = playbackApproved(process.env.VITRIOL_LEARNER_CONVERSATION, playback, process.env.VITRIOL_LEARNER_GUIDANCE);
+        if (question && !approved) {
+          await playbackControl(page,'pause');
+          await emitQuestion(question,page,browser);
+          return;
+        }
+        await setPlaybackSpeed(page,2);
+        if (Date.now()-playbackStartedAt>20*60*1000) {
+          await playbackControl(page,'pause');
+          await emitQuestion({question:CONTINUE_LISTENING_QUESTION,options:['Continue with playback','Stop for now']},page,browser);
+          return;
+        }
+        if (!lastPlayback || lastPlayback.slide!==playback.slide || Math.abs(lastPlayback.elapsedMs-playback.elapsedMs)>300) {
+          idlePlaybackSince=Date.now();
+          playbackStalledSince=Date.now();
+        }
+        if (Date.now()-playbackStalledSince>45000) {
+          await emitQuestion({question:'The course playback has stopped advancing. Can you check for a loading error or a prompt in the course browser?',options:['Done, resume now']},page,browser);
+          return;
+        }
+        lastPlayback=playback;
+        if (playback.playing || !playback.question || playback.answered && !playback.submitVisible) {
+          if (!playback.playing && Date.now()-idlePlaybackSince>3500) {
+            if (playback.durationMs>0 && playback.elapsedMs>=playback.durationMs-500) {
+              if (playback.slide===playback.totalSlides) {
+                // Revisit content for actual listening credit. Seeking and
+                // outline navigation alone never establish completion.
+                await playbackControl(page,'restart');
+              } else await playbackControl(page,'next');
+            } else await playbackControl(page,'play');
+            idlePlaybackSince=Date.now();
+          }
+          if (Date.now()-playbackAnnouncementAt>15000) {
+            const requirement=playback.requirements;
+            const credit=requirement?.audioPercent;
+            console.log(`LEARNER_PROGRESS ${JSON.stringify({message:`Playing slide ${playback.slide} of ${playback.totalSlides}${credit!=null?` · listening ${credit.toFixed(1)}% of ${requirement.requiredAudio}% required`:''}.`})}`);
+            playbackAnnouncementAt=Date.now();
+          }
+          await new Promise(resolve=>setTimeout(resolve,1500));
+          step-=1;
+          continue;
+        }
+      }
       const { snapshot, handles } = await readSnapshot(page, mode);
+      if (playback) snapshot.playback=playback;
+      if (playback?.question && !observationFor(page).imageQuestion?.includes(`${playback.identity}:${playback.slide}`)) {
+        await captureCurrentView(page);
+        const state=observationFor(page);
+        if (state.image) snapshot.image=state.image;
+        state.imageQuestion=[`${playback.identity}:${playback.slide}`];
+      }
       if (coordinated && step === 1) snapshot.coordinationStart = true;
       console.log(`LEARNER_PROGRESS ${JSON.stringify({ message: `Reading ${snapshot.title || 'the current course page'}.` })}`);
       const result = mode === 'quiz' ? recognizeQuizResult(snapshot) : null;
@@ -869,7 +1006,9 @@ async function main() {
       }
       // The result can arrive while the provider is deciding. Re-observe even
       // for verify/ask-user so a terminal view wins before action/repeat guards.
+      if(page.isClosed()) {step-=1;continue;}
       const current = await readSnapshot(page, mode);
+      if (playback) current.snapshot.playback=await readBrainshark(page);
       const currentResult = mode === 'quiz' ? recognizeQuizResult(current.snapshot) : null;
       if (currentResult) { finish(currentResult.status === 'passed', undefined, currentResult); return; }
       if (!localActionAllowed(action, snapshot, mode)) {
@@ -938,6 +1077,7 @@ async function main() {
       if (opened) {
         if (!/^https?:/i.test(opened.url())) await opened.waitForURL(url => /^https?:$/.test(url.protocol), {timeout:10_000}).catch(() => undefined);
         await opened.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => undefined);
+        landing = /^https:\/\/hpi-external\.sabacloud\.com\//i.test(page.url()) ? page : landing;
         page = opened;
         console.log('Following the course window opened by the selected control');
       }
@@ -955,6 +1095,7 @@ async function main() {
     }, page, browser);
   } finally {
     reader?.close();
+    await closeBrainsharkReaders(browser.contexts()[0]?.pages() || []);
     await browser.close().catch(() => undefined);
   }
 }

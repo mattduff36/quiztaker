@@ -62,6 +62,7 @@ export async function createPlan(userId: string, input: CreatePlanInput): Promis
       helperId: input.helperId,
       browserSessionId,
       conversationId: requestedConversationId,
+      newConversation: capabilityInput.newConversation === true && !requestedConversationId,
       objective,
     });
     capabilityInput.conversationId = memory.id;
