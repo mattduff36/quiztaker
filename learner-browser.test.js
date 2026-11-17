@@ -63,6 +63,9 @@ test('Storyline uses the label beside a quiz checkbox and changes the actual sel
     await act(page, 'Poly Lens', 'quiz', true);
     assert.equal(await page.locator('#choice').isChecked(), true);
     assert.equal(await page.locator('rect').getAttribute('data-redrawn'), 'yes');
+    await page.locator('label').evaluate(label => label.remove());
+    const { snapshot } = await readSnapshot(page, 'quiz');
+    assert.ok(snapshot.choices.some(choice => choice.name === 'Poly Lens' && choice.checked));
   } finally { await browser.close(); }
 });
 
@@ -144,7 +147,7 @@ test('Canon visible result recognition ignores hidden, reverse-side and stale co
   } finally { await browser.close(); }
 });
 
-test('learner process ends visible pass or fail before requesting any model action or retry', async () => {
+test('learner process recognizes results and returns a resume prompt at the step limit', async () => {
   const net = require('node:net');
   const {spawn} = require('node:child_process');
   const server = net.createServer();
@@ -171,6 +174,29 @@ test('learner process ends visible pass or fail before requesting any model acti
       assert.equal(payload.completed,status==='Passed'?1:0);
       assert.match(await page.locator('body').innerText(),/Test Results/);
     }
+    await page.setContent('<h1>Course activity</h1><p>Read this slide, then continue.</p><button>Next</button>');
+    const paused = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['pw-learn-quiz.js', '0'], {
+        cwd: __dirname, env: { ...process.env, VITRIOL_LEARNER_MODE: 'quiz', PLAYWRIGHT_CDP_URL: `http://127.0.0.1:${port}` },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let output = '';
+      let sent = false;
+      const timer = setTimeout(() => { child.kill(); reject(new Error('No step-limit pause')); }, 15000);
+      child.stdout.on('data', chunk => {
+        output += chunk;
+        if (!sent && /^LEARNER_SNAPSHOT /m.test(output)) {
+          sent = true;
+          child.stdin.write('LEARNER_STOP Learner step cap reached\n');
+        }
+      });
+      child.on('error', reject);
+      child.on('exit', code => { clearTimeout(timer); resolve({ code, output }); });
+    });
+    assert.equal(paused.code, 1);
+    const question = JSON.parse(paused.output.match(/^LEARNER_QUESTION (.+)$/m)[1]);
+    assert.deepEqual(question.options, ['Resume from this page']);
+    assert.equal(question.url, page.url());
   } finally {await browser.close();}
 });
 

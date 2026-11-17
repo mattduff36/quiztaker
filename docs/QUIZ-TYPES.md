@@ -90,9 +90,11 @@ if the fast path fails.
 
 ### Saba Storyline knowledge check (Poly Video Fundamentals)
 
-- **Fingerprint** - Saba embeds a Storyline module with Pick One, Pick Many, and Dropdown list question slides. Controls may all be named Rectangle 24, with the answer text in separate elements.
+- **Fingerprint** - Saba embeds a Storyline module with Pick One, Pick Many, and Dropdown list question slides. Radio buttons and checkboxes may be unnamed or share a generic name such as Rectangle 24. The answer text appears in separate elements.
 - **Strategy** - Match each label to its visible control by row. Read each installation dropdown individually because the same choices are shuffled separately in each row. Submit using the visible controls and use NEXT > on the feedback panel.
 - **Verification** - Results Slide reports Your Score and Passing Score. Continue to Summary, select EXIT, then check for Completed Successfully in the Saba roster. Verified on Module 2 at 90%, with 80% required.
+
+- **Drag and drop** - Module 7 required dragging visible items into their matching slots. Complete this interaction in the course browser when Vitriol asks for help, then resume from the resulting slide.
 
 Ordered from fastest / most-common to slowest / rarest.
 

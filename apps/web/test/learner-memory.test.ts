@@ -37,6 +37,25 @@ const helperB = '22222222-2222-4222-8222-222222222222';
 const browserA = '33333333-3333-4333-8333-333333333333';
 const browserB = '44444444-4444-4444-8444-444444444444';
 
+test('a later recording preserves earlier module material and ranks exact product codes', () => {
+  let materials: LearnerMaterial[] = [];
+  for (const module of ['room', 'audio']) {
+    for (let page = 0; page < LEARNER_MATERIAL_LIMIT + 5; page++) {
+      materials = addLearnerMaterial(materials, {
+        title: `Poly ${module} module`,
+        url: `https://example.invalid/course/${module}?slide=${page}`,
+        text: module === 'room' && page === LEARNER_MATERIAL_LIMIT
+          ? 'The G7500 supports a modular room configuration.'
+          : `Observation ${page} from the ${module} module. ${'Course material. '.repeat(100)}`,
+      });
+    }
+  }
+  assert.equal(materials.length, LEARNER_MATERIAL_LIMIT);
+  assert.ok(materials.some((item) => item.title === 'Poly audio module'));
+  const snapshot = composeLearnerSnapshot({ text: 'Which configuration does the G7500 support?', choices: [{ id: 'c1', name: 'Modular room' }] }, { history: [], materials });
+  assert.match(snapshot.text || '', /G7500 supports a modular room configuration/);
+});
+
 test('current screenshot survives course memory composition and request validation', () => {
   const image = 'data:image/jpeg;base64,/9j/2Q==';
   const snapshot = boundLearnerSnapshot(composeLearnerSnapshot(

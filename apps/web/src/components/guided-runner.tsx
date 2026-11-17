@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Check, LoaderCircle, Play, Square, RefreshCw, Pause } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { LoaderCircle, Play, Square, RefreshCw, Pause } from 'lucide-react';
 import { decideGuidedFlow, learnerQuestion, learnerStopMessage, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab, type GuidedDetection, type GuidedLearningMode } from '@/lib/guided-flow';
 import { learnerActivityUpdates } from '@/lib/learner-activity';
 import { OBJECTIVE_LIMIT } from '@/lib/operations-client-state';
@@ -40,6 +41,9 @@ export function GuidedRunner(props: {
   lastJob?: { result?: unknown; id: string; status: string; capability_id?: string; input?: { target?: { targetId?: string; browserSessionId?: string; fingerprint?: string } } } | null;
   outputJobId?: string;
   lastOutput: string;
+  courseLauncher?: ReactNode;
+  sessionActions?: ReactNode;
+  courseCoverage?: ReactNode;
   paused?: boolean;
   suspended?: boolean;
   connection?: ConnectionState;
@@ -58,7 +62,9 @@ export function GuidedRunner(props: {
   onJob?: (job: {id: string;status: string;capability_id?: string}) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const [finishPending, setFinishPending] = useState(false);
+  const [finishingRecordingId, setFinishingRecordingId] = useState<string | null>(null);
+  const [readyRecordingId, setReadyRecordingId] = useState<string | null>(null);
+  const [recordingError, setRecordingError] = useState('');
   const [stopPending,setStopPending]=useState(false);
   const stopLock=useRef(false);
   const [stage, setStage] = useState('Ready when you are');
@@ -269,8 +275,7 @@ export function GuidedRunner(props: {
       const output = value.events.map((event) => event.data?.text || '').join('');
       if (mounted.current) setRunOutput(output);
       if (recording && output.includes('QUICK_SCRAPE_READY ')) {
-        setStage('Recording');
-        setMessage('Click through the course window. Return here and choose Finish recording when you are done.');
+        setReadyRecordingId(id);
       }
       if (!running(value.job.status)) { ownedJob.current = null; props.onJob?.(value.job); return { job: value.job, output }; }
       if (reportedStatus !== value.job.status) {
@@ -414,14 +419,19 @@ export function GuidedRunner(props: {
   const savedRecording = props.lastJob?.capability_id === 'quick-scrape' && props.lastJob.status === 'completed'
     ? (props.lastJob.result as {result?: {folder?:string;pages?:number;frames?:number}} | undefined)?.result : null;
   const recordingId = props.lastJob?.capability_id === 'quick-scrape' && running(props.lastJob.status) ? props.lastJob.id : null;
+  const finishPending = Boolean(recordingId && finishingRecordingId === recordingId);
+  const recordingReady = Boolean(recordingId && !finishPending && (readyRecordingId === recordingId
+    || (props.outputJobId === recordingId && props.lastOutput.includes('QUICK_SCRAPE_READY '))));
   async function finishRecording() {
     if (!recordingId || finishPending) return;
-    setFinishPending(true);
+    setFinishingRecordingId(recordingId);
+    setRecordingError('');
     try {
       await api(`/api/jobs/${recordingId}`, undefined, 'DELETE');
-      setMessage('Saving your recording…');
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not finish the recording. Try again.'); }
-    finally { setFinishPending(false); }
+    } catch (error) {
+      setFinishingRecordingId(null);
+      setRecordingError(error instanceof Error ? error.message : 'Could not finish the recording. Try again.');
+    }
   }
 
   async function stop() {
@@ -440,17 +450,20 @@ export function GuidedRunner(props: {
   },[props.paused,props.suspended,busy]);
   const connected = props.connection ? props.connection==='connected' && !props.snapshotStale : props.ready;
   const courseTabs = (session?.tabs||[]).filter(tab=>/^https?:\/\//.test(tab.url));
-  const currentStep = !connected ? 0 : !selected ? 1 : !objective.trim() ? 2 : 3;
   const draftDisabled = busy || (props.active && !props.preparing) || props.paused || props.suspended;
   const recordedStop = !props.finalized && !busy && props.lastJob?.status === 'failed' && props.lastJob.capability_id === 'quiz-learn'
     && props.lastJob.id === props.outputJobId ? learnerStopMessage(props.lastOutput) : null;
 
   return <section className="overflow-hidden rounded-xl border border-slate-300 bg-white" aria-labelledby="guided-title">
     <div className="space-y-6 p-5 sm:p-7">
-    <header className="flex flex-wrap items-start justify-between gap-4"><div><h2 id="guided-title" className="text-2xl font-semibold text-slate-950">Work on a course</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Open your course, tell Vitriol what you want to achieve, and follow the next step here.</p></div>{props.onPause&&!props.paused&&!props.suspended&&!busy ? <button type="button" onClick={props.onPause} className="inline-flex min-h-11 items-center gap-2 rounded-md px-3 text-sm font-medium text-slate-600 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-cyan-700"><Pause className="size-4"/>Pause session</button>:null}</header>
-    <ol aria-label="Course setup progress" className="grid grid-cols-2 gap-x-4 gap-y-3 border-y border-slate-200 py-4 sm:grid-cols-4">{['Connect browser','Choose course','Set a goal','Start and follow'].map((step,index)=><li key={step} aria-current={index===currentStep?'step':undefined} className={`flex items-center gap-2 text-sm ${index===currentStep?'font-semibold text-cyan-800':index<currentStep?'text-slate-700':'text-slate-500'}`}><span className={`flex size-6 shrink-0 items-center justify-center rounded-full text-xs ${index<currentStep?'bg-emerald-100 text-emerald-800':index===currentStep?'bg-cyan-100 text-cyan-900':'bg-slate-100 text-slate-500'}`}>{index<currentStep?<Check className="size-3.5"/>:index+1}</span>{step}</li>)}</ol>
+    <header className="flex flex-wrap items-center justify-between gap-3">
+      <h2 id="guided-title" className="text-xl font-semibold text-slate-950">Work on a course</h2>
+      {connected ? <p className="flex items-center gap-2 text-sm font-medium text-emerald-800"><span className="size-2 rounded-full bg-emerald-600" aria-hidden="true"/>Course browser connected</p> : null}
+      {props.onPause&&!props.paused&&!props.suspended&&!busy ? <button type="button" onClick={props.onPause} className="inline-flex min-h-11 items-center gap-2 rounded-md px-3 text-sm font-medium text-slate-600 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-cyan-700"><Pause className="size-4"/>Pause session</button>:null}
+    </header>
     {!connected ? <div className="space-y-3" role="status"><h3 className="font-semibold text-slate-950">{props.connection==='helper-offline'?'Connect your Windows helper first':props.snapshotStale?'Let’s check your browser again':'Start your course browser'}</h3><p className="max-w-2xl text-sm leading-6 text-slate-600">{props.connection==='helper-offline'?'Open Vitriol Helper on this PC. Once it is online, the course controls will become available.':'Use the browser window opened by Vitriol for your course. Sign in there if asked, then come back and choose the course tab below.'}</p>{props.connection==='helper-offline'?<a href="/helper" className="inline-flex min-h-11 items-center rounded-md bg-slate-950 px-4 text-sm font-semibold text-white">Open helper setup</a>:<button type="button" disabled={busy||props.active||props.paused||props.suspended} onClick={props.snapshotStale?props.onRefreshTabs:props.onConnect} className="min-h-11 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white disabled:opacity-40">{props.snapshotStale?'Check browser now':'Connect browser'}</button>}</div>:null}
-    <div className="grid gap-6 lg:grid-cols-2">
+    {props.courseLauncher}
+    <div className="grid grid-cols-1 gap-5 border-t border-slate-200 pt-4 lg:grid-cols-2">
     <div className="space-y-2"><div className="flex items-center justify-between gap-3"><label htmlFor="guided-course-tab" className="text-sm font-semibold text-slate-800">Choose your course tab</label><button type="button" onClick={props.onRefreshTabs} disabled={!connected||busy||props.active||props.paused||props.suspended||props.refreshing} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-semibold text-cyan-800 hover:bg-cyan-50 disabled:opacity-40"><RefreshCw className={`size-3.5 ${props.refreshing ? 'animate-spin' : ''}`}/>{props.refreshing ? 'Refreshing tabs…' : 'Refresh tabs'}</button></div>
       <select id="guided-course-tab" aria-label="Course tab" value={props.selectedTarget} disabled={!connected || draftDisabled} onChange={(event) => { props.onSelect(event.target.value); clearPageQuestion(); setStage('Ready when you are'); setMessage('Your course is selected. Check the goal, then start.'); }} className="min-h-12 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm font-normal focus-visible:outline-2 focus-visible:outline-cyan-700">
         <option value="">Choose the course you opened</option>{courseTabs.map((tab) => <option key={tab.targetId} value={tab.targetId}>{tab.title || 'Untitled page'} · tab {tab.index+1}</option>)}
@@ -458,18 +471,11 @@ export function GuidedRunner(props: {
       {selected?<p className="break-all text-xs leading-5 text-slate-500">{new URL(selected.url).origin}</p>:<p className="text-xs leading-5 text-slate-600">{connected&&courseTabs.length===0?'No course page is open yet. Enter its URL above.':'Only website tabs are shown. If your course is missing, open it in the Vitriol browser and refresh.'}</p>}
       {props.refreshError?<p role="alert" className="text-sm text-rose-800">{props.refreshError}</p>:null}
     </div>
-    <div hidden={!selected || courseTabs.length===0} className="space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={draftDisabled} onChange={event => { setMode(event.target.value as CourseMode); clearPageQuestion(); }} className="min-h-12 rounded-md border border-slate-300 bg-white px-3 font-normal"><option value="read">Read course material</option><option value="quiz">Take the quiz</option><option value="read-and-assess">Read material and pass assessment questions</option><option value="coordinate">Co-ordinate with ChatGPT</option><option value="quick">Quick scrape</option></select></label>
+    <div hidden={!selected || courseTabs.length===0} className="min-w-0 space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={draftDisabled} onChange={event => { setMode(event.target.value as CourseMode); clearPageQuestion(); }} className="min-h-12 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 font-normal"><option value="read">Read course material</option><option value="quiz">Take the quiz</option><option value="read-and-assess">Read material and pass assessment questions</option><option value="coordinate">Co-ordinate with ChatGPT</option><option value="quick">Quick scrape</option></select></label>
       {mode === 'coordinate' ? <p className="text-sm text-slate-600">Reads material and can submit assessment answers. Vitriol asks the Codex chat connected to your Windows helper when it needs guidance.</p> : null}
-      {mode === 'quick' ? <p className="text-sm text-slate-600">Record the selected course window as you click through slides and open panels. The helper saves a replay and transcript on this PC and retains page text for later questions.</p> : null}
+      {mode === 'quick' && !recordingId ? <p className="text-sm text-slate-600">Record the course while you click through it. Vitriol saves a replay and transcript on this PC.</p> : null}
     <label hidden={mode === 'quick'} className={mode === 'quick' ? 'hidden' : 'grid gap-2 text-sm font-semibold text-slate-800'}>What would you like to achieve?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setObjective(event.target.value.slice(0, OBJECTIVE_LIMIT)); }} disabled={draftDisabled} maxLength={OBJECTIVE_LIMIT} rows={3} placeholder="For example: read this module, then help me with its quiz." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6 focus-visible:outline-2 focus-visible:outline-cyan-700" /><span className="text-xs font-normal text-slate-600">Collected course material stays available across pages. Check your goal when changing pages.</span></label></div>
     </div>
-    {!question ? <div role="status" aria-live="polite" className="border-t border-slate-200 pt-5"><p className="font-semibold text-slate-950">{props.paused?'Waiting for your session to resume':recordedStop?'The run needs attention':props.refreshing?'Updating your course tabs':stage}</p><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{props.paused?'Use Resume session above. Your goal, replies and browser tabs are kept.':recordedStop || (!connected?'Connect the helper and browser to continue.':!selected?'Choose your course tab above. Vitriol will read the page and explain the next step.':message)}</p></div> : null}
-    {savedRecording?.folder ? <section className="space-y-1 text-sm"><strong>Quick scrape saved</strong><p>{savedRecording.pages} page observations · {savedRecording.frames} frames. Open the recording folder on this PC for the replay and transcript.</p><p className="break-all select-all">{savedRecording.folder}</p></section> : null}
-    {progress.length > 0 && (busy || jobRunning) ? <section className="rounded-md border border-slate-200 bg-slate-50 p-4" aria-labelledby="live-activity-title">
-      <h3 id="live-activity-title" className="text-sm font-semibold text-slate-950">Live activity</h3>
-      {progress.length > 1 ? <ol className="mt-3 space-y-1 text-sm leading-6 text-slate-600">{progress.slice(0, -1).map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ol> : null}
-      <p role="status" aria-live="polite" className="mt-2 text-sm font-medium leading-6 text-slate-800">{currentProgress}</p>
-    </section> : null}
     {replyError ? <p role="alert" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">{replyError}</p> : null}
     {detachedQuestion ? <section className="space-y-2 border-t border-slate-200 pt-5" aria-live="polite"><h3 className="font-semibold text-slate-950">Earlier assistant question</h3><p className="text-slate-800">{detachedQuestion.question}</p><p className="text-sm text-slate-600">The page has changed. Inspect the intended course page to continue with fresh information.</p></section> : null}
     {question ? <section className="space-y-4 border-t border-slate-200 pt-5" aria-labelledby="assistant-request-title">
@@ -484,12 +490,24 @@ export function GuidedRunner(props: {
         {showReplyField ? <><label className="grid gap-2 text-sm font-medium text-slate-950">Your reply<textarea autoFocus={customReply} value={answer} maxLength={1400} onChange={(event) => setAnswer(event.target.value)} className="min-h-24 rounded-md border border-slate-400 bg-white p-3" /></label><p className="text-xs text-cyan-900">Replies may be shared with your AI provider. Do not include passwords or API keys.</p></> : null}
       </> : null}
     </section> : null}
-    <div className="flex flex-wrap items-center gap-3">
-      {(selected || busy || question) && (!question?.model || showReplyField || busy) ? <button type="button" onClick={() => void start()} disabled={!props.ready || !(pauseTab || selected) || (mode !== 'quick' && !objective.trim()) || busy || props.active || props.paused || props.suspended || Boolean(question?.model && !answer.trim())} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}{busy ? 'Working…' : mode === 'quick' ? 'Start recording' : question?.model ? 'Send answer and continue' : question?.next || 'Inspect and start'}</button> : null}
-      {recordingId ? <button type="button" disabled={finishPending} onClick={() => void finishRecording()} className="min-h-11 rounded-md border border-slate-300 px-4 text-sm font-semibold">{finishPending ? 'Finishing…' : 'Finish recording'}</button> : busy ? <button type="button" disabled={stopPending} aria-busy={stopPending} onClick={() => void stop()} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold"><Square className="size-4" />{stopPending ? 'Requesting stop…' : 'Stop'}</button> : null}
-      {settingsNeeded ? <a href="/settings" className="font-semibold text-cyan-800 underline">Connect or test AI in Settings</a> : null}
-    </div>
-    {currentMemory?.id ? <div className="space-y-3 border-t border-slate-200 pt-5">
+    {!question || !question.model || showReplyField || busy || settingsNeeded ? <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:p-5">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        {!question ? <div role="status" aria-live="polite" className="min-w-0 flex-1 basis-56">
+          <p className={recordingReady ? 'font-semibold text-red-800' : 'font-semibold text-slate-950'}>{finishPending ? 'Saving recording' : recordingReady ? 'Recording' : recordingId ? 'Starting recorder' : props.paused ? 'Waiting for your session to resume' : savedRecording?.folder ? 'Recording saved' : recordedStop ? 'The run needs attention' : props.refreshing ? 'Updating your course tabs' : stage}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">{finishPending ? 'Keep the course window open while the recording saves.' : recordingReady ? 'You can click through the course now.' : recordingId ? 'Wait for the button to turn red before clicking through.' : props.paused ? 'Use Resume session above.' : savedRecording?.folder ? `${savedRecording.pages} page observations · ${savedRecording.frames} frames saved on this PC.` : recordedStop || currentProgress || (!selected ? 'Choose a course tab to start.' : message)}</p>
+        </div> : null}
+        <div className="flex flex-wrap items-center gap-3">
+          {!recordingId && (selected || busy || question) && (!question?.model || showReplyField || busy) ? <button type="button" onClick={() => void start()} disabled={!props.ready || !(pauseTab || selected) || (mode !== 'quick' && !objective.trim()) || busy || props.active || props.paused || props.suspended || Boolean(question?.model && !answer.trim())} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}{busy ? (mode === 'quick' ? 'Starting recorder…' : 'Working…') : mode === 'quick' ? 'Start recording' : question?.model ? 'Send answer and continue' : question?.next || 'Inspect and start'}</button> : null}
+          {recordingId ? <button type="button" disabled={finishPending} aria-busy={finishPending} onClick={() => void finishRecording()} className={`inline-flex min-h-11 items-center gap-2 rounded-md px-5 py-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 ${recordingReady ? 'bg-red-700 text-white hover:bg-red-800 focus-visible:outline-red-700' : 'border border-slate-300 bg-white text-slate-800 disabled:opacity-60'}`}><Square aria-hidden="true" className={`size-4 ${recordingReady ? 'fill-current' : ''}`}/>{finishPending ? 'Saving recording…' : recordingReady ? 'Finish recording' : 'Stop recorder'}</button> : busy ? <button type="button" disabled={stopPending} aria-busy={stopPending} onClick={() => void stop()} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold"><Square className="size-4" />{stopPending ? 'Requesting stop…' : 'Stop'}</button> : null}
+          {settingsNeeded ? <a href="/settings" className="font-semibold text-cyan-800 underline">Connect or test AI in Settings</a> : null}
+        </div>
+      </div>
+      {recordingError && recordingId ? <p role="alert" className="text-sm text-rose-800">{recordingError}</p> : null}
+      {savedRecording?.folder ? <details className="text-sm text-slate-700"><summary className="w-fit cursor-pointer font-semibold">Recording folder</summary><p className="mt-2 break-all select-all">{savedRecording.folder}</p></details> : null}
+      {progress.length > 1 && !recordingId ? <details className="text-sm text-slate-700"><summary className="w-fit cursor-pointer font-semibold">Recent activity</summary><ol className="mt-2 space-y-1">{progress.slice(0, -1).map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ol></details> : null}
+    </div> : null}
+    {props.sessionActions}
+    {currentMemory?.id && mode !== 'quick' && !recordingId ? <div className="space-y-3 border-t border-slate-200 pt-5">
       <label className="grid gap-2 text-sm font-semibold text-slate-800">Hint or change of direction
         <textarea value={guidance} onChange={(event) => { setGuidance(event.target.value); setGuidanceNotice(null); setGuidanceError(null); }} disabled={guidanceSending} maxLength={2000} rows={2} placeholder="Give the assistant a hint or change direction." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6" />
       </label>
@@ -500,7 +518,7 @@ export function GuidedRunner(props: {
       {guidanceError ? <p role="alert" className="text-sm text-amber-950">{guidanceError}</p> : null}
     </div> : null}
     {currentMemory?.history.some((turn) => conversationText(turn)) ? <details className="rounded-md border border-slate-200 bg-slate-50 p-4"><summary className="cursor-pointer text-sm font-semibold text-slate-700">Conversation remembered for this course</summary><ol className="mt-4 space-y-3">{currentMemory.history.map((turn, index) => { const text = conversationText(turn); return text ? <li key={index} className="text-sm leading-6 text-slate-700"><span className="font-semibold">{turn.role === 'user' ? 'You' : 'AI assistant'}: </span>{text}</li> : null; })}</ol></details> : null}
-    <p className="max-w-2xl text-xs leading-5 text-slate-600">Vitriol can answer and submit questions in the assessment modes, then checks the visible result. Keep this page open for automatic follow-up steps.</p>
+    {props.courseCoverage}
     </div><footer className="border-t border-slate-200 bg-slate-50 px-5 py-4 text-xs leading-5 text-slate-600 sm:px-7">Tabs update automatically when the browser is free. After 30 minutes without input on this page, Vitriol pauses the session and keeps your place. You will get a warning before it pauses.</footer>
   </section>;
 }

@@ -60,8 +60,9 @@ function reply(path,method,body,now,s){
   }
   if(path.startsWith('/api/jobs/')){const job=s.jobs.get(path.split('/').at(-1));
     if(job?.capability_id==='quick-scrape'){
-      if(method==='DELETE'){job.status='completed';job.result={ok:true,result:{folder:'C:/Fixtures/recording',pages:3,frames:7}};return{ok:true};}
-      return{job,events:[{data:{text:'QUICK_SCRAPE_READY {}\n'}}],artifacts:[]};
+      if(method==='DELETE'){s.recordingFinished=true;return{ok:true};}
+      if(s.recordingFinished&&!s.waitForSaving){job.status='completed';job.result={ok:true,result:{folder:'C:/Fixtures/recording',pages:3,frames:7}};}
+      return{job,events:s.waitForRecording ? [] : [{data:{text:'QUICK_SCRAPE_READY {}\n'}}],artifacts:[]};
     }
 if(job&&job.capability_id!==s.holdCapability&&job.status!=='failed')job.status='completed';return{job,events:job?.capability_id==='quiz-learn'?[{data:{text:s.questionOutput}}]:[],artifacts:[]};}
   throw Error(`Unexpected fixture request: ${method} ${path}`);
@@ -437,14 +438,30 @@ try{
     expect(fixture.finishPosts).toBe(1);
     await page.clock.fastForward(60_000);
     expect(fixture.refreshes).toBe(refreshesWithQuestion);
-    fixture.online=true;fixture.paused=false;fixture.holdCapability='quick-scrape';
+    fixture.online=true;fixture.paused=false;fixture.holdCapability='quick-scrape';fixture.waitForRecording=true;
     await page.clock.fastForward(61_000);
     const activityPicker=page.getByRole('combobox',{name:'Course activity'});
     await activityPicker.selectOption('quick');
     await page.getByRole('button',{name:'Start recording',exact:true}).click();
-    await expect(page.getByText('Recording',{exact:true})).toBeVisible();
-    await page.getByRole('button',{name:'Finish recording',exact:true}).click();
+    await expect(page.getByRole('button',{name:'Stop recorder',exact:true})).toBeVisible();
+    await expect(page.getByRole('button',{name:'Finish recording',exact:true})).toBeHidden();
+    fixture.waitForRecording=false;
     await page.clock.fastForward(2500);
+    await expect(page.getByText('Recording',{exact:true})).toBeVisible();
+    await expect(page.getByText('You can click through the course now.',{exact:true})).toBeVisible();
+    const finishRecording=page.getByRole('button',{name:'Finish recording',exact:true});
+    await expect(finishRecording).toHaveClass(/\bbg-red-700\b/);
+    const coursePanel=page.getByRole('region',{name:'Work on a course'});
+    expect(await coursePanel.evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
+    await page.screenshot({path:join(artifacts,`${viewport.width}-recording.png`),fullPage:true});
+    fixture.waitForSaving=true;
+    await finishRecording.click();
+    await expect(page.getByRole('button',{name:'Saving recording…'})).toBeDisabled();
+    await expect(finishRecording).toBeHidden();
+    fixture.waitForSaving=false;
+    await page.clock.fastForward(2500);
+    await expect(page.getByText('Recording saved',{exact:true})).toBeVisible();
+    await page.getByText('Recording folder',{exact:true}).click();
     await expect(page.getByText('C:/Fixtures/recording',{exact:true})).toBeVisible();
     await activityPicker.selectOption('read');
     // Finishing during a guided wait stops the local orchestrator before another step can queue.

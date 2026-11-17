@@ -239,7 +239,7 @@ async function accessibleName(locator) {
 
 async function controlName(handle) {
   const name = await accessibleName(handle);
-  if (/^Rectangle \d+$/i.test(name)) {
+  if (!name || /^Rectangle \d+$/i.test(name)) {
     const label = await handle.evaluate(el => {
       if (!el.matches('input.acc-shadow-el[data-represents],button.acc-shadow-el[data-represents]')) return '';
       const parts = el.getAttribute('data-represents').split('.');
@@ -667,7 +667,7 @@ async function readSnapshot(page, mode = 'read') {
 function sameLearnerView(before, after) {
   const comparable = value => {
     if (!value || typeof value !== 'object') return value;
-    const { image, ...view } = value;
+    const { image, coordinationStart, ...view } = value;
     // Canon renders this labelled countdown as its own text line. Answers,
     // question text, expiry notices and every other page change stay significant.
     if (typeof view.text === 'string') view.text = view.text.replace(/(^|\n)(Time remaining[ \t]*\n)\d{1,3}:\d{2}(?::\d{2})?(?=\n|$)/gi, '$1$2[countdown]');
@@ -822,7 +822,13 @@ async function main() {
       console.log(`LEARNER_PROGRESS ${JSON.stringify({ message: `Reading ${snapshot.title || 'the current course page'}.` })}`);
       const result = mode === 'quiz' ? recognizeQuizResult(snapshot) : null;
       if (result) { finish(result.status === 'passed', undefined, result); return; }
-      const action = await reader.request(snapshot);
+      let action;
+      try {
+        action = await reader.request(snapshot);
+      } catch (error) {
+        if (error?.message !== 'Learner step cap reached') throw error;
+        break;
+      }
       // The result can arrive while the provider is deciding. Re-observe even
       // for verify/ask-user so a terminal view wins before action/repeat guards.
       const current = await readSnapshot(page, mode);
@@ -897,7 +903,13 @@ async function main() {
       console.log(`LEARNER_PROGRESS ${JSON.stringify({ message: activity })}`);
       console.log(`Learner step ${step}: ${action.action}`);
     }
-    finish(false, 'step-cap');
+    const { snapshot } = await readSnapshot(page, mode);
+    const result = mode === 'quiz' ? recognizeQuizResult(snapshot) : null;
+    if (result) { finish(result.status === 'passed', undefined, result); return; }
+    await emitQuestion({
+      question: 'Vitriol reached its step limit. Resume to continue from the current course page.',
+      options: ['Resume from this page'],
+    }, snapshot, browser);
   } finally {
     reader?.close();
     await browser.close().catch(() => undefined);

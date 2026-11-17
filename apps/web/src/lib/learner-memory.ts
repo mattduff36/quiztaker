@@ -168,6 +168,14 @@ export function addLearnerMaterial(
   const duplicate = next.findIndex((item) => item.text === entry.text);
   if (duplicate >= 0) next.splice(duplicate, 1);
   next.push(entry);
+  if (next.length <= LEARNER_MATERIAL_LIMIT) return next;
+
+  // Leave room for earlier modules when one source produces many observations.
+  const sources = next.map((item) => item.url.split(/[?#]/, 1)[0] || item.title);
+  const counts = new Map<string, number>();
+  for (const source of sources) counts.set(source, (counts.get(source) ?? 0) + 1);
+  const largest = Math.max(...counts.values());
+  next.splice(sources.findIndex((source) => counts.get(source) === largest), 1);
   return next.slice(-LEARNER_MATERIAL_LIMIT);
 }
 
@@ -207,7 +215,8 @@ export function composeLearnerSnapshot(
   if (conversation) parts.push(`Prior conversation:\n${conversation}`);
   parts.push(MEMORY_NOTE);
   const materialBudget = Math.max(0, Math.min(LEARNER_CONTEXT_MATERIAL_CHARS, 24_000 - parts.join('\n\n').length - 40));
-  const material = fitLines(materialLines(memory.materials, current.choices?.length ? currentText : undefined).filter((text) => text !== currentText), materialBudget);
+  const query = [current.title, current.choices?.length ? currentText : '', memory.objective].filter(Boolean).join('\n');
+  const material = fitLines(materialLines(memory.materials, query), materialBudget);
   if (material) parts.push(`Retained course material:\n${material}`);
   snapshot.text = parts.filter((part) => part.length > 0).join('\n\n');
   return snapshot;
@@ -555,8 +564,9 @@ function flatModelActionText(text: string): string {
 function materialLines(materials: LearnerMaterial[], question?: string): string[] {
   const source = (item: LearnerMaterial) => `[Source: ${item.url} | ${item.title}]\n${item.text}`;
   if (!question) return materials.map(source);
-  const words = [...new Set(question.toLowerCase().match(/[a-z]{4,}/g) || [])].filter((word) => !['which', 'following', 'select', 'question', 'answer', 'device', 'features', 'this', 'that', 'with', 'from', 'have', 'does'].includes(word));
-  const documents = materials.map((item) => new Set(item.text.toLowerCase().match(/[a-z]{4,}/g) || []));
+  const terms = (text: string) => text.toLowerCase().match(/[a-z][a-z0-9]{3,}/g) || [];
+  const words = [...new Set(terms(question))].filter((word) => !['which', 'following', 'select', 'question', 'answer', 'device', 'features', 'this', 'that', 'with', 'from', 'have', 'does'].includes(word));
+  const documents = materials.map((item) => new Set(terms(`${item.title}\n${item.text}`)));
   const frequency = new Map(words.map((word) => [word, documents.filter((document) => document.has(word)).length || 1]));
   return materials.map((item, index) => ({ text: source(item), index, score: words.reduce((score, word) => score + (documents[index].has(word) ? 1 / frequency.get(word)! : 0), 0) }))
     .sort((a, b) => a.score - b.score || a.index - b.index).map((item) => item.text);

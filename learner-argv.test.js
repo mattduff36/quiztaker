@@ -144,6 +144,7 @@ test('an action computed for a stale course screen must be reinspected', () => {
   const { sameLearnerView } = require('./pw-learn-quiz');
   const before = { text: 'Welcome', buttons: [{ id: 'b1', name: 'Start' }] };
   assert.equal(sameLearnerView(before, { ...before }), true);
+  assert.equal(sameLearnerView({ ...before, coordinationStart: true }, before), true);
   assert.equal(sameLearnerView(before, { text: 'Introduction', buttons: [{ id: 'b1', name: 'Next' }] }), false);
   assert.equal(sameLearnerView(before, { text: 'Welcome', buttons: [] }), false);
 });

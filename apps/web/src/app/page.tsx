@@ -32,11 +32,7 @@ export default async function Home() {
 
   return (
     <AppShell email={user.email}>
-      <PageFrame
-        title="Welcome to Vitriol"
-        description="A helping hand with your courses. Read, learn and work through quizzes, with clear progress at every step."
-
-      >
+      <PageFrame title="Operations" compact>
         {!helper ? (
           <HelperWelcome helper={null}/>
         ) : (
