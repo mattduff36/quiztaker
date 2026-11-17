@@ -4,6 +4,7 @@
 // - Uses the real installed Chrome (channel: 'chrome') so it looks and behaves
 //   like your normal browser (bookmarks bar, normal profile UI), not a bare
 //   Playwright/incognito window.
+// - Enables Chromium's sandbox for the sites opened in this profile.
 // - Runs against a dedicated profile directory under the project
 //   (.chrome-cdp-profile) so we never lock or disturb your main Chrome profile
 //   (Chrome refuses to open a profile that's already in use).
@@ -72,6 +73,7 @@ async function launch() {
   seedBookmarks();
   const opts = {
     headless: false,
+    chromiumSandbox: true,
     viewport: null, // use the real window size, not a fixed viewport
     args: [
       `--remote-debugging-port=${PORT}`,
