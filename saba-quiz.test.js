@@ -202,16 +202,30 @@ test('the real runner finalizes a Saba assessment launched by same-tab Continue 
   const browser=await chromium.launch({channel:'chrome',headless:true,args:[`--remote-debugging-port=${port}`]});
   try {
     const context=await browser.newContext();
+    // Two CDP clients attach during this fixture. Route the popup after its
+    // blank target exists, so CI never races its first request to the real LMS.
+    const popupSetup=[];
+    context.on('page',popup=>{
+      if(!popupSetup.length)return;
+      popupSetup[0](popup);
+    });
     await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:route.request().url().includes('?done=1')
       ? '<title>Completed originating course</title><p class="course--detail__thirdRow__enrollmentStatus__text">Successful</p>'
       : route.request().url()===course
         ? `<button onclick="location.href='/proceed'">CONTINUE</button><button>LAUNCH</button>`
         : route.request().url()===`${host}/proceed`
-          ? `<button onclick="window.open('/assessment','quiz','width=400')">PROCEED</button>`
+          ? `<button onclick="window.open('about:blank','quiz','width=400')">PROCEED</button>`
           : `<p>Congratulations, you passed the assessment</p><p>Test score 100%</p><p>Test status Pass</p><p>Passing threshold 80%</p>
             <button onclick="document.querySelector('#yes').hidden=false">CLOSE PLAYER</button>
             <button id="yes" hidden onclick="window.opener.location.href='/app/me/learningeventdetail/coursfixture?done=1';window.close()">YES</button>`}));
     const page=await context.newPage();await page.goto(course);
+    const popupReady=new Promise((resolve,reject)=>popupSetup.push(async popup=>{
+      try {
+        await popup.route('**/*',route=>route.fulfill({contentType:'text/html',body:`<p>Congratulations, you passed the assessment</p><p>Test score 100%</p><p>Test status Pass</p><p>Passing threshold 80%</p>
+          <button onclick="document.querySelector('#yes').hidden=false">CLOSE PLAYER</button><button id="yes" hidden onclick="window.opener.location.href='/app/me/learningeventdetail/coursfixture?done=1';window.close()">YES</button>`}));
+        await popup.goto(`${host}/assessment`);resolve();
+      }catch(error){reject(error);}
+    }));
     const run=await new Promise((resolve,reject)=>{
       const child=spawn(process.execPath,['pw-learn-quiz.js','0'],{cwd:__dirname,env:{...process.env,PLAYWRIGHT_CDP_URL:`http://127.0.0.1:${port}`,VITRIOL_CAPTURE_TARGET:course,VITRIOL_LEARNER_MODE:'quiz',VITRIOL_COORDINATE:'',VITRIOL_LEARNER_CONVERSATION:'',VITRIOL_LEARNER_GUIDANCE:''},stdio:['pipe','pipe','pipe']});
       let output='',error='',buffer='';
@@ -226,6 +240,7 @@ test('the real runner finalizes a Saba assessment launched by same-tab Continue 
       child.stderr.on('data',chunk=>error+=chunk);child.on('error',reject);
       child.on('exit',code=>{clearTimeout(timer);resolve({code,output,error});});
     });
+    await popupReady;
     assert.equal(run.code,0,run.error+run.output.replace(/^LEARNER_SNAPSHOT.*$/gm,'[snapshot]'));
     const payload=JSON.parse(run.output.match(/^AUTOMATION_RESULT (.+)$/m)[1]);
     assert.equal(payload.courseResult.status,'completed');assert.equal(payload.quizResult.status,'passed');
