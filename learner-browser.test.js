@@ -14,6 +14,35 @@ async function act(page, name, mode = 'read', choice = false) {
   return view;
 }
 
+test('Rise uses the current quiz card, selects labelled choices and reads the separate result', async () => {
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<style>[role=checkbox]{display:inline-block;width:80px;height:25px}</style>
+      <section class="quiz">
+        <article class="quiz-card"><p>Question 1 of 23</p><button>SUBMIT</button></article>
+        <article class="quiz-card quiz-card--active"><p>Question 2 of 23</p>
+          <div role="checkbox" aria-labelledby="selected-label" tabindex="0" aria-checked="false"
+            onkeydown="if(event.key===' ') this.setAttribute('aria-checked','true')"></div>
+          <span id="selected-label">Device inventory</span>
+          <button onclick="document.querySelector('.quiz-results').hidden=false">SUBMIT</button>
+        </article>
+        <section class="quiz-results" hidden><h2>Quiz Results</h2><p>Your score 91%</p><p>Passed</p><p>Passing</p><p>80%</p></section>
+      </section>`);
+    const initial = (await readSnapshot(page, 'quiz')).snapshot;
+    assert.equal(initial.buttons.filter(button => button.name === 'SUBMIT').length, 1);
+    assert.doesNotMatch(initial.text, /Question 1 of 23/);
+    assert.equal(recognizeQuizResult(initial), null);
+    await act(page, 'Device inventory', 'quiz', true);
+    assert.equal((await readSnapshot(page, 'quiz')).snapshot.choices[0].checked, true);
+    await act(page, 'SUBMIT', 'quiz');
+    const result = recognizeQuizResult((await readSnapshot(page, 'quiz')).snapshot);
+    assert.equal(result?.status, 'passed');
+    assert.equal(result?.scorePercent, 91);
+    assert.equal(result?.passingScorePercent, 80);
+  } finally { await browser.close(); }
+});
+
 test('Storyline matches a shadow button to the visible SVG with the same model identity', async () => {
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   try {

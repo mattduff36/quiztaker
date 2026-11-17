@@ -64,6 +64,20 @@ export function learnerStopMessage(output: string): string | null {
   return null;
 }
 
+export function observedQuizResult(result: unknown): { heading: string; detail: string } | null {
+  const value = (result as { result?: { quizResult?: { status?: unknown; scorePercent?: unknown; passingScorePercent?: unknown } } } | null)?.result?.quizResult;
+  if (value?.status !== 'passed' && value?.status !== 'failed') return null;
+  const percent = (number: unknown) => typeof number === 'number' && Number.isFinite(number) && number >= 0 && number <= 100 ? `${number}%` : null;
+  const score = percent(value.scorePercent);
+  const threshold = percent(value.passingScorePercent);
+  return {
+    heading: `Quiz ${value.status}${score ? ` · ${score}` : ''}`,
+    detail: [threshold ? `Pass mark ${threshold}.` : '', value.status === 'passed'
+      ? 'Check the course progress in the learning portal and finish any remaining lessons.'
+      : 'Review the feedback in the course browser.'].filter(Boolean).join(' '),
+  };
+}
+
 export function uniqueQuestionTab<T extends { targetId: string; url: string }>(url: string | undefined, tabs: T[]): T | null {
   if (!url) return null;
   const matches = tabs.filter((tab) => tab.url === url);

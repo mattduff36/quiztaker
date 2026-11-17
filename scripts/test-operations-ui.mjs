@@ -237,8 +237,8 @@ try{
   }
   console.log('PASS browser close progress clears after success and reports failure.');
   for (const [label, intent, goal] of [
-    ['Read material and pass assessment questions', 'read-and-assess', /Read and retain.*answer assessment questions/],
-    ['Co-ordinate with ChatGPT', 'coordinate', /Read the relevant material.*connected Codex chat/],
+    ['Read material and pass assessment questions', 'read-and-assess', /required unfinished lessons.*submit the assessment/],
+    ['Co-ordinate with ChatGPT', 'coordinate', /progress and lesson checklist.*connected Codex chat/],
   ]) {
     const page = await browser.newPage();
     const fixture = state();
@@ -252,6 +252,9 @@ try{
         learnerInput = body.capabilityInput;
       }
       const { __status, ...json } = reply(path, req.method(), body, Date.now(), fixture);
+      if (json.job?.capability_id === 'quiz-learn') {
+        json.job.result = { ok: true, result: { quizResult: { status: 'passed', scorePercent: 91, passingScorePercent: 80 } } };
+      }
       await route.fulfill({ status: __status || 200, json });
     });
     await page.goto(url);
@@ -262,7 +265,8 @@ try{
     await expect(page.getByRole('textbox', { name: /What would you like to achieve/ })).toHaveValue(goal);
     await page.getByRole('button', { name: 'Inspect and start', exact: true }).click();
     await expect.poll(() => learnerInput).toMatchObject({ mode: 'quiz', intent });
-    await expect(page.getByText(/Completion verified/)).toBeVisible();
+    await expect(page.getByText('Quiz passed · 91%', { exact: true })).toBeVisible();
+    await expect(page.getByText(/Pass mark 80%.*course progress in the learning portal/)).toBeVisible();
     await page.close();
   }
   console.log('PASS combined and coordinated modes pass explicit assessment intent to the learner.');

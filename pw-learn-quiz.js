@@ -192,6 +192,11 @@ async function accessibleName(locator) {
   const aria = await locator.getAttribute('aria-label').catch(() => null);
   if (aria && aria.trim()) return aria.replace(/\s+/g, ' ').trim().slice(0, 160);
   const text = await locator.evaluate((el) => {
+    const labelledBy = el.getAttribute('aria-labelledby')?.trim();
+    if (labelledBy) {
+      const label = labelledBy.split(/\s+/).map(id => el.ownerDocument.getElementById(id)?.textContent?.trim()).filter(Boolean).join(' ');
+      if (label) return label;
+    }
     if (el.matches('button.invisibutton')) {
       const parent = el.parentElement;
       const navigation = { navBtn_next: 'Next', navBtn_back: 'Previous', navBtn_menu: 'Home', navBtn_exit: 'Exit', navBtn_help: 'Help' };
@@ -468,6 +473,9 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
       const indices = [];
       for (let index = 0; index < elements.length; index += 1) {
         const el = elements[index];
+        // Rise keeps earlier quiz cards mounted after advancing.
+        const quizCard = el.closest('.quiz-card');
+        if (quizCard && (!quizCard.classList.contains('quiz-card--active') || el.getAttribute('aria-disabled') === 'true')) continue;
         const rect = el.getBoundingClientRect();
         const style = getComputedStyle(el);
         if (!el.getClientRects().length || !rect.width || !rect.height || style.visibility === 'hidden' || style.visibility === 'collapse') continue;
@@ -558,6 +566,7 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
 async function readSnapshot(page, mode = 'read') {
   const sections = [];
   const resultViews = [];
+  let riseResultVisible = false;
   for (const frame of await visibleFrames(page)) {
     try {
       let exposed = true;
@@ -605,17 +614,31 @@ async function readSnapshot(page, mode = 'read') {
           const node = walker.currentNode;
           const parent = node.parentElement;
           if (!parent || parent.closest('script,style,noscript') || !visible(parent)) continue;
+          const quizCard = parent.closest('.quiz-card');
+          if (quizCard && !quizCard.classList.contains('quiz-card--active')) continue;
           const value = node.textContent.replace(/\s+/g, ' ').trim();
           if (value) lines.push(value);
         }
         const headings = Array.from(document.querySelectorAll('h1,h2,[role=heading]'));
         const heading = headings.find(el => visible(el)) || headings.find(el => visible(el, false));
         const slideLabel = document.getElementById('slide-label')?.textContent.trim();
-        return { heading: heading?.textContent?.trim() || document.title, text: lines.join('\n'), position: Math.round(scrollY), end: scrollY + innerHeight >= document.documentElement.scrollHeight - 2,
+        const riseHeading = [...document.querySelectorAll('.quiz h1, .quiz h2, .quiz h3, .quiz [role=heading], .quiz-results__title')]
+          .find(el => el.textContent.trim() === 'Quiz Results' && el.closest('.quiz') && visible(el));
+        let riseResult = '';
+        for (let el = riseHeading?.parentElement; el && !el.matches('.quiz'); el = el.parentElement) {
+          const text = el.innerText;
+          if (/\bQuestion\s+\d+\s+of\s+\d+\b/i.test(text)) break;
+          if (/\bYour score\s*:?\s*\d+(?:\.\d+)?\s*%/i.test(text) && /(?:^|\n)\s*(?:Passed|Failed)\s*(?:\n|$)/i.test(text)) {
+            riseResult = text.replace(/^Passing\s+(?=\d+(?:\.\d+)?\s*%)/im, 'Passing Score ');
+            break;
+          }
+        }
+        return { heading: heading?.textContent?.trim() || document.title, text: lines.join('\n'), riseResult, position: Math.round(scrollY), end: scrollY + innerHeight >= document.documentElement.scrollHeight - 2,
           storylineResult: /^slide:\s*Results Slide$/i.test(slideLabel || '') && Boolean(document.querySelector('.slide-layer.base-layer.shown')) };
       });
       if (!observed.text.trim()) continue;
-      resultViews.push(observed.storylineResult ? `Quiz Results\n${observed.text}` : observed.text);
+      riseResultVisible ||= Boolean(observed.riseResult);
+      resultViews.push(observed.riseResult || (observed.storylineResult ? `Quiz Results\n${observed.text}` : observed.text));
       const source = frame.url().split(/[?#]/)[0].slice(0, 500);
       sections.push(`[Source: ${source} | ${observed.heading || ''} | scroll ${observed.position}${observed.end ? ' | end of page' : ''}]\n${observed.text}`);
     } catch {
@@ -623,7 +646,7 @@ async function readSnapshot(page, mode = 'read') {
     }
   }
   const buttons = await readControls(page, 'button', 'b', true, mode);
-  const answers = await readControls(page, 'answer', '', false);
+  const answers = riseResultVisible ? { listed: [], handles: new Map() } : await readControls(page, 'answer', '', false);
   const handles = new Map([...buttons.handles, ...answers.handles]);
   const tabs = [];
   // Only already-observed course tabs on this website are offered. There is
@@ -773,8 +796,16 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
     await clickStorylineControl(page, handle, point, action.action === 'answer-select');
     return;
   }
+  const riseControl = await handle.evaluate(el => Boolean(el.closest('.quiz-card--active')));
+  if (riseControl && action.action === 'answer-select' && ['radio', 'checkbox'].includes(await handle.getAttribute('role'))) {
+    if (await handle.getAttribute('aria-checked') !== 'true') await handle.press('Space', { timeout: 5000 });
+    if (await handle.getAttribute('aria-checked') !== 'true') throw new CourseControlBlocked('Rise answer selection could not be confirmed');
+    return;
+  }
   if (action.action === 'click') {
-    if (await handle.evaluate(dkiInformationIcon).catch(() => null)) {
+    if (riseControl && /^(submit|next)$/i.test(target.name)) {
+      await handle.press('Enter', { timeout: 5000 });
+    } else if (await handle.evaluate(dkiInformationIcon).catch(() => null)) {
       if (!await handle.isVisible() || !await handle.isEnabled()) throw new Error('Learner target changed');
       // Pointer movement creates a covering rollover image on these DKI icons.
       // Activate the validated visible representative without triggering hover.

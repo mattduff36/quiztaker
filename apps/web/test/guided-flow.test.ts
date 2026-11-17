@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { decideGuidedFlow, learnerQuestion, learnerStopMessage, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab } from '../src/lib/guided-flow';
+import { decideGuidedFlow, learnerQuestion, learnerStopMessage, observedQuizResult, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab } from '../src/lib/guided-flow';
 
 test('uses actual detector capability IDs, including SCORM and SlickQuiz', () => {
   for (const [detected, capability] of [['scorm-player', 'scorm-complete'], ['slickquiz-exam', 'slickquiz-solve'], ['container', 'container-batch']]) {
     assert.equal(decideGuidedFlow({ detected, action: { capabilityId: capability } }).kind, 'learn');
   }
   assert.equal(decideGuidedFlow({ detected: 'unknown', action: { capabilityId: 'close-browser' } }).kind, 'learn');
+});
+
+test('reports the observed quiz score separately from course completion', () => {
+  assert.deepEqual(observedQuizResult({ result: { quizResult: { status: 'passed', scorePercent: 91, passingScorePercent: 80 } } }), {
+    heading: 'Quiz passed · 91%',
+    detail: 'Pass mark 80%. Check the course progress in the learning portal and finish any remaining lessons.',
+  });
+  assert.equal(observedQuizResult({ result: { quizResult: { status: 'verified' } } }), null);
 });
 
 test('unknown and Canon curriculum begin learning; login and assessments pause', () => {

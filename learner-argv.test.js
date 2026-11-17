@@ -152,7 +152,7 @@ test('an action computed for a stale course screen must be reinspected', () => {
 
 test('slide adapter preserves existing menu topic and Start names', async () => {
   const { accessibleName } = require('./pw-learn-quiz');
-  const locator = (parent) => ({getAttribute: async () => null, evaluate: async (fn) => fn({ matches: () => true, parentElement: parent })});
+  const locator = (parent) => ({getAttribute: async () => null, evaluate: async (fn) => fn({ getAttribute: () => null, matches: () => true, parentElement: parent })});
   const base = { classList: { contains: () => true }, className: 'screenElement panel', matches: () => false };
   assert.equal(await accessibleName(locator({ ...base, id: 'menuscreen_panel_1', querySelector: (sel) => sel === '.topicStatus' ? {className:'topicStatus incomplete'} : {textContent:'iSend'} })), 'Open topic: iSend (incomplete)');
   assert.equal(await accessibleName(locator({ ...base, id: 'menuscreen_panel_1_launchButton', matches: () => true })), 'Start');

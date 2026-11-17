@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { LoaderCircle, Play, Square, RefreshCw, Pause } from 'lucide-react';
-import { decideGuidedFlow, learnerQuestion, learnerStopMessage, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab, type GuidedDetection, type GuidedLearningMode } from '@/lib/guided-flow';
+import { decideGuidedFlow, learnerQuestion, learnerStopMessage, observedQuizResult, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab, type GuidedDetection, type GuidedLearningMode } from '@/lib/guided-flow';
 import { learnerActivityUpdates } from '@/lib/learner-activity';
 import { OBJECTIVE_LIMIT } from '@/lib/operations-client-state';
 import { readJsonResponse } from '@/lib/operations-readiness';
@@ -199,8 +199,8 @@ export function GuidedRunner(props: {
       const goals: Record<GuidedLearningMode, string> = {
         read: `Read all relevant material on ${title}, follow its topics and panels, and retain it for later questions.`,
         quiz: `Use retained course material to answer and submit the quiz on ${title}, then inspect the result.`,
-        'read-and-assess': `Read and retain the relevant material on ${title}. Use it to answer assessment questions as they appear. Submit the assessment and check the result.`,
-        coordinate: `Read the relevant material on ${title}, answer the assessment questions, and verify the visible results. Ask the connected Codex chat for guidance if progress is blocked.`,
+        'read-and-assess': `Work through the required unfinished lessons and interactions on ${title}. Retain the material, then answer and submit the assessment questions and check the result.`,
+        coordinate: `Use the progress and lesson checklist on ${title} to complete required unfinished lessons, then answer the assessment questions and verify the visible results. Ask the connected Codex chat for guidance if progress is blocked.`,
       };
       setObjective(goals[mode === 'quick' ? 'read' : mode].slice(0, OBJECTIVE_LIMIT));
     }
@@ -358,7 +358,7 @@ export function GuidedRunner(props: {
       }
       if (result.job.status === 'completed' && result.job.outcome?.verified === true) {
         setAnswer(''); setCustomReply(false);
-        setStage('Completion verified'); setMessage('The run reported verified completion. Its evidence is available in History and Advanced tools.');
+        setStage('Run finished'); setMessage('Review the evidence in History or Advanced tools and check the course status in the learning portal.');
       } else {
         if (question) { setQuestion(question); setReplyError('The run could not continue. Your reply is still here; check the message below before trying again.'); }
         setStage('The run needs attention');
@@ -453,6 +453,8 @@ export function GuidedRunner(props: {
   const draftDisabled = busy || (props.active && !props.preparing) || props.paused || props.suspended;
   const recordedStop = !props.finalized && !busy && props.lastJob?.status === 'failed' && props.lastJob.capability_id === 'quiz-learn'
     && props.lastJob.id === props.outputJobId ? learnerStopMessage(props.lastOutput) : null;
+  const quizResult = !props.finalized && !busy && props.lastJob?.capability_id === 'quiz-learn' && !running(props.lastJob.status)
+    ? observedQuizResult(props.lastJob.result) : null;
 
   return <section className="overflow-hidden rounded-xl border border-slate-300 bg-white" aria-labelledby="guided-title">
     <div className="space-y-6 p-5 sm:p-7">
@@ -493,8 +495,8 @@ export function GuidedRunner(props: {
     {!question || !question.model || showReplyField || busy || settingsNeeded ? <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-4">
         {!question ? <div role="status" aria-live="polite" className="min-w-0 flex-1 basis-56">
-          <p className={recordingReady ? 'font-semibold text-red-800' : 'font-semibold text-slate-950'}>{finishPending ? 'Saving recording' : recordingReady ? 'Recording' : recordingId ? 'Starting recorder' : props.paused ? 'Waiting for your session to resume' : savedRecording?.folder ? 'Recording saved' : recordedStop ? 'The run needs attention' : props.refreshing ? 'Updating your course tabs' : stage}</p>
-          <p className="mt-1 text-sm leading-6 text-slate-600">{finishPending ? 'Keep the course window open while the recording saves.' : recordingReady ? 'You can click through the course now.' : recordingId ? 'Wait for the button to turn red before clicking through.' : props.paused ? 'Use Resume session above.' : savedRecording?.folder ? `${savedRecording.pages} page observations · ${savedRecording.frames} frames saved on this PC.` : recordedStop || currentProgress || (!selected ? 'Choose a course tab to start.' : message)}</p>
+          <p className={recordingReady ? 'font-semibold text-red-800' : 'font-semibold text-slate-950'}>{finishPending ? 'Saving recording' : recordingReady ? 'Recording' : recordingId ? 'Starting recorder' : props.paused ? 'Waiting for your session to resume' : savedRecording?.folder ? 'Recording saved' : quizResult?.heading || (recordedStop ? 'The run needs attention' : props.refreshing ? 'Updating your course tabs' : stage)}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">{finishPending ? 'Keep the course window open while the recording saves.' : recordingReady ? 'You can click through the course now.' : recordingId ? 'Wait for the button to turn red before clicking through.' : props.paused ? 'Use Resume session above.' : savedRecording?.folder ? `${savedRecording.pages} page observations · ${savedRecording.frames} frames saved on this PC.` : quizResult?.detail || recordedStop || currentProgress || (!selected ? 'Choose a course tab to start.' : message)}</p>
         </div> : null}
         <div className="flex flex-wrap items-center gap-3">
           {!recordingId && (selected || busy || question) && (!question?.model || showReplyField || busy) ? <button type="button" onClick={() => void start()} disabled={!props.ready || !(pauseTab || selected) || (mode !== 'quick' && !objective.trim()) || busy || props.active || props.paused || props.suspended || Boolean(question?.model && !answer.trim())} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}{busy ? (mode === 'quick' ? 'Starting recorder…' : 'Working…') : mode === 'quick' ? 'Start recording' : question?.model ? 'Send answer and continue' : question?.next || 'Inspect and start'}</button> : null}

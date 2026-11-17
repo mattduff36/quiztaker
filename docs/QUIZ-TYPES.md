@@ -96,6 +96,12 @@ if the fast path fails.
 
 - **Drag and drop** - Module 7 required dragging visible items into their matching slots. Complete this interaction in the course browser when Vitriol asks for help, then resume from the resulting slide.
 
+### Saba Articulate Rise course and quiz (Poly Lens Fundamentals)
+
+- **Fingerprint** - The Saba SCORM 1.2 player contains a Rise course with a lesson menu, course completion percentage, and a separate Check your Knowledge lesson. Each active quiz card offers labelled radio buttons or checkboxes and separate SUBMIT and NEXT controls.
+- **Strategy** - For course completion, work through the unfinished lessons using the lesson menu and complete required interactions as prompted. The direct Check your Knowledge link is useful for quiz-only goals. On an active card, select the named controls with Space, submit once, and use NEXT after feedback.
+- **Verification** - Quiz Results showed 91% with an 80% pass mark. After opening Summary and the final lesson and using EXIT COURSE, the course still showed In Progress in Saba and the reopened player showed 30% complete. Check the lesson checklist and the portal result independently before marking the course complete.
+
 Ordered from fastest / most-common to slowest / rarest.
 
 ### Variant A: SCORM 1.2 or 2004 WBT (~95% of everything)
