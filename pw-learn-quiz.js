@@ -12,6 +12,8 @@
 // and never a successful completion. The same action and target on an unchanged
 // view requests coordination once, then pauses after bounded retries. Guidance is
 // not a shell argument.
+// Unsupported launch links remain blocked, with bounded control-name diagnostics
+// in progress and observation text; no script URLs are evaluated as a fallback.
 // Current visible pass/fail results end the attempt before another model call
 // or repeated-action prompt, preserving the observed score and feedback.
 // Radio buttons and checkboxes share one viewport-first 40-choice budget.
@@ -61,7 +63,7 @@ const MAX_STEPS = 80;
 const SUBMIT_LABEL = /\b(submit|finish|end test|end quiz|grade)\b/i;
 const UNSAFE_LABEL = /\b(log\s*out|sign\s*out|sign\s*in|log\s*in|password|account|payment|purchase|buy|delete|remove|unsubscribe|exit|close browser)\b/i;
 const ASSESSMENT_START_LABEL = /\b(?:(?:start|begin|launch|take)(?:\s+the)?\s+(?:test|quiz|assessment)|retake|retry)\b/i;
-const NAVIGATION_LABEL = /^(next(?: page| slide)?|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch|resume|menu|home|contents)$/i;
+const NAVIGATION_LABEL = /^(next(?: page| slide)?|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch(?: course| module)?|resume|menu|home|contents)$/i;
 const OPEN_TOPIC_LABEL = /^Open topic: .{1,140}$/;
 const COURSE_INTERACTION_LABEL = /^Course interaction: \d+_\d+_click_?\d+$/;
 const COURSE_PLAYER_LABEL = /^Course player: (?:Exit|Confirm exit|Cancel exit)$/;
@@ -540,6 +542,7 @@ async function findRenderedText(page,text) {
 
 async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
   const listed = [];
+  const unavailable = [];
   const handles = new Map();
   const candidates = [];
   const counts = { c: 0, k: 0 };
@@ -637,7 +640,10 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
         }
         return {safe:!['javascript:','mailto:','tel:','data:'].includes(el.protocol.toLowerCase()) && !/\b(logout|signout|delete|purchase|checkout|account|login)\b/i.test(href),postback:false};
       }).catch(() => ({safe:false,postback:false}));
-      if (!link.safe) continue;
+      if (!link.safe) {
+        if (/^(?:launch|start|continue)(?: course| module)?$/i.test(name) && unavailable.length < 8) unavailable.push(`${name}: link format is not supported safely; open it manually, then resume.`);
+        continue;
+      }
       const submits = await isSubmitControl(handle);
       // Form/postback navigation can consume assessment state; it is quiz-only
       // even when labelled Next rather than a final Submit control.
@@ -679,7 +685,7 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
     if (navigationOnly && allListed.length >= 40) break;
   }
   listed.push(...allListed.slice(0,40));
-  return { listed, handles, allListed, complete:candidates.length<=400 };
+  return { listed, handles, allListed, unavailable, complete:candidates.length<=400 };
 }
 
 async function answerPageIdentity(page) {
@@ -889,6 +895,7 @@ async function readSnapshot(page, mode = 'read') {
     }
   }
   const buttons = await readControls(page, 'button', 'b', true, mode);
+  if (buttons.unavailable.length) console.log(`LEARNER_PROGRESS ${JSON.stringify({message:buttons.unavailable.join(' ')})}`);
   const matching=await readSabaMatching(page,mode,Boolean(observedQuestion(resultViews.join('\n'),canonicalCourseSource(page.url()),[])));
   buttons.listed=[...matching.listed,...buttons.listed].slice(0,40);
   buttons.handles=new Map([...buttons.handles,...matching.handles]);
@@ -945,7 +952,7 @@ async function readSnapshot(page, mode = 'read') {
   const snapshot = {
       title: (await page.title().catch(() => '')).slice(0,200),
       url: page.url().slice(0,500),
-      text: `${await observePlayerEvidence(page)}\n${state.feedback?`Tool feedback: ${state.feedback}\n`:''}${sections.map(section => section.slice(0, Math.floor(7400 / Math.max(1, sections.length)))).join('\n')}`.slice(0, 8000),
+      text: `${await observePlayerEvidence(page)}\n${buttons.unavailable.length?`Unavailable course controls: ${buttons.unavailable.join(' ')}\n`:''}${state.feedback?`Tool feedback: ${state.feedback}\n`:''}${sections.map(section => section.slice(0, Math.floor(7400 / Math.max(1, sections.length)))).join('\n')}`.slice(0, 8000),
       buttons: buttons.listed,
       choices: answers.listed,
       ...(answers.listed.length || fields.length ? {answerPageId:answers.complete === false ? undefined : await answerPageIdentity(page)} : {}),

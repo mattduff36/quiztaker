@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { LoaderCircle, Play, Square, Pause } from 'lucide-react';
 import { decideGuidedFlow, independentIntent, independentPlans, learnerQuestion, learnerStopMessage, observedQuizResult, sameDetectedTarget, supportsGuidedLearning, questionTargetTab, type GuidedDetection, type GuidedLearningMode, type IndependentIntent } from '@/lib/guided-flow';
+import { jobOutput } from '@/lib/job-output';
 import { learnerActivityUpdates } from '@/lib/learner-activity';
 import { OBJECTIVE_LIMIT } from '@/lib/operations-client-state';
 import { readJsonResponse } from '@/lib/operations-readiness';
@@ -290,7 +291,7 @@ export function GuidedRunner(props: {
       checkStopped();
       const value = await api<{ job: Job; events: Array<{ data?: { text?: string } }> }>(`/api/jobs/${id}`);
       checkStopped();
-      const output = value.events.map((event) => event.data?.text || '').join('');
+      const output = jobOutput(value.events);
       if (mounted.current) setRunOutput(output);
       if (recording && output.includes('QUICK_SCRAPE_READY ')) {
         setReadyRecordingId(id);
@@ -537,7 +538,7 @@ taskInProgress || Boolean(recordingId) || settingsNeeded || Boolean(recordedStop
     <div hidden={!selected || courseTabs.length===0} className="min-w-0 space-y-3"><fieldset aria-label="Course activity" disabled={draftDisabled} className="flex min-w-0 flex-wrap gap-2"><legend className="mb-2 text-sm font-semibold text-slate-800">What should Vitriol do?</legend>
       {([['independent','Work independently'],['coordinate','Co-ordinate with ChatGPT'],['quick','Scrape info with the user']] as const).map(([value,label])=><button key={value} type="button" data-mode={value} aria-pressed={mode===value} onClick={()=>{if(mode===value)return;setMode(value);props.shared?.edit({mode:value,chosenIntent:null});setChosenIntent(null);clearPageQuestion();}} className={`min-h-11 min-w-0 flex-1 basis-40 break-words rounded-md border px-4 py-3 text-left text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40 ${mode===value?'border-cyan-800 bg-cyan-800 text-white':'border-slate-300 bg-white text-slate-800 hover:border-cyan-700'}`}>{label}</button>)}
     </fieldset>
-      {mode === 'coordinate' ? <p className="text-sm text-slate-600">Reads material and can submit assessment answers. Vitriol asks the Codex chat connected to your Windows helper when it needs guidance.</p> : null}
+      {mode === 'coordinate' ? <p className="text-sm text-slate-600">Reads material and can submit assessment answers. Requires an active Codex chat connection to your Windows helper. If the chat is unavailable, Vitriol pauses and asks you; it does not silently switch to independent work.</p> : null}
       {mode === 'quick' && !recordingId ? <p className="text-sm text-slate-600">Record the course while you click through it. Vitriol saves a replay and transcript on this PC.</p> : null}
     </div>
     <div hidden={!selected || courseTabs.length===0} className="min-w-0 space-y-3 lg:col-span-2"><label hidden={mode === 'quick'} className={mode === 'quick' ? 'hidden' : 'grid gap-2 text-sm font-semibold text-slate-800'}>What would you like to achieve?<GoalInput value={objective} onChange={(event) => { setObjectiveEdited(true); setChosenIntent(null); if (question) clearPageQuestion(); setObjective(event.target.value.slice(0, OBJECTIVE_LIMIT)); props.shared?.edit({objective:event.target.value.slice(0,OBJECTIVE_LIMIT),objectiveEdited:true,chosenIntent:null}); }} disabled={draftDisabled} maxLength={OBJECTIVE_LIMIT} placeholder="For example, read the lessons, then take the quiz." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-base font-normal leading-6 focus-visible:outline-2 focus-visible:outline-cyan-700" /><span className="text-xs font-normal text-slate-600">Collected material stays available across pages.</span></label>{objective.length>=700 ? <p role="status" className="text-xs leading-5 text-amber-900">Keep one clear goal. Long or conflicting directions can be harder to follow; use a hint later to change direction.</p> : null}

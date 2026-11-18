@@ -21,6 +21,17 @@ test('passive local browser target events detect navigation without changing win
   await page.goto('https://fixture.invalid/one');await wait(()=>monitor.token!=='offline');await new Promise(r=>setTimeout(r,100));
   const before=monitor.token,geometry=await page.evaluate(()=>[innerWidth,innerHeight,outerWidth,outerHeight,devicePixelRatio]);
   await page.goto('https://fixture.invalid/two');await wait(()=>monitor.token!==before);
+  const navigated=monitor.token;
+  await page.evaluate(()=>document.title='Results without navigation');
+  await monitor.connect();await wait(()=>monitor.token!==navigated);
+  const targets=await fetch(`http://127.0.0.1:${port}/json/list`).then(r=>r.json());
+  assert.equal(monitor.token,browserInventoryToken(targets.map((t:{id:string;type:string;url:string;title:string})=>({...t,targetId:t.id}))));
+  const stable=monitor.token;await monitor.connect();await new Promise(r=>setTimeout(r,100));assert.equal(monitor.token,stable);
   assert.deepEqual(await page.evaluate(()=>[innerWidth,innerHeight,outerWidth,outerHeight,devicePixelRatio]),geometry);
  }finally{monitor.close();await browser.close();}
+});
+
+test('closing a monitor prevents a late connection or reconnect',{timeout:5000},async()=>{
+ const monitor=new BrowserChanges(1);const pending=monitor.connect();monitor.close();await pending;await monitor.connect();
+ assert.equal(monitor.token,'offline');
 });

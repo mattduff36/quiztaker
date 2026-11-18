@@ -1,5 +1,31 @@
 # Hosted deployment and helper operations
 
+## End-of-session reliability 1.0.52 (18 November 2026)
+
+No database migration. Helper 1.0.52 reconciles passive browser metadata with
+one bounded Target.getTargets request on the existing heartbeat connection;
+title-only changes no longer leave an event-only inventory stale. It never
+reads page content, changes geometry or focuses a window for this check.
+
+Both Operations output consumers preserve structured records between helper
+events while retaining split stdout chunks. A question following progress
+without a newline now reaches the shared desktop/mobile question state.
+A fresh question after a coordinator timeout is visible; older timed-out or
+terminally interrupted questions remain rejected.
+
+Coordinate mode pauses explicitly if the active chat is absent, expired or
+does not respond. It never silently performs the model's independent action
+instead. Routine actions after a successful initial exchange remain automatic.
+Setup explains the active chat requirement. No chat daemon or scheduler is added.
+
+Ordinary Launch course/module labels are recognized. Unsupported script links
+remain blocked with named, bounded diagnostics instead of an unexplained missing
+control. The HP PageWide EOT launch remains a live-retest item: the publication
+returned HTTP 403 without the user's closed authenticated course session, so
+its exact missing selector/link cannot yet be verified. Do not call this resolved
+or reopen the session without the user. The final test was stopped with the
+normal close-browser job completed and helper idle; no assessment result changed.
+
 ## Selection lock hotfix (18 November 2026)
 
 Browser inventory freshness must not disable course-tab selection or Start.
@@ -10,7 +36,7 @@ remain different from a successful tab snapshot. A stale indicator is not a
 disconnected browser. Desktop/mobile regression covers tab, mode, tab changes
 and ensures failed refresh never queues detection or learner work.
 
-Next helper batch: reconcile passive target metadata with bounded Target.getTargets
+Helper 1.0.52 reconciles passive target metadata with bounded Target.getTargets
 reads; retain on-return browser refresh and never resize/focus the course window.
 Reproduction: an isolated title-only document.title update leaves the event-only
 observer with the old title, while a fresh observer and raw target listing agree.

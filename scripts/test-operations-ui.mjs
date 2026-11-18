@@ -81,7 +81,7 @@ function reply(path,method,body,now,s){
       if(s.recordingFinished&&!s.waitForSaving){job.status='completed';job.result={ok:true,result:{folder:'C:/Fixtures/recording',pages:3,frames:7}};}
       return{job,events:s.waitForRecording ? [] : [{data:{text:'QUICK_SCRAPE_READY {}\n'}}],artifacts:[]};
     }
-if(job&&job.capability_id!==s.holdCapability&&job.status!=='failed')job.status='completed';if(job?.capability_id==='quiz-learn'&&job.status!=='failed'&&s.questionOutput){job.status='awaiting-input';job.outcome={verified:false,status:'needs-user-input'};}return{job,events:job?.capability_id==='quiz-learn'?[{data:{text:s.questionOutput||s.progressOutput||''}}]:[],artifacts:[]};}
+if(job&&job.capability_id!==s.holdCapability&&job.status!=='failed')job.status='completed';if(job?.capability_id==='quiz-learn'&&job.status!=='failed'&&s.questionOutput){job.status='awaiting-input';job.outcome={verified:false,status:'needs-user-input'};}return{job,events:job?.capability_id==='quiz-learn'?[...(s.questionOutput?[{data:{text:'LEARNER_PROGRESS '+JSON.stringify({message:'Reading course'})}}]:[]),{data:{text:s.questionOutput||s.progressOutput||''}}]:[],artifacts:[]};}
   throw Error(`Unexpected fixture request: ${method} ${path}`);
 }
 let servedState=state();

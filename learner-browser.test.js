@@ -14,6 +14,23 @@ async function act(page, name, mode = 'read', choice = false) {
   return view;
 }
 
+test('ordinary Launch course controls work while unsupported script launch links explain their blocker',async()=>{
+ const browser=await chromium.launch({channel:'chrome',headless:true});
+ try {
+  const page=await browser.newPage();
+  await page.route('https://fixture.invalid/**',route=>route.fulfill({contentType:'text/html',body:`<title>Launch fixture</title>
+   <button type="button" onclick="document.querySelector('h1').textContent='Lesson opened'">Launch course</button><h1>Course</h1>
+   <a href="javascript:arbitraryLaunch()">Launch module</a><a href="javascript:arbitraryAccountAction()">Account</a>`}));
+  await page.goto('https://fixture.invalid/course');
+  const {readControls}=require('./pw-learn-quiz');
+  const controls=await readControls(page,'button','b',true,'read');
+  assert.equal(controls.listed.filter(control=>control.name==='Launch course').length,1);
+  assert.ok(!controls.listed.some(control=>control.name==='Launch module'));
+  assert.deepEqual(controls.unavailable,['Launch module: link format is not supported safely; open it manually, then resume.']);
+  await act(page,'Launch course');assert.equal(await page.locator('h1').innerText(),'Lesson opened');
+ }finally{await browser.close();}
+});
+
 test('Rise uses the current quiz card, selects labelled choices and reads the separate result', async () => {
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   try {

@@ -18,6 +18,7 @@ import { useSharedOperations } from '@/components/use-shared-operations';
 import { RemoteBrowserView } from '@/components/remote-browser';
 import { supportsRemoteHelper, REMOTE_HELPER_MIN_VERSION } from '@quiztaker/core/remote';
 import { defaultOperationsObjective } from '@/lib/operations-shared';
+import { jobOutput } from '@/lib/job-output';
 
 interface TabRow {
   targetId: string;
@@ -359,7 +360,7 @@ function OperationsSession(props:{helperId:string}) {
       setPollError('');
       setJob(value.job);
       setOutputJobId(value.job.id);
-      setOutput(value.events.map((event) => event.data?.text ?? '').join('')
+      setOutput(jobOutput(value.events)
         || (value.job.result ? JSON.stringify(value.job.result, null, 2) : ''));
       if (isActive && !isRunningJob(value.job)) void load();
       } catch (cause) {

@@ -15,6 +15,23 @@ if the fast path fails.
 
 ---
 
+### EOT launch page: incomplete investigation (18 November 2026)
+
+The HP PageWide Pro/Managed 75x/77x service WBT opened an observed
+`/content/learning/.../eot/default.htm` inside the normal Saba player.
+"Launch course" was visible in text but had no available learner control ID.
+The run paused for the user; no completion or assessment result was verified.
+Unauthenticated retrieval of the exact observed publication returned HTTP 403.
+The user then ended the session. Inspect the real authenticated control on the
+next run; do not guess a script entry point or use synthetic completion writes.
+Helper 1.0.52 recognizes normal Launch course/module controls and reports
+unsupported launch links by name while preserving the action allowlist.
+
+The accompanying Operations interruption was a separate transport bug: progress
+and question events concatenated without a newline. Preserve structured record
+boundaries before question parsing, including the new question emitted after a
+coordinator timeout. A closed/interrupted run must never resurrect an old question.
+
 ## Landing pages (not quizzes; how you get *to* the quiz)
 
 ### Certification landing page (`.../me/ledetail/crtfy...`)

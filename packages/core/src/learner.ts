@@ -21,7 +21,7 @@ export const learnerActions = new Set([
 
 const deniedLearnerActions = new Set(['exit', 'submit', 'launch', 'scorm-complete']);
 const submitLabel = /\b(submit|finish|end test|end quiz|grade)\b/i;
-const navigationLabel = /^(next(?: page| slide)?[ »›→]*|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch|resume|menu|home|contents)$/i;
+const navigationLabel = /^(next(?: page| slide)?[ »›→]*|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch(?: course| module)?|resume|menu|home|contents)$/i;
 const assessmentStartLabel = /\b(?:(?:start|begin|launch|take)(?:\s+the)?\s+(?:test|quiz|assessment)|retake|retry)\b/i;
 const openTopicLabel = /^Open topic: .{1,140}$/;
 const courseInteractionLabel = /^Course interaction: \d+_\d+_click_?\d+$/;

@@ -58,6 +58,24 @@ test('routine actions continue automatically and blocked clicks ask once before 
   assert.equal(asked, 2);
   const action = { action: 'click', targetId: 'b1' } as const;
   assert.deepEqual(await coordinateDecision(decide, async () => action, { coordinationStart: true }), { action });
+  const disconnected=await coordinateDecision(decide, unavailable, {coordinationStart:true});
+  assert.equal((disconnected.action as {action:string}).action,'ask-user');
+  assert.match((disconnected.action as {question:string}).question,/ChatGPT is not connected/);
+  const original={action:{action:'ask-user',question:'Open Launch course'}};
+  const missing=await coordinateDecision(async()=>original,unavailable,{});
+  assert.match((missing.action as {question:string}).question,/ChatGPT is not connected/);
+});
+
+test('absent and expired chat connections report unavailability without creating requests',async()=>{
+ const home=await mkdtemp(join(tmpdir(),'vitriol-disconnected-'));const directory=join(home,'coordination');
+ try {
+  const lines:string[]=[];
+  assert.equal(await askCoordinator(home,'job',{},'Start',100,undefined,line=>lines.push(line)),undefined);
+  await mkdir(directory);await writeFile(join(directory,'connection.json'),JSON.stringify({id:'old-private-id',expiresAt:Date.now()-1}));
+  assert.equal(await askCoordinator(home,'job',{},'Start',100,undefined,line=>lines.push(line)),undefined);
+  assert.equal(lines.length,2);assert.ok(lines.every(line=>/not connected/.test(line)));assert.doesNotMatch(lines.join(''),/old-private-id/);
+  assert.deepEqual(await readdir(directory),['connection.json']);
+ }finally{await rm(home,{recursive:true,force:true});}
 });
 
 test('unchanged-action blocker reaches coordination before a visible resumable timeout',async()=>{

@@ -48,7 +48,10 @@ export async function askCoordinator(
 ): Promise<LearnerAction | undefined> {
   const directory = join(home, 'coordination');
   const connection = await readJson(join(directory, 'connection.json')) as Connection | null;
-  if (typeof connection?.id !== 'string' || !(connection.expiresAt > Date.now())) return;
+  if (typeof connection?.id !== 'string' || !(connection.expiresAt > Date.now())) {
+    showExchange?.('ChatGPT is not connected. Pausing on the current page; connect your active chat or choose Work independently.');
+    return;
+  }
   const id = randomUUID();
   const request = join(directory, `${id}.request.json`);
   const reply = join(directory, `${id}.reply.json`);
@@ -104,7 +107,7 @@ export async function coordinateDecision(
   if (!decision.stop && (coordinationStart === true || (decision.action as { action?: string } | undefined)?.action === 'ask-user')) {
     const question = (decision.action as { question?: string } | undefined)?.question;
     const action = await ask(observation, typeof question === 'string' ? question : 'Review the starting page and propose the next course step.');
-    if (action) return { action };
+    return { action: action ?? {action:'ask-user',question:'ChatGPT is not connected or did not respond. Connect your active Codex chat, then resume from this page, or choose Work independently. The assessment has not been restarted.'} };
   }
   return decision;
 }

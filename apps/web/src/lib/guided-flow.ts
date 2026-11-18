@@ -67,7 +67,10 @@ export function decideGuidedFlow(detection: GuidedDetection, mode: GuidedLearnin
 }
 
 export function learnerQuestion(output: string): { question: string; options: string[]; url?: string; cdpTargetId?: string } | null {
-  if (/Learner input (?:timed out|closed)|(?:decision|coordination).{0,30}timed out/i.test(output)) return null;
+  const records=output.split('\n');
+  const questionIndex=records.findLastIndex(line=>line.startsWith('LEARNER_QUESTION '));
+  const timeoutIndex=records.findLastIndex(line=>/Learner input (?:timed out|closed)|(?:decision|coordination).{0,30}timed out/i.test(line));
+  if (timeoutIndex>questionIndex) return null;
   const terminal = output.split('\n').findLast(line => line.startsWith('AUTOMATION_RESULT '));
   if (terminal) {
     try {
