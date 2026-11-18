@@ -1,5 +1,20 @@
 # Hosted deployment and helper operations
 
+## Selection lock hotfix (18 November 2026)
+
+Browser inventory freshness must not disable course-tab selection or Start.
+The guided Start workflow first queues signed list-tabs and detection, checks
+the same live browser session/target and only then permits a course action.
+Chrome can omit title-only Target events: Helper 1.0.51's passive inventory can
+remain different from a successful tab snapshot. A stale indicator is not a
+disconnected browser. Desktop/mobile regression covers tab, mode, tab changes
+and ensures failed refresh never queues detection or learner work.
+
+Next helper batch: reconcile passive target metadata with bounded Target.getTargets
+reads; retain on-return browser refresh and never resize/focus the course window.
+Reproduction: an isolated title-only document.title update leaves the event-only
+observer with the old title, while a fresh observer and raw target listing agree.
+
 ## Operations follow-up and genuine learning 1.0.51
 
 Apply additive `0014_operations_followup.sql` before this web release. It adds

@@ -474,7 +474,7 @@ export function GuidedRunner(props: {
   useEffect(()=>{
     if ((props.paused || props.suspended) && busy && !cancellationRequested.current) void stop();
   },[props.paused,props.suspended,busy]);
-  const connected = props.connection ? props.connection==='connected' && !props.snapshotStale : props.ready;
+  const connected = props.connection ? props.connection==='connected' : props.ready;
   const courseTabs = (session?.tabs||[]).filter(tab=>/^https?:\/\//.test(tab.url));
   const draftDisabled = busy || (props.active && !props.preparing) || props.paused || props.suspended;
   const recordedStop = !props.finalized && !busy && props.lastJob?.status === 'failed' && props.lastJob.capability_id === 'quiz-learn'

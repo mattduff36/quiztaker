@@ -100,6 +100,36 @@ const url=`http://127.0.0.1:${server.address().port}`;
 const browser=await chromium.launch({channel:'chrome',headless:true});
 let passed=false;
 try{
+  for(const viewport of [{width:1365,height:1000},{width:390,height:844}])for(const failRefresh of [false,true]){
+    const page=await browser.newPage({viewport}),fixture=state(),actions=[];
+    fixture.blocked=true;
+    await page.route('**/api/**',async route=>{
+      const req=route.request(),path=new URL(req.url()).pathname,body=req.postDataJSON()||{};
+      if(path==='/api/operations/actions')actions.push(body.capabilityId);
+      const {__status,...json}=reply(path,req.method(),body,Date.now(),fixture);
+      if(path==='/api/operations/context'){
+        json.helper.browser_change_token='passive-title-old';json.session.browser_change_token='fresh-tabs-title-new';
+        json.session.tabs.push({targetId:'course-alt',index:2,title:'Another course',url:'https://example.invalid/another',fingerprint:'another'});
+      }
+      if(failRefresh&&path==='/api/operations/actions'&&body.capabilityId==='list-tabs')fixture.jobs.get(json.jobId).status='failed';
+      await route.fulfill({status:__status||200,json});
+    });
+    await page.goto(url);
+    const picker=page.getByRole('group',{name:'Course tab',exact:true});
+    await picker.getByRole('button',{name:/Another course/}).click();
+    const mode=page.getByRole('group',{name:'Course activity',exact:true});
+    await mode.getByRole('button',{name:'Co-ordinate with ChatGPT',exact:true}).click();
+    await picker.getByRole('button',{name:/Xerox course overview/}).click();
+    await expect(picker.getByRole('button',{name:/Xerox course overview/})).toHaveAttribute('aria-pressed','true');
+    await expect(mode.getByRole('button',{name:'Co-ordinate with ChatGPT',exact:true})).toHaveAttribute('aria-pressed','true');
+    await expect(page.getByLabel(/What would you like to achieve/)).not.toBeEmpty();
+    await page.getByRole('button',{name:'Start',exact:true}).click();
+    if(failRefresh){await expect(page.getByText('Could not refresh the browser tabs. Check the helper connection.',{exact:true})).toBeVisible();expect(actions).toEqual(['list-tabs']);}
+    else{await expect.poll(()=>actions.includes('quiz-learn')).toBe(true);expect(actions.slice(0,2)).toEqual(['list-tabs','detect']);}
+    await page.close();
+  }
+  console.log('PASS stale title inventory never locks tab/mode/tab selection; Start refreshes and inspects, failed refresh queues no course action, at desktop/mobile widths.');
+  if(!process.argv.includes('--focus-selection')){
   for(const action of ['idle','click','wheel','key','motion']){
     const page=await browser.newPage({viewport:{width:390,height:844}}),fixture=state();
     await page.clock.install();
@@ -763,6 +793,7 @@ try{
     await page.close();
   }
   console.log('PASS focused running layout, expandable steering/output and all four status items in one line at 390/844/1365px.');
+  }
   passed=true;
 }finally{
   await browser.close();
