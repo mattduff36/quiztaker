@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { queryRows,withTransaction, type SqlQuery } from '@/lib/db';
 import type { OperationsDraft, SharedSnapshot } from './operations-shared';
 export const draftPatchSchema=z.object({
+  taskResetId:z.string().uuid(),dismissedTaskId:z.string().uuid().nullable(),
   selectedTarget:z.string().max(200),selectedCdpTarget:z.string().max(200),objective:z.string().max(1000),objectiveEdited:z.boolean(),
   chosenIntent:z.enum(['read','quiz','read-and-assess']).nullable(),
   mode:z.enum(['independent','coordinate','quick']),answer:z.string().max(1400),guidance:z.string().max(2000),

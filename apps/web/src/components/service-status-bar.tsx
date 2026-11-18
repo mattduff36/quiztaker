@@ -61,12 +61,12 @@ export function ServiceStatusBar() {
 
   const indicators = serviceIndicators({ snapshot, now, failed, offline }).filter(item => item.id !== 'browser' || browserStatusRelevant(snapshot, pathname));
   return (
-    <nav aria-label="Service status" className="sticky top-0 z-20 max-w-full overflow-x-auto border-b border-slate-200 bg-white px-5 sm:px-8 lg:px-12">
-      <ul className="flex w-max min-w-full items-center gap-5 text-xs text-slate-700" aria-live="polite" aria-atomic="true">
-        {indicators.map(item => <li key={item.id} className="shrink-0">
-          <Link href={item.href} aria-label={`${item.label}: ${item.state}`} title={`${item.label}: ${item.state}. ${item.detail}`} className="flex min-h-10 items-center gap-2 whitespace-nowrap rounded-sm hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan-700">
+    <nav aria-label="Service status" className="sticky top-0 z-20 max-w-full border-b border-slate-200 bg-white px-3 sm:px-8 lg:px-12">
+      <ul className="flex w-full items-center justify-between gap-2 text-[11px] text-slate-700 sm:justify-start sm:gap-5 sm:text-xs" aria-live="polite" aria-atomic="true">
+        {indicators.map(item => <li key={item.id} className="min-w-0">
+          <Link href={item.href} aria-label={`${item.label}: ${item.state}`} title={`${item.label}: ${item.state}. ${item.detail}`} className="flex min-h-11 items-center gap-1.5 whitespace-nowrap rounded-sm hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan-700 sm:gap-2">
             <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${dots[item.tone]}`} />
-            <span className="font-medium">{item.label}</span><span className="text-slate-600">{item.state}</span>
+            <span className="font-medium">{item.id==='website'?<><span className="sm:hidden">Site</span><span className="hidden sm:inline">{item.label}</span></>:item.label}</span><span className="hidden text-slate-600 sm:inline">{item.state}</span>
           </Link>
         </li>)}
       </ul>

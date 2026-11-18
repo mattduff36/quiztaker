@@ -54,7 +54,7 @@ export class RemoteBroker {
             try {await this.browser.input(command,()=>!this.stopped&&Date.now()<deadline&&(viewOnly||(session.manual&&this.reserved&&this.idle())),viewOnly);}
             finally {this.inputActive=false;}
             endpoint.status='Input applied';
-          }catch {endpoint.status='Input not applied. Wait for a fresh image and retry.';}
+          }catch {endpoint.status='Action not confirmed. Inspect the latest page before trying again.';}
           endpoint.ack=Math.max(endpoint.ack,session.command.seq);
         }
         const update:Update={sessionId:session.sessionId,publicKey:endpoint.publicKey,ack:endpoint.ack,status:endpoint.status};

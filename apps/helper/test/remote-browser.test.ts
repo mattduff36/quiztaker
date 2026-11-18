@@ -36,6 +36,11 @@ test('encrypted isolated helper-browser roundtrip uses existing tabs with stable
     const button=await page.locator('button').boundingBox();assert.ok(button);
     await send({type:'tap',x:button.x+10,y:button.y+10});assert.equal(await page.title(),'Tapped');
     await send({type:'scroll',x:0,y:400});await page.waitForFunction(()=>scrollY>0);
+    await page.goto('https://course.invalid/next');
+    await send({type:'back'});assert.equal(page.url(),'https://course.invalid/lesson');
+    await send({type:'forward'});assert.equal(page.url(),'https://course.invalid/next');
+    await page.evaluate(()=>{(window as unknown as {reloadMarker:boolean}).reloadMarker=true;});
+    await send({type:'reload'});assert.equal(await page.evaluate(()=>Boolean((window as unknown as {reloadMarker?:boolean}).reloadMarker)),false);
     const stale=await adapter.frame(true);
     await page.evaluate(()=>scrollTo(0,800));
     await assert.rejects(adapter.input({...stale,type:'key',key:'Enter',geometry:stale.geometry,tabId:stale.tabId},()=>true),/geometry changed/);

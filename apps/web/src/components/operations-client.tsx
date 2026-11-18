@@ -117,6 +117,8 @@ export function OperationsClient(props: { helperId: string }) {
 function OperationsSession(props:{helperId:string}) {
   const shared=useSharedOperations(props.helperId);
   const [surface,setSurface]=useState<'task'|'browser'>('task');
+  const [browserFloating,setBrowserFloating]=useState(false);
+  const seenTaskReset=useRef<string|undefined>(undefined);
   const [view, setView] = useState<'normal' | 'advanced'>('normal');
   const viewId = useId();
   const activity = useOperatorActivity(props.helperId);
@@ -205,12 +207,23 @@ function OperationsSession(props:{helperId:string}) {
         }
       }
     } catch (cause) {
-      if (requestId !== contextRequest.current) return;
+      if (requestId !== contextRequest.current || document.visibilityState==='hidden') return;
       setContextError(errorMessage(cause, 'Could not check the connection. Check your network and retry.'));
     } finally { loadingContext.current=false; setContextBusy(false); }
   }, [activity.sync]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(()=>{
+    const reset=shared.draft.taskResetId;
+    if(!reset||reset===seenTaskReset.current)return;
+    seenTaskReset.current=reset;
+    dismissedTask.current=shared.draft.dismissedTaskId??null;
+    draftMode.current=true;contextRequest.current+=1;draftGeneration.current+=1;
+    stopGuided.current?.();
+    setJob(null);setFinishedTask(null);setTaskRecordedHere(false);setAwaitingQuestion(false);
+    setOutput('');setOutputJobId('');setForceCloseOffer(false);setNewTask(current=>current+1);
+    void load();
+  },[shared.draft.taskResetId,shared.draft.dismissedTaskId,load]);
   useEffect(()=>{
     if(!shared.otherWorkflow||!visible)return;
     const timer=setInterval(()=>void load(),2000);
@@ -559,7 +572,8 @@ function OperationsSession(props:{helperId:string}) {
       setAwaitingQuestion(false);
       setForceCloseOffer(false);
       setSelectedTarget('');
-      shared.edit({objective:defaultOperationsObjective('independent'),objectiveEdited:false,mode:'independent',chosenIntent:null,answer:'',guidance:'',question:null});
+      const resetId=crypto.randomUUID();seenTaskReset.current=resetId;
+      shared.edit({taskResetId:resetId,dismissedTaskId:dismissedTask.current,objective:defaultOperationsObjective('independent'),objectiveEdited:false,mode:'independent',chosenIntent:null,answer:'',guidance:'',question:null});
       setSelectedTitles([]);
       setUrl('');
       setOutput('');
@@ -632,7 +646,7 @@ function OperationsSession(props:{helperId:string}) {
       {shared.error?<p role="alert" className="text-sm text-rose-800">{shared.error}</p>:null}
       {shared.draft.selectedCdpTarget&&!session?.tabs.some(tab=>tab.cdpTargetId===shared.draft.selectedCdpTarget)?<p role="status" className="rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">A newly selected browser tab is waiting for the task list. Release manual control, return to Task, resume the session and refresh tabs before starting automation.</p>:null}
       {shared.snapshot.manual?<p role="status" className="rounded-md border border-cyan-300 bg-cyan-50 p-4 text-sm font-semibold text-cyan-950">Manual browser control is reserved. Automation is paused on every device.</p>:shared.otherWorkflow?<p role="status" className="text-sm text-slate-700">Another device is preparing this task. Current jobs and questions update here automatically.</p>:null}
-      {surface==='browser'?(supportsRemoteHelper(context?.helper?.version)?<RemoteBrowserView helperId={props.helperId} selectedCdpTargetId={shared.draft.selectedCdpTarget||selected?.cdpTargetId} onManual={()=>void load()} onTab={id=>{
+      {surface==='browser'||browserFloating?(supportsRemoteHelper(context?.helper?.version)?<RemoteBrowserView helperId={props.helperId} floating={browserFloating&&surface==='task'} onFloat={()=>{setBrowserFloating(true);setSurface('task');}} onExpand={()=>setSurface('browser')} onClose={()=>setBrowserFloating(false)} selectedCdpTargetId={shared.draft.selectedCdpTarget||selected?.cdpTargetId} onManual={()=>void load()} onTab={id=>{
         const tab=session?.tabs.find(tab=>tab.cdpTargetId===id);
         shared.edit({selectedTarget:tab?.targetId??'',selectedCdpTarget:id,chosenIntent:null});
       }}/>:<section className="rounded-xl border border-slate-300 bg-white p-5"><h2 className="text-xl font-semibold">Update your helper to view the browser</h2><p className="mt-2 text-sm leading-6 text-slate-700">The live browser connection needs Vitriol Helper {REMOTE_HELPER_MIN_VERSION} or later.</p><a href="/helper" className="mt-4 inline-flex min-h-11 items-center font-semibold text-cyan-800 underline">Open Local helper</a></section>):null}
@@ -648,7 +662,7 @@ function OperationsSession(props:{helperId:string}) {
           {(['normal', 'advanced'] as const).map(mode => <button key={mode} type="button" role="tab" id={`${viewId}-${mode}-tab`} aria-controls={`${viewId}-${mode}-panel`} aria-selected={view === mode} tabIndex={view === mode ? 0 : -1} onClick={() => setView(mode)} className={`min-h-11 border-b-2 px-1 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 ${view === mode ? 'border-cyan-700 text-cyan-900' : 'border-transparent text-slate-600 hover:text-slate-950'}`}>{mode === 'normal' ? 'Normal' : 'Advanced'}</button>)}
         </div>
         <div className="flex items-center gap-2">
-          {activity.ready && !activity.paused && !taskComplete ? <button type="button" disabled={activity.pending} aria-busy={activity.pending} onClick={() => void activity.pause()} className="min-h-11 rounded-md px-2 text-sm font-medium text-slate-700 hover:bg-white focus-visible:outline-2 focus-visible:outline-cyan-700">{activity.pending ? 'Pausing…' : 'Pause session'}</button> : null}
+          {activity.ready && !activity.paused && !taskComplete && !foregroundActive && !guidedBusy ? <button type="button" disabled={activity.pending} aria-busy={activity.pending} onClick={() => void activity.pause()} className="min-h-11 rounded-md px-2 text-sm font-medium text-slate-700 hover:bg-white focus-visible:outline-2 focus-visible:outline-cyan-700">{activity.pending ? 'Pausing…' : 'Pause session'}</button> : null}
           <button type="button" disabled={operationBusy} onClick={() => void startNewTask()} className="inline-flex min-h-11 items-center gap-1.5 rounded-md bg-slate-950 px-3 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-50"><Plus className="size-4" aria-hidden="true"/>New task</button>
         </div>
       </div>
@@ -673,12 +687,12 @@ function OperationsSession(props:{helperId:string}) {
         : activity.warning ? <section role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950"><p className="text-sm">Still there? Your session pauses in {Math.max(1,Math.ceil(activity.remainingMs/1000))} seconds without activity on this page.</p><button type="button" disabled={activity.pending} aria-busy={activity.pending} onClick={()=>void activity.resume()} className="min-h-11 rounded-md border border-amber-400 px-4 text-sm font-semibold">{activity.pending ? 'Resuming…' : 'Keep working'}</button></section> : null}
       {refreshError && !normalCourseVisible ? <p role="alert" className="text-sm text-rose-800">{refreshError}</p> : null}
       {taskRecordedHere && finishedTask && !normalCourseVisible && !foregroundActive && !awaitingQuestion && view === 'normal' ? <p role="status" className="text-sm text-slate-700">Marked {finishedTask.result} by you. Reconnect when you are ready for another task.</p> : null}
-      {activity.error ? <p role="alert" className="text-sm text-rose-800">{activity.error} <button type="button" disabled={activity.pending} aria-busy={activity.pending} onClick={()=>void activity.resume()} className="underline underline-offset-4">{activity.pending ? 'Reconnecting…' : 'Retry session connection'}</button></p> : null}
+      {activity.error ? <p role="alert" className="text-sm text-rose-800">{activity.error} <button type="button" disabled={activity.pending} aria-busy={activity.pending} onClick={()=>void activity.check()} className="underline underline-offset-4">{activity.pending ? 'Reconnecting…' : 'Retry session connection'}</button></p> : null}
       {update && (update.needed || replacingHelper || update.error || (view === 'advanced' && update.progressLabel)) ? <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-950"><div><p>{update.progressLabel || `A helper update is available${update.latestVersion ? `: v${update.latestVersion}` : ''}.`}{update.phaseVersion ? ` · v${update.phaseVersion}` : ''}</p>{update.phaseUpdatedAt ? <p className="mt-1 text-xs">Last reported {formatDisplayDate(update.phaseUpdatedAt)}{replacingHelper && Date.now()-Date.parse(update.phaseUpdatedAt)>10*60_000 ? ' · Still waiting for a new report. Check that the helper is running; no completion has been confirmed.' : ''}</p> : null}{replacingHelper ? <p className="mt-1 text-xs">Course starts are paused while the helper is replaced. Your browser, goal and conversation are kept.</p> : null}{update.error ? <p className="mt-2">{update.error}</p> : null}</div>{update.needed ? <button type="button" disabled={operationBusy || guidedBusy || Boolean(active) || updateBusy || replacingHelper || Boolean(awaitingUpdate)} onClick={() => void requestHelperUpdate()} className="min-h-11 rounded-md bg-amber-900 px-4 py-2 font-semibold text-white disabled:opacity-40">{updateBusy ? 'Requesting update…' : replacingHelper ? 'Updating helper…' : 'Update helper'}</button> : null}{updateMessage ? <p className="w-full">{updateMessage}</p> : null}{showManualDownload || (update.error && update.mode === "queue") ? <a className="font-semibold underline" href={`/helper/download?asset=${update.installerAvailable ? "installer" : "archive"}`}>Download the installer</a> : null}</div> : null}
       {view === 'advanced' || !normalCourseVisible ? sessionActions : null}
-      {(operationBusy || closingJobId || refreshPending || backgroundRefresh || (active && !guidedBusy) || (freshDraft && guidedBusy)) ? <div role="status" aria-live="polite" aria-busy="true" data-testid="operations-loading-footer" className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex min-h-8 items-center justify-center gap-2 border-t border-slate-200 bg-white/95 px-4 py-1.5 text-xs text-slate-600 shadow-sm backdrop-blur-sm lg:left-[250px]"><LoaderCircle className="size-3 shrink-0 animate-spin" aria-hidden="true"/><span>{operationBusy ? actionLabel : closingJobId ? 'Closing the course browser…' : freshDraft && (foregroundActive || guidedBusy) ? 'The helper is finishing the previous operation. You can prepare your next task now.' : refreshPending || backgroundRefresh ? 'Checking course browser tabs…' : job?.status === 'queued' ? 'Queued — waiting for the helper…' : 'Waiting for the current helper job…'}</span></div> : null}
+      {(operationBusy || closingJobId || refreshPending || backgroundRefresh || (active && !guidedBusy && !isTaskJob(job)) || (freshDraft && Boolean(finishedTask?.stopping))) ? <div role="status" aria-live="polite" aria-busy="true" data-testid="operations-loading-footer" className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex min-h-8 items-center justify-center gap-2 border-t border-slate-200 bg-white/95 px-4 py-1.5 text-xs text-slate-600 shadow-sm backdrop-blur-sm lg:left-[250px]"><LoaderCircle className="size-3 shrink-0 animate-spin" aria-hidden="true"/><span>{operationBusy ? actionLabel : closingJobId ? 'Closing the course browser…' : freshDraft && (foregroundActive || guidedBusy) ? 'The helper is finishing the previous operation. You can prepare your next task now.' : refreshPending || backgroundRefresh ? 'Checking course browser tabs…' : job?.status === 'queued' ? 'Queued — waiting for the helper…' : 'Waiting for the current helper job…'}</span></div> : null}
       <div role="tabpanel" id={`${viewId}-normal-panel`} aria-labelledby={`${viewId}-normal-tab`} hidden={view !== 'normal'}>
-      <div hidden={!normalCourseVisible}><GuidedRunner shared={shared} key={newTask} freshTask={newTask > 0} preparing={freshDraft} courseLauncher={courseLauncher} sessionActions={view === 'normal' && normalCourseVisible ? sessionActions : null} courseCoverage={hasCourseTab ? <CourseCoverage courses={context?.courseCoverage || []} /> : null} helperId={props.helperId} session={session} selectedTarget={selectedTarget} onSelect={setSelectedTarget}
+      <div hidden={!normalCourseVisible}><GuidedRunner onViewBrowser={()=>setSurface('browser')} shared={shared} key={newTask} freshTask={newTask > 0} preparing={freshDraft} courseLauncher={courseLauncher} sessionActions={view === 'normal' && normalCourseVisible ? sessionActions : null} courseCoverage={hasCourseTab ? <CourseCoverage courses={context?.courseCoverage || []} /> : null} helperId={props.helperId} session={session} selectedTarget={selectedTarget} onSelect={setSelectedTarget}
         ready={browserReady && protocolReady && !operationBusy && !guidedBusy && activity.ready && !activity.paused && !replacingHelper && !updateBusy && shared.ready && !shared.snapshot.manual && !shared.otherWorkflow} active={foregroundActive} refreshing={backgroundRefresh || refreshPending} onBusy={onGuidedBusy} onRefresh={load}
         suspended={replacingHelper || updateBusy || operationBusy || shared.snapshot.manual || shared.otherWorkflow} paused={activity.paused||!activity.ready} connection={readiness} onConnect={()=>void run('start-browser',{capabilityId:'start-browser'},true)} onRefreshTabs={()=>void refreshBrowser(true)} refreshError={refreshError} snapshotStale={snapshotStale}
         lastJob={displayedJob} lastOutput={output} outputJobId={outputJobId} taskReset={taskReset} finalized={Boolean(finishedTask) || verifiedTaskComplete} onStopControl={registerGuidedStop} onAwaitingQuestion={setAwaitingQuestion} onTaskStart={()=>{draftGeneration.current+=1;draftMode.current=true;setTaskRecordedHere(false);dismissedTask.current=finishedTask?.jobId ?? displayedJob?.id ?? context?.latestTask?.id ?? null;setJob(null);setOutput('');setOutputJobId('');setFinishedTask(null);contextRequest.current+=1;}} onJob={(next)=>{contextRequest.current+=1;if(isTaskJob(next))draftMode.current=false;setJob(current=>({...next,capability_id:next.capability_id ?? (current?.id===next.id ? current.capability_id : undefined)}));}} />

@@ -1,5 +1,22 @@
 # Hosted deployment and helper operations
 
+## Mobile Operations 1.0.48
+
+Install helper 1.0.48 for the expanded browser navigation allowlist (Back,
+Forward, Refresh). The website gates remote controls on this minimum version.
+No database migration or new public connection is needed. New-task reset and
+previous-task dismissal use the existing account-owned JSON draft.
+
+Visible shared status polls every 2 seconds during work and 3 seconds otherwise,
+including paused sessions; hidden clients retain the 60-second fallback. Session
+retry is read-only and healthy context responses clear transient protection errors.
+Viewer actions are bound to their endpoint instance. Missing acknowledgements
+become an explicit uncertain state after 12 seconds, requiring reconnect/inspection;
+commands are never automatically replayed. Float preview is view-only and releases
+manual control first. Canvas video/system PiP is endpoint-local, feature detected,
+and stops its tracks on close. Background preview is marked paused and its
+controller lease is released; cross-app iPhone live video is not guaranteed.
+
 ## Mobile Operations and private browser relay
 
 Apply additive `0013_mobile_operations.sql` **before** deploying this web

@@ -19,7 +19,7 @@ const require=createRequire(import.meta.url);
 const {browserTargetId}=require('../lib/browser-tabs.js');
 const root=resolve('.'),temp=await mkdtemp(join(tmpdir(),'vitriol-mobile-'));
 const store=new MobileStore(),errors=[],wire=[],jobs=new Map(),starts=[];
-let latest=null,serial=0,localIdle=true,relayOffline=false,broker,captures=0;
+let latest=null,serial=0,localIdle=true,relayOffline=false,broker,captures=0,dropCommand=false,dropped=0;
 const browser=await chromium.launch({channel:'chrome',headless:true});
 const courseContext=await browser.newContext({viewport:{width:1000,height:700}});
 await courseContext.route('https://course.invalid/**',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><title>${new URL(route.request().url()).pathname==='/second'?'Second course':'Fixture course'}</title>
@@ -60,7 +60,7 @@ const server=createServer(async(req,res)=>{
         wire.push(raw);
         if(relayOffline){res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"Fixture relay disconnected"}');return;}
         value=await remoteViewer(store.userId,body,store);
-      }else if(path==='/api/operations/context')value={helper:{id:store.helperId,is_online:true,version:'1.0.47',protocol_version:2},session:session(),operatorActivity:activity(),activeJob:latest,learnerEnabled:true,captures:[],recentUrls:[]};
+      }else if(path==='/api/operations/context')value={helper:{id:store.helperId,is_online:true,version:'1.0.48',protocol_version:2},session:session(),operatorActivity:activity(),activeJob:latest,learnerEnabled:true,captures:[],recentUrls:[]};
       else if(path==='/api/operations/activity'){
         if(body.action==='pause')store.paused=true;if(body.action==='resume')store.paused=false;
         value=body.action==='refresh'?{status:'skipped'}:activity();
@@ -86,7 +86,7 @@ await new Promise(done=>server.listen(0,'127.0.0.1',done));
 const url=`http://127.0.0.1:${server.address().port}`;
 const adapter=new RemoteBrowser('http://127.0.0.1:1', {isConnected:()=>true,contexts:()=>[courseContext]});
 const capture=adapter.frame.bind(adapter);adapter.frame=async(...args)=>{captures++;return capture(...args);};
-broker=new RemoteBroker(store.helperId,input=>remoteHelper(store.userId,store.helperId,input,store),()=>localIdle,()=>{},adapter);
+broker=new RemoteBroker(store.helperId,async input=>{const value=await remoteHelper(store.userId,store.helperId,input,store);if(dropCommand){for(const session of value.sessions)if(session.command){session.command=null;dropCommand=false;dropped++;break;}}return value;},()=>localIdle,()=>{},adapter);
 broker.start();
 async function client(viewport){
   const context=await browser.newContext({viewport});
@@ -100,13 +100,18 @@ async function noOverflow(page){
 try{
   await mkdir('test-results/mobile-operations',{recursive:true});
   const desktop=await client({width:1365,height:1000}),mobile=await client({width:390,height:844});
-  await desktop.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course-0');
+  await desktop.locator('#guided-course-tab').selectOption('course-0');
   const goal='Read the fixture lessons, then ask which topic to open.';
-  await desktop.getByRole('textbox',{name:/What would you like to achieve/}).fill(goal);
-  await expect(mobile.getByRole('combobox',{name:'Course tab',exact:true})).toHaveValue('course-0');
-  await expect(mobile.getByRole('textbox',{name:/What would you like to achieve/})).toHaveValue(goal);
-  await mobile.getByRole('textbox',{name:/What would you like to achieve/}).fill(goal+' Mobile edit.');
-  await expect(desktop.getByRole('textbox',{name:/What would you like to achieve/})).toHaveValue(goal+' Mobile edit.');
+  await desktop.getByLabel(/What would you like to achieve/).fill(goal);
+  await expect(mobile.locator('#guided-course-tab')).toHaveValue('course-0');
+  await expect(mobile.getByLabel(/What would you like to achieve/)).toHaveValue(goal);
+  await mobile.getByLabel(/What would you like to achieve/).fill(goal+' Mobile edit.');
+  await expect(desktop.getByLabel(/What would you like to achieve/)).toHaveValue(goal+' Mobile edit.');
+  store.paused=true;
+  await expect(desktop.getByRole('button',{name:'Resume session',exact:true})).toBeVisible({timeout:6000});
+  await expect(mobile.getByRole('button',{name:'Resume session',exact:true})).toBeVisible({timeout:6000});
+  await desktop.getByRole('button',{name:'Resume session',exact:true}).click();
+  await expect(mobile.getByRole('button',{name:'Resume session',exact:true})).toBeHidden({timeout:6000});
   await noOverflow(mobile);await noOverflow(desktop);
   await mobile.screenshot({path:'test-results/mobile-operations/task-390.png',fullPage:true});
   await desktop.screenshot({path:'test-results/mobile-operations/task-desktop.png',fullPage:true});
@@ -122,7 +127,12 @@ try{
   await expect(mobile.getByRole('button',{name:'Scroll down',exact:true})).toBeDisabled();
   await expect(mobile.getByRole('combobox',{name:'Browser tab',exact:true})).toBeEnabled();
   await mobile.getByRole('combobox',{name:'Browser tab',exact:true}).selectOption(tabIds[1]);
-  await expect(desktop.getByRole('combobox',{name:'Course tab',exact:true})).toHaveValue('course-1',{timeout:12000});
+  await expect(desktop.locator('#guided-course-tab')).toHaveValue('course-1',{timeout:12000});
+  await mobile.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});document.dispatchEvent(new Event('visibilitychange'));});
+  await expect.poll(()=>store.remote.size,{timeout:6000}).toBe(0);
+  await expect(desktop.getByRole('alert').filter({hasText:/connection|disconnected|unavailable/i})).toHaveCount(0);
+  await mobile.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});document.dispatchEvent(new Event('visibilitychange'));});
+  await expect(mobile.getByRole('img',{name:/Live view/})).toBeVisible({timeout:12000});
   await desktop.close(); // Private broker is independent of desktop Operations.
   await expect(mobile.getByRole('combobox',{name:'Browser tab',exact:true})).toBeEnabled();
   await mobile.getByRole('combobox',{name:'Browser tab',exact:true}).selectOption(tabIds[0]);
@@ -151,7 +161,7 @@ try{
   await mobile.screenshot({path:'test-results/mobile-operations/browser-390.png',fullPage:true});
   for(const viewport of [{width:844,height:390},{width:1365,height:1000}]){
     const page=await client(viewport);
-    await expect(page.getByRole('textbox',{name:/What would you like to achieve/})).toHaveValue(goal+' Mobile edit.');
+    await expect(page.getByLabel(/What would you like to achieve/)).toHaveValue(goal+' Mobile edit.');
     await page.getByRole('button',{name:'View Browser',exact:true}).click();
     await expect(page.getByRole('img',{name:/Live view/})).toBeVisible({timeout:12000});
     await noOverflow(page);
@@ -159,6 +169,37 @@ try{
     expect(await page.getByRole('button',{name:'Take control',exact:true}).evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
     await page.close();
   }
+  await expect(mobile.getByRole('button',{name:'Float preview',exact:true})).toBeEnabled();
+  await mobile.getByRole('button',{name:'Float preview',exact:true}).click();
+  await expect(mobile.getByRole('button',{name:'Expand browser preview',exact:true})).toBeVisible();
+  await expect(mobile.getByRole('button',{name:'Task',exact:true})).toHaveAttribute('aria-pressed','true');
+  await expect.poll(()=>store.helper.remote_session_id,{timeout:8000}).toBe(null);
+  await mobile.getByRole('button',{name:'Expand browser preview',exact:true}).click();
+  await expect(mobile.getByRole('button',{name:'Take control',exact:true})).toBeEnabled({timeout:12000});
+  await mobile.getByRole('button',{name:'Take control',exact:true}).click();
+  await expect(mobile.getByText('You have manual control',{exact:true})).toBeVisible({timeout:12000}).catch(async error=>{console.log('FLOAT DEBUG',await mobile.locator('body').innerText(),JSON.stringify(store.helper));throw error;});
+  let releaseOld;const oldResponse=new Promise(done=>{releaseOld=done;});let holdInput=true;
+  await mobile.route('**/api/operations/remote',async route=>{
+    if(holdInput&&route.request().postDataJSON()?.action==='input'){holdInput=false;const response=await route.fetch();await oldResponse;await route.fulfill({response});}
+    else await route.continue();
+  });
+  await expect(mobile.getByRole('button',{name:'Scroll down',exact:true})).toBeEnabled();
+  await mobile.getByRole('button',{name:'Scroll down',exact:true}).click();
+  await expect.poll(()=>holdInput).toBe(false);
+  await mobile.getByRole('button',{name:'Reconnect',exact:true}).click();
+  await expect(mobile.getByText('View only',{exact:true})).toBeVisible({timeout:12000});
+  releaseOld();
+  await expect(mobile.getByRole('button',{name:'Take control',exact:true})).toBeEnabled({timeout:12000});
+  await mobile.unroute('**/api/operations/remote');
+  await mobile.getByRole('button',{name:'Take control',exact:true}).click();
+  await expect(mobile.getByText('You have manual control',{exact:true})).toBeVisible({timeout:12000});
+  dropCommand=true;
+  await expect(mobile.getByRole('button',{name:'Scroll down',exact:true})).toBeEnabled();
+  await mobile.getByRole('button',{name:'Scroll down',exact:true}).click();
+  await expect(mobile.getByRole('alert').filter({hasText:'last action could not be confirmed'})).toBeVisible({timeout:18000});
+  expect(dropped).toBe(1);
+  await mobile.getByRole('button',{name:'Reconnect',exact:true}).click();
+  await expect(mobile.getByText('View only',{exact:true})).toBeVisible({timeout:12000});
   relayOffline=true;
   await expect(mobile.getByRole('alert')).toContainText('Fixture relay disconnected',{timeout:12000});
   await expect(mobile.getByRole('button',{name:'Scroll down',exact:true})).toBeDisabled();
@@ -166,16 +207,23 @@ try{
   await expect(mobile.getByRole('img',{name:/Live view/})).toBeVisible({timeout:12000});
   await expect(mobile.getByText('View only',{exact:true})).toBeVisible();
   await mobile.getByRole('button',{name:'Task',exact:true}).click();
-  await expect(mobile.getByRole('textbox',{name:/What would you like to achieve/})).toHaveValue(goal+' Mobile edit.');
+  await expect(mobile.getByLabel(/What would you like to achieve/)).toHaveValue(goal+' Mobile edit.');
+  await mobile.getByRole('button',{name:'Close browser preview',exact:true}).click();
   await expect.poll(()=>store.remote.size,{timeout:6000}).toBe(0);
   const atClose=captures;await new Promise(done=>setTimeout(done,2500));expect(captures-atClose).toBeLessThanOrEqual(1);
+  const observer=await client({width:1365,height:1000});
+  await expect(observer.getByLabel(/What would you like to achieve/)).toHaveValue(goal+' Mobile edit.');
+  await mobile.getByRole('button',{name:'New task',exact:true}).click();
+  await expect(observer.getByRole('heading',{name:'Vitriol has a question',exact:true})).toHaveCount(0,{timeout:6000});
+  await expect(observer.getByLabel(/What would you like to achieve/)).toHaveValue('Read the course material, follow its topics and panels, and retain it for later questions.');
+  await observer.close();
   latest=null;
   store.sessionId='33333333-3333-4333-8333-333333333333';
-  await expect(mobile.getByRole('combobox',{name:'Course tab',exact:true})).toHaveValue('');
+  await expect(mobile.locator('#guided-course-tab')).toHaveValue('');
   await expect(mobile.getByLabel(/What would you like to achieve/)).toHaveValue('Read the course material, follow its topics and panels, and retain it for later questions.');
   await expect(mobile.getByRole('heading',{name:'Vitriol has a question',exact:true})).toHaveCount(0);
   const freshDesktop=await client({width:1365,height:1000});
-  await expect(freshDesktop.getByRole('combobox',{name:'Course tab',exact:true})).toHaveValue('');
+  await expect(freshDesktop.locator('#guided-course-tab')).toHaveValue('');
   await expect(freshDesktop.getByLabel(/What would you like to achieve/)).toHaveValue('Read the course material, follow its topics and panels, and retain it for later questions.');
   await freshDesktop.close();
   expect(store.draft.draft).toEqual({});

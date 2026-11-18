@@ -16,14 +16,14 @@ export function useOperatorActivity(helperId: string) {
     serverVersion.current=Date.parse(value.serverNow);
     const left=Math.max(0,Date.parse(value.expiresAt)-Date.parse(value.serverNow));
     deadline.current=Date.now()+left; isPaused.current=value.paused;
-    setPaused(value.paused); setRemaining(left); setReady(true);
+    setPaused(value.paused); setRemaining(left); setReady(true); setError('');
   },[]);
   const send = useCallback(async(action:'check'|'activity'|'resume'|'pause') => {
     try {
       const response=await fetch('/api/operations/activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({helperId,action}),signal:AbortSignal.timeout(15_000)});
       const value=await readJsonResponse<OperatorActivity>(response,'Could not update session protection.');
       sync(value); setError(''); return value;
-    } catch (cause) {setError(cause instanceof Error?cause.message:'Could not update session protection.');return null;}
+    } catch (cause) {if(document.visibilityState!=='hidden')setError(cause instanceof Error?cause.message:'Could not update session protection.');return null;}
   },[helperId,sync]);
   const pause = useCallback(async()=>{if(controlLock.current)return;controlLock.current=true;setPending(true);pausePending.current=true;isPaused.current=true;setPaused(true);try {await send('pause');} finally {pausePending.current=false;controlLock.current=false;setPending(false);}},[send]);
   const expire = useCallback(async()=>{isPaused.current=true;setPaused(true);await send('check');},[send]);
@@ -50,5 +50,5 @@ export function useOperatorActivity(helperId: string) {
     },1000);
     return()=>{clearInterval(timer);clearTimeout(trailing);events.forEach(name=>window.removeEventListener(name,activity));};
   },[send,expire]);
-  return {pending,ready,paused,remainingMs:remaining,warning:!paused&&remaining<=OPERATOR_WARNING_MS,error,sync,pause,resume};
+  return {pending,ready,paused,remainingMs:remaining,warning:!paused&&remaining<=OPERATOR_WARNING_MS,error,sync,pause,resume,check:()=>send('check')};
 }

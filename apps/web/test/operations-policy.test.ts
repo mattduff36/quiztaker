@@ -4,11 +4,11 @@ import { idlePhase, OPERATOR_IDLE_MS, operationsPollDelay } from '../src/lib/ope
 
 test('polling follows active work and slows down while idle, hidden or disconnected',()=>{
   const state={active:false,visible:true,paused:false,failed:false};
-  assert.equal(operationsPollDelay(state),15_000);
-  assert.equal(operationsPollDelay({...state,active:true}),3_000);
+  assert.equal(operationsPollDelay(state),3_000);
+  assert.equal(operationsPollDelay({...state,active:true}),2_000);
   assert.equal(operationsPollDelay({...state,active:true,visible:false}),60_000);
-  assert.equal(operationsPollDelay({...state,paused:true}),60_000);
-  assert.equal(operationsPollDelay({...state,failed:true}),30_000);
+  assert.equal(operationsPollDelay({...state,paused:true}),3_000);
+  assert.equal(operationsPollDelay({...state,failed:true}),5_000);
 });
 test('inactivity warns after 28 minutes and pauses after 30',()=>{
   assert.equal(OPERATOR_IDLE_MS,1_800_000);

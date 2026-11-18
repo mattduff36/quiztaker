@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createRemoteKeys,deriveRemoteKey,sealRemote,openRemote,validSealedRemote,assertRemoteInput,safeRemoteUrl,supportsRemoteHelper} from '../dist/remote.js';
 test('live browser requires a compatible installed helper',()=>{
-  for(const version of [undefined,'1.0.46','1.0.8','unknown'])assert.equal(supportsRemoteHelper(version),false);
-  for(const version of ['1.0.47','1.0.48','1.1.0','2.0.0'])assert.equal(supportsRemoteHelper(version),true);
+  for(const version of [undefined,'1.0.47','1.0.46','1.0.8','unknown'])assert.equal(supportsRemoteHelper(version),false);
+  for(const version of ['1.0.48','1.1.0','2.0.0'])assert.equal(supportsRemoteHelper(version),true);
 });
 const context={helperId:'helper',sessionId:'viewer-session',clientId:'mobile'};
 test('ECDH endpoints encrypt inputs; AAD, expiry, sequence, direction and ciphertext tampering fail closed',async()=>{
@@ -31,6 +31,7 @@ test('input has an explicit narrow allowlist, bounded text, safe geometry and HT
     {type:'scroll',x:0,y:2001},{type:'type',text:'x'.repeat(4001)},{type:'navigate',url:'https://user:password@example.com'}])
     assert.throws(()=>assertRemoteInput({...base,...action}));
   assertRemoteInput({...base,type:'key',key:'Tab'});
+  for(const type of ['back','forward','reload'])assertRemoteInput({...base,type});
   for(const url of ['http://example.com','https://127.0.0.1','https://[::1]','https://localhost','https://x.local','https://example.com:8443','javascript:alert(1)'])assert.equal(safeRemoteUrl(url),false,url);
   assert.equal(safeRemoteUrl('https://course.invalid/lesson'),true);
 });

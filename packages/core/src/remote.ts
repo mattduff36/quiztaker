@@ -1,11 +1,11 @@
 /** Browser-safe, bounded remote protocol. Private keys and plaintext never enter the relay. */
 export const REMOTE_VERSION = 1;
-export const REMOTE_HELPER_MIN_VERSION = '1.0.47';
+export const REMOTE_HELPER_MIN_VERSION = '1.0.48';
 export function supportsRemoteHelper(version: string | undefined): boolean {
   const match=/^(\d+)\.(\d+)\.(\d+)$/.exec(version||'');
   if(!match)return false;
   const major=Number(match[1]),minor=Number(match[2]),patch=Number(match[3]);
-  return major>1 || (major===1 && (minor>0 || patch>=47));
+  return major>1 || (major===1 && (minor>0 || patch>=48));
 }
 export const REMOTE_LEASE_MS = 15_000;
 export const REMOTE_FRAME_MS = 10_000;
@@ -20,6 +20,7 @@ export type RemoteFrame = {
   capturedAt: number; manual: boolean; message?: string;
 };
 export type RemoteAction =
+  | { type: 'back' | 'forward' | 'reload' }
   | { type: 'tap'; x: number; y: number }
   | { type: 'scroll'; x: number; y: number }
   | { type: 'type'; text: string }
@@ -100,6 +101,7 @@ export function assertRemoteInput(value: unknown): asserts value is RemoteInput 
     || !Number.isFinite(v.geometry.dpr) || !Number.isFinite(v.geometry.scrollX) || !Number.isFinite(v.geometry.scrollY)
     || typeof v.geometry.url !== 'string' || v.geometry.url.length > 20_000) throw new Error('Invalid remote geometry');
   switch (v.type) {
+    case 'back': case 'forward': case 'reload': break;
     case 'tap':
       if (!Number.isFinite(v.x) || !Number.isFinite(v.y) || v.x < 0 || v.y < 0 || v.x >= v.geometry.width || v.y >= v.geometry.height) throw new Error('Tap is outside the viewport');
       break;

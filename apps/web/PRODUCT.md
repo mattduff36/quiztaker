@@ -45,3 +45,23 @@ a disconnected helper. Closing/hiding the viewer releases control or lets its
 initiating Operations page to remain open; an acknowledged helper job continues
 independently. The owner-paused Electro/Mechanical assessment is not part of
 implementation verification.
+
+## Mobile running view (1.0.48)
+
+- Acknowledged work focuses on current activity, Stop and expandable steering.
+  Course/goal, task administration, recent descriptive helper output, remembered
+  conversation and coverage remain available without dominating the running view.
+- All four service indicators fit in one row on a narrow phone. Full state and
+  recovery details remain in accessible labels and the desktop presentation.
+- Visible Operations reconciles shared pause/task state within a few seconds;
+  successful server snapshots clear transient protection warnings. Retry checks
+  connectivity and never silently resumes automation.
+- Back, Forward and Refresh require the same exclusive manual-control lease as
+  other browser inputs. They operate the selected desktop tab without changing
+  window geometry or zoom.
+- Float preview keeps a read-only browser image alongside Task. System pop-out
+  uses a locally generated video of the decrypted preview where supported; it
+  is not a separate capture service or recording. iPhone/background restrictions
+  can suspend updates. Hidden previews explicitly show Paused; they release
+  manual control rather than retaining authority in another app. Always inspect
+  a fresh image after returning. Native iPhone acceptance remains device testing.

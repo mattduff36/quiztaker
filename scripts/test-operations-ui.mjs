@@ -80,7 +80,7 @@ function reply(path,method,body,now,s){
       if(s.recordingFinished&&!s.waitForSaving){job.status='completed';job.result={ok:true,result:{folder:'C:/Fixtures/recording',pages:3,frames:7}};}
       return{job,events:s.waitForRecording ? [] : [{data:{text:'QUICK_SCRAPE_READY {}\n'}}],artifacts:[]};
     }
-if(job&&job.capability_id!==s.holdCapability&&job.status!=='failed')job.status='completed';if(job?.capability_id==='quiz-learn'&&job.status!=='failed'&&s.questionOutput){job.status='awaiting-input';job.outcome={verified:false,status:'needs-user-input'};}return{job,events:job?.capability_id==='quiz-learn'?[{data:{text:s.questionOutput}}]:[],artifacts:[]};}
+if(job&&job.capability_id!==s.holdCapability&&job.status!=='failed')job.status='completed';if(job?.capability_id==='quiz-learn'&&job.status!=='failed'&&s.questionOutput){job.status='awaiting-input';job.outcome={verified:false,status:'needs-user-input'};}return{job,events:job?.capability_id==='quiz-learn'?[{data:{text:s.questionOutput||s.progressOutput||''}}]:[],artifacts:[]};}
   throw Error(`Unexpected fixture request: ${method} ${path}`);
 }
 let servedState=state();
@@ -99,6 +99,7 @@ const url=`http://127.0.0.1:${server.address().port}`;
 const browser=await chromium.launch({channel:'chrome',headless:true});
 let passed=false;
 try{
+  if(!process.argv.includes('--focus-running')){
   // Stage matrix uses isolated offline fixtures, including delayed requests and remounts.
   for(const viewport of [{width:1365,height:1000},{width:390,height:844}]) {
     // The selected action itself authorizes the same signed plan flow.
@@ -169,9 +170,9 @@ try{
       }
       await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');
       const goal='Take the Firmware assessment; do not retake Device Features.';
-      await page.getByRole('textbox',{name:/What would you like to achieve/}).fill(goal);
+      await page.getByLabel(/What would you like to achieve/).fill(goal);
       release();
-      await expect(page.getByRole('textbox',{name:/What would you like to achieve/})).toHaveValue(goal);
+      await expect(page.getByLabel(/What would you like to achieve/)).toHaveValue(goal);
       await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
       await expect.poll(()=>learnerInput?.objective,{timeout:20_000}).toBe(goal);
       expect(learnerInput.mode).toBe('quiz');
@@ -228,8 +229,8 @@ try{
       }
       if(scenario==='absent'||scenario==='disconnected')await expect(page.getByRole('button',{name:'Start browser',exact:true})).toBeEnabled();
       if(scenario==='stale'){await expect(page.getByRole('heading',{name:'Browser check needed',exact:true})).toBeVisible();expect(fixture.refreshes).toBe(0);}
-      if(scenario==='no-course'){await expect(page.getByText('No course page is open yet.',{exact:false})).toBeVisible();await expect(page.getByRole('textbox',{name:/What would you like to achieve/})).toBeHidden();}
-      if(scenario==='blank-goal'){await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');await page.getByRole('textbox',{name:/What would you like to achieve/}).fill('');await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeDisabled();}
+      if(scenario==='no-course'){await expect(page.getByText('No course page is open yet.',{exact:false})).toBeVisible();await expect(page.getByLabel(/What would you like to achieve/)).toBeHidden();}
+      if(scenario==='blank-goal'){await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');await page.getByLabel(/What would you like to achieve/).fill('');await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeDisabled();}
       if(scenario==='old-finished'){await expect(page.getByRole('heading',{name:'Work on a course',exact:true})).toBeVisible();await expect(page.getByRole('heading',{name:'Current task',exact:true})).toBeHidden();await expect(page.getByText(/Marked completed by you/)).toBeHidden();await expect(page.getByText('Task recorded',{exact:true})).toBeHidden();}
       if(scenario==='old-finished-start'){await page.getByRole('button',{name:'Start browser',exact:true}).click();await expect.poll(()=>fixture.starts).toBe(1);await page.clock.fastForward(31_000);await expect(page.getByText(/Marked completed by you/)).toBeHidden();await expect(page.getByRole('heading',{name:'Current task',exact:true})).toBeHidden();}
       if(scenario.startsWith('start-')) {
@@ -372,7 +373,7 @@ try{
     await expect(page.getByRole('button',{name:'Retake Device Features',exact:true})).toBeHidden();
     const goal='Take the Firmware assessment; do not retake Device Features.';
     await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');
-    await page.getByRole('textbox',{name:/What would you like to achieve/}).fill(goal);
+    await page.getByLabel(/What would you like to achieve/).fill(goal);
     fixture.questionOutput='';
     await page.getByRole('button',{name:'Resume from current page',exact:true}).click();
     await expect.poll(()=>learnerInput?.objective,{timeout:20_000}).toBe(goal);
@@ -445,7 +446,7 @@ try{
     });
     await page.goto(url);await page.getByRole('button',{name:'Resume session',exact:true}).click();
     await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');
-    await page.getByRole('textbox',{name:/What would you like to achieve/}).fill('Read this course');
+    await page.getByLabel(/What would you like to achieve/).fill('Read this course');
     await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
     await expect.poll(()=>queued).toBe(1);
     if (transition === 'new-task') {
@@ -491,7 +492,7 @@ try{
     await expect(select).toBeEnabled();
     await expect(select.getByRole('option')).toHaveCount(2);
     await select.selectOption('course');
-    const goal=page.getByRole('textbox',{name:/What would you like to achieve/});
+    const goal=page.getByLabel(/What would you like to achieve/);
     const mode=page.getByRole('combobox',{name:'Course activity',exact:true});
     await expect(mode).toHaveValue('independent');
     await expect(goal).toHaveValue(/Read the course material/);
@@ -561,6 +562,7 @@ try{
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
     await expect(page.getByText('This page is a quiz.',{exact:false})).toBeVisible();
+    await page.getByText('Course and goal',{exact:true}).click();
     await mode.selectOption('coordinate');
     await expect(page.getByText('This page is a quiz.',{exact:false})).toHaveCount(0);
     await mode.selectOption('independent');
@@ -651,6 +653,7 @@ try{
     await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
     await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
     await expect.poll(()=>fixture.latest?.capability_id).toBe('detect');
+    await page.getByText('Task options',{exact:true}).click();
     await expect(page.getByText('Inspect course page: Working',{exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:'Mark failed',exact:true})).toBeEnabled();
     await page.getByRole('button',{name:'Mark failed',exact:true}).click();
@@ -681,6 +684,52 @@ try{
     console.log(`PASS ${viewport.width}px: Normal/Advanced preserve state and keyboard focus; compact service status handles stale/failure/recovery; guided start, automatic refresh and idle protection.`);
     await page.close();
   }
+  }
+  {
+    const page=await browser.newPage({viewport:{width:390,height:844}}),fixture=state();fixture.last=Date.now();
+    let failCheck=true,resumes=0;
+    await page.route('**/api/**',async route=>{
+      const req=route.request(),path=new URL(req.url()).pathname,body=req.postDataJSON()||{};
+      if(path==='/api/operations/activity'&&body.action==='resume')resumes++;
+      if(path==='/api/operations/activity'&&body.action==='check'&&failCheck){failCheck=false;await new Promise(done=>setTimeout(done,150));return route.fulfill({status:503,json:{error:'Temporary session protection check'}});}
+      const {__status,...json}=reply(path,req.method(),body,Date.now(),fixture);await route.fulfill({status:__status||200,json});
+    });
+    await page.goto(url);
+    const warning=page.getByText('Temporary session protection check',{exact:false});
+    await expect(warning).toBeVisible();
+    await expect(warning).toBeHidden({timeout:6000});
+    failCheck=true;await page.reload();await expect(warning).toBeVisible();
+    await page.getByRole('button',{name:'Retry session connection',exact:true}).click();
+    await expect(warning).toBeHidden();expect(resumes).toBe(0);
+    await page.close();
+  }
+  console.log('PASS healthy context clears a transient session warning; Retry checks without resuming.');
+  for(const viewport of [{width:390,height:844},{width:844,height:390},{width:1365,height:1000}]){
+    const page=await browser.newPage({viewport}),fixture=state();
+    fixture.memory={id:'fixture-memory',objective:null,history:[]};
+    await page.route('**/api/**',async route=>{const req=route.request();const {__status,...json}=reply(new URL(req.url()).pathname,req.method(),req.postDataJSON()||{},Date.now(),fixture);await route.fulfill({status:__status||200,json});});
+    await page.goto(url);
+    await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');
+    await expect(page.getByLabel('Hint or change of direction',{exact:true})).toBeVisible();
+    fixture.holdCapability='quiz-learn';fixture.task={id:'mobile-running',status:'running',capability_id:'quiz-learn'};fixture.latest=fixture.task;fixture.jobs.set(fixture.task.id,fixture.task);
+    fixture.progressOutput='LEARNER_PROGRESS {"message":"Reading the current question."}\nLEARNER_PROGRESS {"message":"Set and verified five answers."}\n';
+    await expect(page.getByText('Set and verified five answers.',{exact:true})).toBeVisible({timeout:10000});
+    await expect(page.getByRole('combobox',{name:'Course activity',exact:true})).toBeHidden();
+    await expect(page.getByRole('button',{name:'Mark complete',exact:true})).toBeHidden();
+    await expect(page.getByRole('button',{name:'Stop',exact:true})).toBeVisible();
+    await expect(page.getByText('Give a hint or steer',{exact:true})).toBeVisible();
+    const stats=page.getByRole('navigation',{name:'Service status'});
+    const positions=await stats.locator('li').evaluateAll(items=>items.map(item=>({y:item.getBoundingClientRect().top,right:item.getBoundingClientRect().right})));
+    expect(positions.length).toBe(4);expect(new Set(positions.map(item=>item.y)).size).toBe(1);expect(Math.max(...positions.map(item=>item.right))).toBeLessThanOrEqual(viewport.width);
+    await page.screenshot({path:join(artifacts,`running-${viewport.width}.png`),fullPage:true});
+    await page.getByText('Give a hint or steer',{exact:true}).click();
+    await expect(page.getByLabel('Hint or change of direction',{exact:true})).toBeVisible();
+    await page.getByText('Recent activity and helper output',{exact:true}).click();
+    await expect(page.getByText('Reading the current question.',{exact:true})).toBeVisible();
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await page.close();
+  }
+  console.log('PASS focused running layout, expandable steering/output and all four status items in one line at 390/844/1365px.');
   passed=true;
 }finally{
   await browser.close();

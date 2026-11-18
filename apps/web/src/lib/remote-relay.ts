@@ -57,7 +57,7 @@ export async function remoteViewer(userId: string, input: {
       await sql(`update helpers set remote_session_id=null where id=$1 and user_id=$2 and remote_session_id=$3`,[input.helperId,userId,session.id]);
       await sql('update remote_sessions set ready=false,command=null where id=$1 and user_id=$2',[session.id,userId]);
       if(input.action==='close') await sql('delete from remote_sessions where id=$1 and user_id=$2',[session.id,userId]);
-      return {closed:input.action==='close',manual:false};
+      return {closed:input.action==='close',manual:false,controlBlocked:leaseLive};
     }
     if (input.action === 'control') {
       if (leaseLive && !mine) throw new Error('Another device has manual control.');
@@ -82,7 +82,7 @@ export async function remoteViewer(userId: string, input: {
       return {accepted:true};
     }
     return {sessionId:session.id,helperKey:session.helper_key,frame:session.frame,acknowledgedSeq:Number(session.acknowledged_seq),
-      manual:mine && session.ready, reserved:mine || input.action==='control',status:session.status};
+      manual:mine && session.ready, reserved:mine || input.action==='control',controlBlocked:leaseLive&&!mine,status:session.status};
   });
 }
 export async function remoteHelper(userId:string,helperId:string,input:{

@@ -76,6 +76,9 @@ export class RemoteBrowser {
     if(!viewOnly)await this.protect(page);
     if(!authorized())throw new Error('Manual control expired');
     switch(input.type) {
+      case 'back':await page.goBack({waitUntil:'commit',timeout:5000});break;
+      case 'forward':await page.goForward({waitUntil:'commit',timeout:5000});break;
+      case 'reload':await page.reload({waitUntil:'commit',timeout:5000});break;
       case 'tap':await page.mouse.click(input.x,input.y);break;
       case 'scroll':await page.mouse.move(input.geometry.width/2,input.geometry.height/2);await page.mouse.wheel(input.x,input.y);break;
       case 'type':await page.keyboard.insertText(input.text);break;

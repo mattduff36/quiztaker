@@ -1,5 +1,6 @@
 export type SharedQuestion={question:string;options?:string[];next?:string;model?:boolean;targetId?:string;cdpTargetId?:string;sessionId?:string;url?:string;intent?:'read'|'quiz'|'read-and-assess'|'coordinate'};
 export type OperationsDraft={
+  taskResetId:string; dismissedTaskId:string|null;
   selectedTarget:string; selectedCdpTarget:string; objective:string; objectiveEdited:boolean; mode:'independent'|'coordinate'|'quick';
   chosenIntent:'read'|'quiz'|'read-and-assess'|null;
   answer:string; guidance:string; question:SharedQuestion|null;
