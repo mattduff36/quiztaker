@@ -7,9 +7,10 @@ export const draftPatchSchema=z.object({
   selectedTarget:z.string().max(200),selectedCdpTarget:z.string().max(200),objective:z.string().max(1000),objectiveEdited:z.boolean(),
   chosenIntent:z.enum(['read','quiz','read-and-assess']).nullable(),
   mode:z.enum(['independent','coordinate','quick']),answer:z.string().max(1400),guidance:z.string().max(2000),
-  question:z.object({question:z.string().max(4000),options:z.array(z.string().max(1000)).max(30).optional(),
+  question:z.object({kind:z.literal('question').optional(),question:z.string().max(4000),options:z.array(z.string().max(1000)).max(30).optional(),
     next:z.string().max(2000).optional(),model:z.boolean().optional(),targetId:z.string().max(200).optional(),cdpTargetId:z.string().max(200).optional(),
-    sessionId:z.string().max(200).optional(),url:z.string().max(10000).optional(),intent:z.enum(['read','quiz','read-and-assess','coordinate']).optional()}).strict().nullable(),
+    sessionId:z.string().max(200).optional(),url:z.string().max(10000).optional(),intent:z.enum(['read','quiz','read-and-assess','coordinate']).optional()}).strict()
+    .transform(value=>{const question={...value};delete question.kind;return question;}).nullable(),
 }).partial().strict();
 type DraftRow={revision:number;session_id:string|null;client_id:string|null;draft:Partial<OperationsDraft>;workflow_id:string|null;workflow_client_id:string|null;workflow_until:string|null};
 export async function sharedOperations(userId:string,input:{

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { classifyOutcome } from '../dist/index.js';
+import { classifyOutcome, diagnoseRun } from '../dist/index.js';
 
 test('packaged browser start is verified from its connection result', () => {
   const outcome = classifyOutcome({ script: 'start-cdp-browser.js', code: 0, output: '{"connected":true,"pid":123}' });
@@ -39,4 +39,15 @@ test('learner questions pause without claiming completion or failure', () => {
     assert.equal(classifyOutcome({script:'pw-learn-quiz.js',code:1,output:invalid}).outcome, 'failure');
   }
   assert.equal(classifyOutcome({script:'pw-scorm-complete.js',code:1,output}).outcome, 'failure');
+});
+
+test('disabled course actions have an explicit diagnosis without assumed prerequisites', () => {
+  const output = 'AUTOMATION_RESULT ' + JSON.stringify({ completed: 0, total: 1, failures: [
+    { title: 'Unavailable course', reason: 'action-disabled', evidence: ['The launch control is disabled.'] },
+  ] });
+  const diagnosis = diagnoseRun({ script: 'pw-cert-batch.js', code: 1, output });
+  assert.equal(diagnosis.likelyCause.code, 'action-disabled');
+  assert.equal(diagnosis.likelyCause.label, 'The course action is disabled');
+  assert.match(diagnosis.likelyCause.explanation, /without explaining a prerequisite/);
+  assert.match(diagnosis.recommendations[0], /becomes enabled/);
 });

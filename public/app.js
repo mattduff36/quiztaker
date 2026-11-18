@@ -265,7 +265,9 @@ async function openCourseSelect(options = {}) {
     row.querySelector('.cs-title').textContent = item.title;
     row.querySelector('.cs-action').textContent = item.blockedReason === 'prerequisites-incomplete'
       ? 'Prerequisites incomplete'
-      : 'Separate learning requirement';
+      : item.blockedReason === 'action-disabled'
+        ? 'Course action disabled'
+        : 'Separate learning requirement';
     row.title = (item.blockingEvidence || []).join(' • ');
     listBox.appendChild(row);
   });

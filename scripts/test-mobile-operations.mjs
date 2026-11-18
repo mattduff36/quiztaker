@@ -2,6 +2,7 @@
  * Run with tsx and the web tsconfig. No live helper, port 9222, credentials or DB.
  */
 import {createServer} from 'node:http';
+import {randomUUID} from 'node:crypto';
 import {mkdtemp,readFile,writeFile,rm,mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
@@ -11,7 +12,7 @@ import postcss from 'postcss';
 import tailwind from '@tailwindcss/postcss';
 import {chromium,expect} from '@playwright/test';
 import {MobileStore} from '../apps/web/test/fixtures/mobile-store.ts';
-import {sharedOperations,idempotentOperation,assertSharedWorkflow} from '../apps/web/src/lib/shared-operations-store.ts';
+import {draftPatchSchema,sharedOperations,idempotentOperation,assertSharedWorkflow} from '../apps/web/src/lib/shared-operations-store.ts';
 import {remoteViewer,remoteHelper} from '../apps/web/src/lib/remote-relay.ts';
 import {RemoteBroker} from '../apps/helper/src/remote.ts';
 import {RemoteBrowser} from '../apps/helper/src/remote-browser.ts';
@@ -19,7 +20,8 @@ const require=createRequire(import.meta.url);
 const {browserTargetId}=require('../lib/browser-tabs.js');
 const root=resolve('.'),temp=await mkdtemp(join(tmpdir(),'vitriol-mobile-'));
 const store=new MobileStore(),errors=[],wire=[],jobs=new Map(),starts=[];
-let latest=null,serial=0,localIdle=true,relayOffline=false,broker,captures=0,dropCommand=false,dropped=0;
+let latest=null,localIdle=true,relayOffline=false,broker,captures=0,dropCommand=false,dropped=0;
+let tabRevision=1,tabOrder=[0,1],holdTabRefresh=false,queueTabRefresh=false,detectionType='unknown';
 const browser=await chromium.launch({channel:'chrome',headless:true});
 const courseContext=await browser.newContext({viewport:{width:1000,height:700}});
 await courseContext.route('https://course.invalid/**',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><title>${new URL(route.request().url()).pathname==='/second'?'Second course':'Fixture course'}</title>
@@ -29,14 +31,15 @@ const course=await courseContext.newPage();await course.goto('https://course.inv
 const second=await courseContext.newPage();await second.goto('https://course.invalid/second');
 const tabIds=[await browserTargetId(course),await browserTargetId(second)];
 const geometry=await course.evaluate(()=>({width:innerWidth,height:innerHeight,dpr:devicePixelRatio,x:screenX,y:screenY,outerWidth,outerHeight}));
-const session=()=>({id:store.sessionId,revision:1,cdp_connected:true,updated_at:new Date().toISOString(),tabs:[course,second].map((p,i)=>({
-  targetId:`course-${i}`,cdpTargetId:tabIds[i],index:i,title:i?'Second course':'Fixture course',url:p.url(),fingerprint:`fixture-${i}`,
+const courseTargetId=index=>tabRevision===1?`course-${index}`:`refreshed-${index}`;
+const session=()=>({id:store.sessionId,revision:tabRevision,cdp_connected:true,updated_at:new Date().toISOString(),tabs:tabOrder.map((i,index)=>({
+  targetId:courseTargetId(i),cdpTargetId:tabIds[i],index,title:i?'Second course':'Fixture course',url:[course,second][i].url(),fingerprint:`fixture-${i}`,
 })),detection:null,roster:null});
 const activity=()=>({paused:store.paused,lastActivityAt:new Date().toISOString(),expiresAt:new Date(Date.now()+1800000).toISOString(),serverNow:new Date().toISOString()});
 function makeJob(capability){
   starts.push(capability);
-  const job={id:`job-${++serial}`,capability_id:capability,status:'running',created:Date.now(),
-    result:{ok:true,result:capability==='detect'?{detection:{detected:'unknown',tabIdx:0,url:course.url(),fingerprint:'fixture-0',detail:'Fixture format'}}:{}},
+  const job={id:randomUUID(),capability_id:capability,status:'running',created:Date.now(),
+    result:{ok:true,result:capability==='detect'?{detection:{detected:detectionType,tabIdx:tabOrder.indexOf(0),url:course.url(),fingerprint:'fixture-0',detail:'Fixture format'}}:{}},
     outcome:{verified:false,status:'needs-user-input'}};
   jobs.set(job.id,job);latest=job;store.active=true;return job.id;
 }
@@ -55,7 +58,10 @@ const server=createServer(async(req,res)=>{
       let raw='';for await(const chunk of req)raw+=chunk;
       const body=raw?JSON.parse(raw):{},path=new URL(req.url,'http://fixture.invalid').pathname;
       let value;
-      if(path==='/api/operations/shared')value=await sharedOperations(store.userId,body,store);
+      if(path==='/api/operations/shared'){
+        if(body.patch!==undefined)body.patch=draftPatchSchema.parse(body.patch);
+        value=await sharedOperations(store.userId,body,store);
+      }
       else if(path==='/api/operations/remote'){
         wire.push(raw);
         if(relayOffline){res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"Fixture relay disconnected"}');return;}
@@ -63,7 +69,7 @@ const server=createServer(async(req,res)=>{
       }else if(path==='/api/operations/context')value={helper:{id:store.helperId,is_online:true,version:'1.0.48',protocol_version:2},session:session(),operatorActivity:activity(),activeJob:latest,learnerEnabled:true,captures:[],recentUrls:[]};
       else if(path==='/api/operations/activity'){
         if(body.action==='pause')store.paused=true;if(body.action==='resume')store.paused=false;
-        value=body.action==='refresh'?{status:'skipped'}:activity();
+        value=body.action==='refresh'?(queueTabRefresh?{status:'queued',jobId:makeJob('list-tabs')}:{status:'skipped'}):activity();
       }else if(path==='/api/operations/learning')value={id:null,objective:null,history:[]};
       else if(path==='/api/operations/actions'){
         const response=await idempotentOperation(store.userId,store.helperId,body.requestId,body,async()=>{
@@ -73,7 +79,7 @@ const server=createServer(async(req,res)=>{
         res.writeHead(response.status,{'Content-Type':'application/json'});res.end(await response.text());return;
       }else if(path.startsWith('/api/jobs/')){
         const job=jobs.get(path.split('/').at(-1));
-        if(Date.now()-job.created>350){job.status=job.capability_id==='quiz-learn'?'awaiting-input':'completed';store.active=false;}
+        if(Date.now()-job.created>350&&!(holdTabRefresh&&job.capability_id==='list-tabs')){job.status=job.capability_id==='quiz-learn'?'awaiting-input':'completed';store.active=false;}
         value={job,events:job.capability_id==='quiz-learn'?[{data:{text:'LEARNER_QUESTION '+JSON.stringify({question:'Which fixture topic next?',url:course.url()})}}]:[]};
       }else throw new Error(`Unexpected fixture route ${path}`);
       res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify(value));return;
@@ -89,7 +95,7 @@ const capture=adapter.frame.bind(adapter);adapter.frame=async(...args)=>{capture
 broker=new RemoteBroker(store.helperId,async input=>{const value=await remoteHelper(store.userId,store.helperId,input,store);if(dropCommand){for(const session of value.sessions)if(session.command){session.command=null;dropCommand=false;dropped++;break;}}return value;},()=>localIdle,()=>{},adapter);
 broker.start();
 async function client(viewport){
-  const context=await browser.newContext({viewport});
+  const context=await browser.newContext({viewport,hasTouch:viewport.width<500});
   await context.addCookies([{name:'fixtureAccount',value:'owner',url}]);
   const page=await context.newPage();page.on('pageerror',error=>errors.push(error));
   await page.goto(url);return page;
@@ -100,13 +106,59 @@ async function noOverflow(page){
 try{
   await mkdir('test-results/mobile-operations',{recursive:true});
   const desktop=await client({width:1365,height:1000}),mobile=await client({width:390,height:844});
-  await desktop.locator('#guided-course-tab').selectOption('course-0');
+  const courseButton=(page,index)=>page.locator(`#guided-course-tab button[data-cdp-target-id="${tabIds[index]}"]`);
+  const modeButton=(page,mode)=>page.getByRole('group',{name:'Course activity',exact:true}).locator(`button[data-mode="${mode}"]`);
+  await courseButton(desktop,0).click();
   const goal='Read the fixture lessons, then ask which topic to open.';
   await desktop.getByLabel(/What would you like to achieve/).fill(goal);
-  await expect(mobile.locator('#guided-course-tab')).toHaveValue('course-0');
+  await expect(courseButton(mobile,0)).toHaveAttribute('aria-pressed','true');
   await expect(mobile.getByLabel(/What would you like to achieve/)).toHaveValue(goal);
   await mobile.getByLabel(/What would you like to achieve/).fill(goal+' Mobile edit.');
   await expect(desktop.getByLabel(/What would you like to achieve/)).toHaveValue(goal+' Mobile edit.');
+  await modeButton(mobile,'coordinate').focus();
+  await modeButton(mobile,'coordinate').press('Space');
+  await expect(modeButton(desktop,'coordinate')).toHaveAttribute('aria-pressed','true');
+  await modeButton(desktop,'independent').click();
+  await expect(modeButton(mobile,'independent')).toHaveAttribute('aria-pressed','true');
+  for(const button of [courseButton(mobile,0),modeButton(mobile,'independent')]){
+    expect(await button.evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+  }
+  holdTabRefresh=true;queueTabRefresh=true;
+  await mobile.getByRole('button',{name:'Refresh tabs',exact:true}).click();
+  await expect(mobile.getByRole('button',{name:'Refreshing tabs…',exact:true})).toBeVisible();
+  await expect(courseButton(mobile,1)).toBeEnabled();
+  await courseButton(mobile,1).tap();
+  await modeButton(mobile,'coordinate').tap();
+  await courseButton(mobile,1).focus();
+  tabRevision++;tabOrder=[1,0];
+  await mobile.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await desktop.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await expect(courseButton(mobile,1)).toHaveAttribute('data-target-id','refreshed-1');
+  await expect(courseButton(mobile,1)).toBeFocused();
+  await expect(courseButton(desktop,1)).toHaveAttribute('aria-pressed','true');
+  await expect(courseButton(mobile,1)).toHaveAttribute('aria-pressed','true');
+  await expect(modeButton(desktop,'coordinate')).toHaveAttribute('aria-pressed','true');
+  await expect(mobile.getByLabel(/What would you like to achieve/)).toHaveValue(goal+' Mobile edit.');
+  holdTabRefresh=false;queueTabRefresh=false;tabOrder=[0,1];
+  await expect(mobile.getByRole('button',{name:'Refresh tabs',exact:true})).toBeEnabled({timeout:12000});
+  await modeButton(mobile,'independent').click();
+  await courseButton(mobile,0).click();
+  await expect(courseButton(desktop,0)).toHaveAttribute('aria-pressed','true');
+  await expect(modeButton(desktop,'independent')).toHaveAttribute('aria-pressed','true');
+  detectionType='session-dead';
+  await desktop.getByRole('button',{name:'Inspect and start',exact:true}).click();
+  await expect(mobile.getByRole('heading',{name:'Action needed in the helper browser',exact:true})).toBeVisible({timeout:25000});
+  expect(store.draft.draft.question.question).toContain('sign in');
+  expect(store.draft.draft.question).not.toHaveProperty('kind');
+  await desktop.getByText('Course and goal',{exact:true}).click();
+  await courseButton(desktop,0).click();
+  await modeButton(desktop,'independent').press('Enter');
+  await expect(desktop.getByRole('heading',{name:'Action needed in the helper browser',exact:true})).toBeVisible();
+  await courseButton(desktop,1).click();
+  await courseButton(desktop,0).click();
+  detectionType='unknown';
+  await expect(mobile.getByRole('heading',{name:'Action needed in the helper browser',exact:true})).toHaveCount(0);
+  starts.length=0;
   store.paused=true;
   await expect(desktop.getByRole('button',{name:'Resume session',exact:true})).toBeVisible({timeout:6000});
   await expect(mobile.getByRole('button',{name:'Resume session',exact:true})).toBeVisible({timeout:6000});
@@ -127,7 +179,7 @@ try{
   await expect(mobile.getByRole('button',{name:'Scroll down',exact:true})).toBeDisabled();
   await expect(mobile.getByRole('combobox',{name:'Browser tab',exact:true})).toBeEnabled();
   await mobile.getByRole('combobox',{name:'Browser tab',exact:true}).selectOption(tabIds[1]);
-  await expect(desktop.locator('#guided-course-tab')).toHaveValue('course-1',{timeout:12000});
+  await expect(courseButton(desktop,1)).toHaveAttribute('aria-pressed','true',{timeout:12000});
   await mobile.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});document.dispatchEvent(new Event('visibilitychange'));});
   await expect.poll(()=>store.remote.size,{timeout:6000}).toBe(0);
   await expect(desktop.getByRole('alert').filter({hasText:/connection|disconnected|unavailable/i})).toHaveCount(0);
@@ -136,7 +188,7 @@ try{
   await desktop.close(); // Private broker is independent of desktop Operations.
   await expect(mobile.getByRole('combobox',{name:'Browser tab',exact:true})).toBeEnabled();
   await mobile.getByRole('combobox',{name:'Browser tab',exact:true}).selectOption(tabIds[0]);
-  await expect.poll(()=>store.draft?.draft.selectedTarget,{timeout:12000}).toBe('course-0');
+  await expect.poll(()=>store.draft?.draft.selectedTarget,{timeout:12000}).toBe(courseTargetId(0));
   localIdle=false;
   await mobile.getByRole('button',{name:'Take control',exact:true}).click();
   await expect(mobile.getByText('Waiting for automation to stop',{exact:true})).toBeVisible();
@@ -219,11 +271,11 @@ try{
   await observer.close();
   latest=null;
   store.sessionId='33333333-3333-4333-8333-333333333333';
-  await expect(mobile.locator('#guided-course-tab')).toHaveValue('');
+  await expect(mobile.locator('#guided-course-tab button[aria-pressed="true"]')).toHaveCount(0);
   await expect(mobile.getByLabel(/What would you like to achieve/)).toHaveValue('Read the course material, follow its topics and panels, and retain it for later questions.');
   await expect(mobile.getByRole('heading',{name:'Vitriol has a question',exact:true})).toHaveCount(0);
   const freshDesktop=await client({width:1365,height:1000});
-  await expect(freshDesktop.locator('#guided-course-tab')).toHaveValue('');
+  await expect(freshDesktop.locator('#guided-course-tab button[aria-pressed="true"]')).toHaveCount(0);
   await expect(freshDesktop.getByLabel(/What would you like to achieve/)).toHaveValue('Read the course material, follow its topics and panels, and retain it for later questions.');
   await freshDesktop.close();
   expect(store.draft.draft).toEqual({});

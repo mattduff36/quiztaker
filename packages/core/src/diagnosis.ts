@@ -22,6 +22,12 @@ export interface RunDiagnosis {
 export function reasonDetails(reason?: string) {
   const code = String(reason ?? 'unknown').toLowerCase();
   const known: Record<string, { label: string; confidence: number; explanation: string; recommendation: string }> = {
+    'action-disabled': {
+      label: 'The course action is disabled',
+      confidence: 0.99,
+      explanation: 'The portal disabled the selected course action without explaining a prerequisite or sequence lock. No launch was attempted.',
+      recommendation: 'Review the course availability in the portal, then refresh the roster after its action becomes enabled.',
+    },
     'prerequisites-incomplete': {
       label: 'Required prerequisites are incomplete',
       confidence: 0.99,

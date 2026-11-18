@@ -54,6 +54,14 @@ running learner job and the last browser check was connected but is now old.
 This is not a fresh connection claim. Idle stale checks remain **Check overdue**;
 an explicitly disconnected browser or stale helper is never reported Working.
 
+Operations course tabs and work modes use selectable, keyboard-accessible
+buttons with pressed-state feedback and at least 44px touch targets. Course
+selection follows its stable CDP identity across reordered tab snapshots;
+background tab refreshes do not collapse or lock the setup. Actual running
+tasks still collapse course/goal setup and retain their input locks. Shared
+questions contain only the declared question fields; the server accepts and
+removes the legacy `kind: "question"` field but rejects other unknown fields.
+
 Question-bound matching requires quiz-learn capability6 in the helper and both
 capability registries. Deploy the corresponding web and helper builds together;
 older signed plans cannot authorize the current matching contract. Optional

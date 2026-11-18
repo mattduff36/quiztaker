@@ -1,5 +1,17 @@
 # Hosted deployment and helper operations
 
+## Operations question and selection fixes 1.0.49
+
+Course tabs and work modes use selectable buttons; background tab checks no
+longer collapse setup. Non-model questions contain only shared contract fields.
+The server accepts and removes the legacy `kind: question` marker from already
+open clients while still rejecting unknown fields. No migration is needed.
+Install helper 1.0.49 for the corrected Saba action detection and clearer
+unavailable-action diagnosis. CSS-only disabled split-button wrappers require
+prerequisite/sequence evidence; native and explicit ARIA-disabled controls stay
+blocked. Certification-wide genuine-learning orchestration remains a documented
+follow-up; launch each intended module and verify the overview count afterward.
+
 ## Mobile Operations 1.0.48
 
 Install helper 1.0.48 for the expanded browser navigation allowlist (Back,

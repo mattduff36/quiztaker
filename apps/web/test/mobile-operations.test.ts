@@ -3,11 +3,29 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createRemoteKeys,sealRemote,deriveRemoteKey} from '@quiztaker/core/remote';
 import {remoteViewer,remoteHelper} from '../src/lib/remote-relay';
-import {sharedOperations,idempotentOperation,assertSharedWorkflow,assertPlanWorkflow} from '../src/lib/shared-operations-store';
+import {draftPatchSchema,sharedOperations,idempotentOperation,assertSharedWorkflow,assertPlanWorkflow} from '../src/lib/shared-operations-store';
+import {decideGuidedFlow} from '../src/lib/guided-flow';
 import {SharedDraftReplica} from '../src/lib/operations-shared';
 import {boundedJson} from '../src/lib/bounded-json';
 import {MobileStore} from './fixtures/mobile-store';
 import type {SqlQuery} from '../src/lib/db';
+
+test('shared questions accept current and legacy decisions, strip kind and reject unexpected fields',()=>{
+  for(const detected of ['session-dead','server-assessment','cert-landing']) {
+    const decision=decideGuidedFlow({detected},'read');
+    assert.equal(decision.kind,'question');
+    if(decision.kind!=='question')throw new Error('Expected a question');
+    const question={question:decision.question,next:decision.next,targetId:'course',cdpTargetId:'live-course',
+      sessionId:'session',url:'https://example.invalid/course'};
+    assert.deepEqual(draftPatchSchema.parse({question}),{question});
+    assert.deepEqual(draftPatchSchema.parse({question:{...decision,...question}}),{question});
+    for(const extra of [{kind:'learn'},{unexpected:true},{capability:'scorm-complete'}]) {
+      assert.equal(draftPatchSchema.safeParse({question:{...question,...extra}}).success,false);
+    }
+  }
+  assert.deepEqual(draftPatchSchema.parse({question:null}),{question:null});
+  assert.equal(draftPatchSchema.safeParse({unexpected:true}).success,false);
+});
 
 test('job admission rechecks bound workflow ownership after planning and on fallback requests',async()=>{
   const store=new MobileStore(),clientA=randomUUID(),clientB=randomUUID();

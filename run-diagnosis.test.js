@@ -57,10 +57,22 @@ test('returns no diagnosis for a fully verified batch', () => {
     total: 2,
     failures: [],
   });
+
   assert.equal(diagnoseRun({
     script: 'pw-cert-batch.js',
     code: 0,
     output,
     outcome: { outcome: 'success' },
   }), null);
+});
+
+test('diagnoses unexplained disabled actions without inventing prerequisite evidence', () => {
+  const output = outputFor({ completed: 0, total: 1, failures: [
+    { title: 'Unavailable course', reason: 'action-disabled', evidence: ['Course action "Launch Unavailable course" is disabled.'] },
+  ] });
+  const diagnosis = diagnoseRun({ script: 'pw-cert-batch.js', code: 1, output });
+  assert.equal(diagnosis.likelyCause.code, 'action-disabled');
+  assert.equal(diagnosis.likelyCause.label, 'The course action is disabled');
+  assert.match(diagnosis.likelyCause.explanation, /without explaining a prerequisite/);
+  assert.match(diagnosis.recommendations[0], /becomes enabled/);
 });

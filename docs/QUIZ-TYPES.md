@@ -24,6 +24,19 @@ if the fast path fails.
   "% Path Completed" bar and a list of "Recommended courses (Required N of M)"
   rows, each with a LAUNCH / VIEW / PRINT CERTIFICATE split-button.
 - **Strategy** — this is the entry point for `pw-cert-batch.js`.
+- **Genuine-learning Operations gap (18 November 2026)** - Do not enable
+  `cert-landing` by adding it only to the guided-flow learnable set. The core
+  `learnerOfferedFor` admission also excludes it. `launchSelectedCourse` in
+  `lib/course-launch.js` launches one course detail page, not a certification
+  row; `pw-learn-quiz.js` retains one course landing and terminates on its
+  verified course/quiz result. Same-window popup protection and observed
+  same-origin tab selection already exist, but there is no certification
+  parent/checklist state, lesson-before-exam sequencing, or return-to-overview
+  required-count verifier. A safe follow-up needs all of those plus offline
+  two-module fixtures (including prerequisites, failed assessment and stale
+  rows). Until then, explicitly open each intended module and verify the
+  actual required count on the overview afterward. Do not substitute
+  `cert-batch` or synthetic SCORM status/score writes for genuine learning.
 - **Note** — the roster is rendered by Angular; lazy-loads rows below the
   fold, so scroll first (the batch script handles this). Returning from a
   course can also collapse requirement cards and remove their course rows from
@@ -42,6 +55,17 @@ if the fast path fails.
   `prerequisites-incomplete`, not `no-player-tab`. Auto-detect now excludes
   them from runnable selections, and an attempted batch reports the evidence
   in the centered failure-diagnosis modal.
+- **Disabled launch without prerequisite text** - `isActionDisabled` must also
+  make a row `isBlocked`, even when the page does not explain why. Native
+  disabled/fieldset states and explicit ARIA-disabled ancestors are authoritative; an
+  enabled-looking child (`aria-disabled="false"`) cannot override a disabled
+  ARIA-disabled ancestor. Such rows report `action-disabled`; explicit sequence
+  or prerequisite evidence keeps `prerequisites-incomplete`. Do not assume an
+  unexplained native/ARIA-disabled action is runnable. The CSS class
+  `.trq-aria-disabled` alone is not sufficient: Sustainability in Services
+  used it on a working Launch wrapper (verified by an ordinary click on
+  18 November 2026). Retain class-based blocking only with prerequisite or
+  sequence evidence; its More actions menu may be unavailable independently.
 
 ### Class / course detail page (`.../me/learningeventdetail/cours...`)
 

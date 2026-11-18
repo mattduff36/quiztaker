@@ -168,7 +168,7 @@ try{
         await expect(page.getByRole('heading',{name:'Task complete',exact:true})).toBeHidden();
         await expect(page.getByRole('button',{name:'Pause session',exact:true})).toBeVisible();
       }
-      await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');
+      await page.getByRole('group',{name:'Course tab',exact:true}).getByRole('button').click();
       const goal='Take the Firmware assessment; do not retake Device Features.';
       await page.getByLabel(/What would you like to achieve/).fill(goal);
       release();
@@ -230,7 +230,7 @@ try{
       if(scenario==='absent'||scenario==='disconnected')await expect(page.getByRole('button',{name:'Start browser',exact:true})).toBeEnabled();
       if(scenario==='stale'){await expect(page.getByRole('heading',{name:'Browser check needed',exact:true})).toBeVisible();expect(fixture.refreshes).toBe(0);}
       if(scenario==='no-course'){await expect(page.getByText('No course page is open yet.',{exact:false})).toBeVisible();await expect(page.getByLabel(/What would you like to achieve/)).toBeHidden();}
-      if(scenario==='blank-goal'){await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');await page.getByLabel(/What would you like to achieve/).fill('');await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeDisabled();}
+      if(scenario==='blank-goal'){await page.getByRole('group',{name:'Course tab',exact:true}).getByRole('button').click();await page.getByLabel(/What would you like to achieve/).fill('');await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeDisabled();}
       if(scenario==='old-finished'){await expect(page.getByRole('heading',{name:'Work on a course',exact:true})).toBeVisible();await expect(page.getByRole('heading',{name:'Current task',exact:true})).toBeHidden();await expect(page.getByText(/Marked completed by you/)).toBeHidden();await expect(page.getByText('Task recorded',{exact:true})).toBeHidden();}
       if(scenario==='old-finished-start'){await page.getByRole('button',{name:'Start browser',exact:true}).click();await expect.poll(()=>fixture.starts).toBe(1);await page.clock.fastForward(31_000);await expect(page.getByText(/Marked completed by you/)).toBeHidden();await expect(page.getByRole('heading',{name:'Current task',exact:true})).toBeHidden();}
       if(scenario.startsWith('start-')) {
@@ -293,8 +293,8 @@ try{
     if (existingTask) {
       expect(cancellations).toBe(1);
       await expect(open).toBeDisabled();
-      const course = page.getByRole('combobox', { name: 'Course tab', exact: true });
-      await course.selectOption('course');
+      const course = page.getByRole('group', { name: 'Course tab', exact: true }).getByRole('button');
+      await course.click();
       const goal = page.getByRole('textbox', { name: /What would you like to achieve/ });
       await goal.fill('Read a different module');
       const start = page.getByRole('button', { name: 'Inspect and start', exact: true });
@@ -307,7 +307,7 @@ try{
       await expect(open).toBeEnabled();
       await open.click();
       await expect.poll(() => opened).toBe('https://example.invalid/course');
-      await expect(page.getByRole('combobox', { name: 'Course tab', exact: true }).getByRole('option')).toHaveCount(2);
+      await expect(page.getByRole('group', { name: 'Course tab', exact: true }).getByRole('button')).toHaveCount(1);
     }
     expect(fixture.finishPosts).toBe(0);
     await page.close();
@@ -372,7 +372,7 @@ try{
     await expect(page.getByRole('heading',{name:'Vitriol has a question',exact:true})).toBeHidden();
     await expect(page.getByRole('button',{name:'Retake Device Features',exact:true})).toBeHidden();
     const goal='Take the Firmware assessment; do not retake Device Features.';
-    await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');
+    await page.getByRole('group',{name:'Course tab',exact:true}).getByRole('button').click();
     await page.getByLabel(/What would you like to achieve/).fill(goal);
     fixture.questionOutput='';
     await page.getByRole('button',{name:'Resume from current page',exact:true}).click();
@@ -411,10 +411,10 @@ try{
       await route.fulfill({ status: __status || 200, json });
     });
     await page.goto(url);
-    await page.getByRole('combobox', { name: 'Course tab', exact: true }).selectOption('course');
-    const activity = page.getByRole('combobox', { name: 'Course activity', exact: true });
-    await expect(activity).toHaveValue('independent');
-    await activity.selectOption({ label });
+    await page.getByRole('group', { name: 'Course tab', exact: true }).getByRole('button').click();
+    const activity = page.getByRole('group', { name: 'Course activity', exact: true });
+    await expect(activity.getByRole('button',{name:'Work independently',exact:true})).toHaveAttribute('aria-pressed','true');
+    await activity.getByRole('button',{name:label,exact:true}).click();
     const objective = page.getByRole('textbox', { name: /What would you like to achieve/ });
     if (typeof goal === 'string') await objective.fill(goal);
     await expect(objective).toHaveValue(goal);
@@ -445,14 +445,14 @@ try{
       await route.fulfill({status:__status||200,json});
     });
     await page.goto(url);await page.getByRole('button',{name:'Resume session',exact:true}).click();
-    await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');
+    await page.getByRole('group',{name:'Course tab',exact:true}).getByRole('button').click();
     await page.getByLabel(/What would you like to achieve/).fill('Read this course');
     await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
     await expect.poll(()=>queued).toBe(1);
     if (transition === 'new-task') {
       await page.getByRole('button', { name: 'New task', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Start a new task', exact: true })).toBeVisible();
-      await page.getByRole('combobox', { name: 'Course tab', exact: true }).selectOption('course');
+      await page.getByRole('group', { name: 'Course tab', exact: true }).getByRole('button').click();
       await expect(page.getByRole('button', { name: 'Inspect and start', exact: true })).toBeDisabled();
     } else {
       if (transition === 'stop') await page.getByRole('button', { name: 'Stop', exact: true }).click();
@@ -488,30 +488,30 @@ try{
     const normal=page.getByRole('tab',{name:'Normal',exact:true});
     const advanced=page.getByRole('tab',{name:'Advanced',exact:true});
     await expect(normal).toHaveAttribute('aria-selected','true');
-    const select=page.getByRole('combobox',{name:'Course tab',exact:true});
+    const select=page.getByRole('group',{name:'Course tab',exact:true}).getByRole('button');
     await expect(select).toBeEnabled();
-    await expect(select.getByRole('option')).toHaveCount(2);
-    await select.selectOption('course');
+    await expect(page.getByRole('group',{name:'Course tab',exact:true}).getByRole('button')).toHaveCount(1);
+    await select.click();
     const goal=page.getByLabel(/What would you like to achieve/);
-    const mode=page.getByRole('combobox',{name:'Course activity',exact:true});
-    await expect(mode).toHaveValue('independent');
+    const mode=page.getByRole('group',{name:'Course activity',exact:true});
+    await expect(mode.getByRole('button',{name:'Work independently',exact:true})).toHaveAttribute('aria-pressed','true');
     await expect(goal).toHaveValue(/Read the course material/);
     await goal.fill('x'.repeat(1005));
     await expect(goal).toHaveValue('x'.repeat(1000));
     await goal.fill('');
     // User edits are preserved; this fixture now checks default mode goals on a fresh mount.
     await page.reload();
-    await select.selectOption('course');
-    await expect(mode.getByRole('option')).toHaveText(['Work independently','Co-ordinate with ChatGPT','Scrape info with the user']);
+    await select.click();
+    await expect(mode.getByRole('button')).toHaveText(['Work independently','Co-ordinate with ChatGPT','Scrape info with the user']);
     await goal.fill('Complete the course');
     await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeDisabled();
     await page.getByRole('button',{name:'Read and take the quiz',exact:true}).click();
     await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
     await page.reload();
-    await select.selectOption('course');
-    await mode.selectOption('coordinate');
+    await select.click();
+    await mode.getByRole('button',{name:'Co-ordinate with ChatGPT',exact:true}).click();
     await expect(goal).toHaveValue(/lesson checklist.*Xerox course overview/);
-    await mode.selectOption('independent');
+    await mode.getByRole('button',{name:'Work independently',exact:true}).click();
     await expect(goal).toHaveValue(/Read the course material/);
     await goal.fill('Read this course overview and ask me before continuing.');
     await page.getByText('Course material checklist',{exact:true}).click();
@@ -551,11 +551,11 @@ try{
     await page.clock.fastForward(46_000);
     await expect.poll(()=>fixture.refreshes).toBeGreaterThan(before);
     await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
-    await mode.selectOption('coordinate');
+    await mode.getByRole('button',{name:'Co-ordinate with ChatGPT',exact:true}).click();
     await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
-    await mode.selectOption('independent');
-    await expect(goal).toBeFocused();
-    await expect(select).toHaveValue('course');
+    await mode.getByRole('button',{name:'Work independently',exact:true}).click();
+    await expect(mode.getByRole('button',{name:'Work independently',exact:true})).toBeFocused();
+    await expect(select).toHaveAttribute('aria-pressed','true');
     await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
     await page.evaluate(()=>window.scrollTo(0,0));
     await page.screenshot({path:join(artifacts,viewport.width>500?'desktop.png':'mobile.png'),fullPage:true});
@@ -563,9 +563,9 @@ try{
     await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
     await expect(page.getByText('This page is a quiz.',{exact:false})).toBeVisible();
     await page.getByText('Course and goal',{exact:true}).click();
-    await mode.selectOption('coordinate');
+    await mode.getByRole('button',{name:'Co-ordinate with ChatGPT',exact:true}).click();
     await expect(page.getByText('This page is a quiz.',{exact:false})).toHaveCount(0);
-    await mode.selectOption('independent');
+    await mode.getByRole('button',{name:'Work independently',exact:true}).click();
     await expect(page.getByText('This page is a quiz.',{exact:false})).toHaveCount(0);
     expect(fixture.retries).toBe(2);
     await page.clock.fastForward(28*60_000+5_000);
@@ -622,8 +622,8 @@ try{
     expect(fixture.refreshes).toBe(pausedRefreshes);
     fixture.online=true;fixture.paused=false;fixture.holdCapability='quick-scrape';fixture.waitForRecording=true;
     await page.clock.fastForward(61_000);
-    const activityPicker=page.getByRole('combobox',{name:'Course activity'});
-    await activityPicker.selectOption('quick');
+    const activityPicker=page.getByRole('group',{name:'Course activity',exact:true});
+    await activityPicker.getByRole('button',{name:'Scrape info with the user',exact:true}).click();
     await page.getByRole('button',{name:'Start recording',exact:true}).click();
     await expect(page.getByRole('button',{name:'Stop recorder',exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:'Finish recording',exact:true})).toBeHidden();
@@ -633,7 +633,7 @@ try{
     await expect(page.getByText('You can click through the course now.',{exact:true})).toBeVisible();
     const finishRecording=page.getByRole('button',{name:'Finish recording',exact:true});
     await expect(finishRecording).toHaveClass(/\bbg-red-700\b/);
-    const coursePanel=page.getByRole('region',{name:'Work on a course'});
+    const coursePanel=page.getByRole('region',{name:'Task in progress',exact:true});
     expect(await coursePanel.evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
     await page.screenshot({path:join(artifacts,`${viewport.width}-recording.png`),fullPage:true});
     fixture.waitForSaving=true;
@@ -645,7 +645,7 @@ try{
     await expect(page.getByText('Recording saved',{exact:true})).toBeVisible();
     await page.getByText('Recording folder',{exact:true}).click();
     await expect(page.getByText('C:/Fixtures/recording',{exact:true})).toBeVisible();
-    await activityPicker.selectOption('independent');
+    await activityPicker.getByRole('button',{name:'Work independently',exact:true}).click();
     // Finishing during a guided wait stops the local orchestrator before another step can queue.
     fixture.online=true;fixture.paused=false;fixture.holdCapability='detect';
     await page.clock.fastForward(61_000);
@@ -709,12 +709,12 @@ try{
     fixture.memory={id:'fixture-memory',objective:null,history:[]};
     await page.route('**/api/**',async route=>{const req=route.request();const {__status,...json}=reply(new URL(req.url()).pathname,req.method(),req.postDataJSON()||{},Date.now(),fixture);await route.fulfill({status:__status||200,json});});
     await page.goto(url);
-    await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');
+    await page.getByRole('group',{name:'Course tab',exact:true}).getByRole('button').click();
     await expect(page.getByLabel('Hint or change of direction',{exact:true})).toBeVisible();
     fixture.holdCapability='quiz-learn';fixture.task={id:'mobile-running',status:'running',capability_id:'quiz-learn'};fixture.latest=fixture.task;fixture.jobs.set(fixture.task.id,fixture.task);
     fixture.progressOutput='LEARNER_PROGRESS {"message":"Reading the current question."}\nLEARNER_PROGRESS {"message":"Set and verified five answers."}\n';
     await expect(page.getByText('Set and verified five answers.',{exact:true})).toBeVisible({timeout:10000});
-    await expect(page.getByRole('combobox',{name:'Course activity',exact:true})).toBeHidden();
+    await expect(page.getByRole('group',{name:'Course activity',exact:true})).toBeHidden();
     await expect(page.getByRole('button',{name:'Mark complete',exact:true})).toBeHidden();
     await expect(page.getByRole('button',{name:'Stop',exact:true})).toBeVisible();
     await expect(page.getByText('Give a hint or steer',{exact:true})).toBeVisible();
