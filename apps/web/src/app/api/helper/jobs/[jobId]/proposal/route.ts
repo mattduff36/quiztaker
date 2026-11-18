@@ -39,6 +39,8 @@ const control = z.object({
   kind: z.enum(['content', 'navigation', 'quiz-navigation', 'submission']).optional(),
   checked: z.boolean().optional(),
   selection: z.object({value:z.string().max(160),answered:z.boolean()}).optional(),
+  groupId: z.string().max(64).optional(),
+  answerKind: z.enum(['radio','checkbox']).optional(),
 });
 
 const schema = z.object({
@@ -47,6 +49,10 @@ const schema = z.object({
     url: z.string().max(500).optional(),
     text: z.string().max(8000).optional(),
     choices: z.array(control).max(40).optional(),
+    answerPageId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    sourceMaterials: z.array(z.object({title:z.string().max(200),url:z.string().max(500),text:z.string().max(8000)})).max(32).optional(),
+    sourceExtraction: z.string().max(4000).optional(),
+    sourcePublication: z.string().max(500).optional(),
     fields: z.array(control.extend({value:z.string().max(2000).optional()})).max(8).optional(),
     playback: z.object({provider:z.literal('brainshark'),identity:z.string().regex(/^[a-f0-9]{64}$/),slide:z.number().int().positive().nullable(),completed:z.boolean(),requirements:z.object({
       requiredAudio:z.number().min(0).max(100).nullable(),requiredSlides:z.number().min(0).max(100).nullable(),audioPercent:z.number().min(0).max(100).nullable(),durationSeconds:z.number().positive().max(86400).nullable(),
@@ -104,6 +110,10 @@ export async function POST(
     url: incoming.url,
     text: incoming.text,
     choices: incoming.choices,
+    answerPageId: incoming.answerPageId,
+    sourceMaterials: incoming.sourceMaterials,
+    sourceExtraction: incoming.sourceExtraction,
+    sourcePublication: incoming.sourcePublication,
     fields: incoming.fields,
     playback: incoming.playback,
     buttons: incoming.buttons,
@@ -250,7 +260,7 @@ async function finishLearnerDecision(
   conversation: { id: string | null; browserSessionId: string },
   userId: string,
   helperId: string,
-  observed: { title?: string; url?: string; text?: string },
+  observed: LearnerSnapshot,
   decision: { action?: LearnerAction; stop?: boolean; error?: string; screenshot?: 'accepted' | 'omitted' | 'unconfirmed' },
 ) {
   return withTransaction(async sql => {

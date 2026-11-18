@@ -2,6 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { decideGuidedFlow, independentIntent, learnerQuestion, learnerStopMessage, observedQuizResult, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab } from '../src/lib/guided-flow';
 
+test('named retake exclusions and optional review do not veto a separate explicit assessment',()=>{
+  assert.equal(independentIntent('Do not retake Device Features. Read the Firmware course, then pass the Firmware assessment. Review if needed.'),'read-and-assess');
+  assert.equal(independentIntent('Read the course. If needed review the diagrams. Take the final quiz.'),'read-and-assess');
+  assert.equal(independentIntent('Read only. Take the quiz.'),'read');
+  assert.equal(independentIntent('Read the lessons and do not submit any assessment.'),'read');
+  assert.equal(independentIntent('If needed take the quiz.'),null);
+});
+
+test('an interrupted job cannot resurrect an earlier question marker',()=>{
+  const question='LEARNER_QUESTION {"question":"Old answered request","url":"https://example.com/course"}\n';
+  assert.equal(learnerQuestion(question+'Learner input timed out'),null);
+  assert.equal(learnerQuestion(question+'AUTOMATION_RESULT {"ok":false,"failures":[{"reason":"learner-interrupted"}]}'),null);
+  assert.match(learnerStopMessage('Learner input timed out')||'',/Resume from the current page/);
+});
+
 test('ordinary optional wording does not erase an explicit assessment goal and Saba course pages can launch',()=>{
   assert.equal(independentIntent('Read the course, then take the assessment. Review the material again if needed.'),'read-and-assess');
   assert.equal(independentIntent('Read the course and tell me whether I should take the assessment'),null);

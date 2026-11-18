@@ -34,6 +34,8 @@
 // only existing completion, and verify the LMS result before reporting success.
 // Animation-only navigation rechecks use local semantic slide/target identity;
 // question, choice, selection and genuine content changes remain significant.
+// Brightwave authored text uses bounded same-publication reads and normal scoped
+// memory. Grouped same-page answers preflight all targets and verify DOM states.
 //
 // Usage:
 //   node pw-learn-quiz.js <tabIdx> [--dry]
@@ -46,6 +48,9 @@ const { recognizeQuizResult, quizResultPayload } = require('./lib/quiz-result');
 const { readBrainshark, listeningQuestion, playbackApproved, playbackControl, setPlaybackSpeed, closeBrainsharkReaders, CONTINUE_LISTENING_QUESTION } = require('./lib/brainshark-player');
 const { launchSelectedCourse, originatingSabaPage, finishSabaCourse, protectSabaPopups, sabaAddress, currentCourseSuccessful } = require('./lib/course-launch');
 const { COURSE_EXIT_LABEL, createStorylineFinalizer } = require('./lib/storyline-finalization');
+const { publicationRoot, collectAuthoredMaterial } = require('./lib/authored-material');
+const { watchCoursePopup } = require('./lib/course-popup');
+const { captureStableViewport } = require('./lib/stable-viewport-capture');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 const MAX_STEPS = 80;
@@ -57,7 +62,7 @@ const OPEN_TOPIC_LABEL = /^Open topic: .{1,140}$/;
 const COURSE_INTERACTION_LABEL = /^Course interaction: \d+_\d+_click_?\d+$/;
 const REPEATED_VIEW_LIMIT = 3;
 const REPEATED_VIEW_OPTION = 'Done, resume now';
-const ALLOWED = new Set(['click', 'answer-select', 'answer-text', 'select-tab', 'scroll', 'find-text', 'wait', 'capture', 'verify', 'ask-user']);
+const ALLOWED = new Set(['click', 'answer-select', 'answer-text', 'answer-group', 'select-tab', 'scroll', 'find-text', 'wait', 'capture', 'verify', 'ask-user']);
 const observationState = new WeakMap();
 const matchingTargets = new WeakMap();
 const MAX_CAPTURE_DATA_URL = 900_000;
@@ -129,7 +134,26 @@ function screenElementControlName(id, className) {
 function learnerActionSignature(action) {
   const name = typeof action?.action === 'string' ? action.action : '';
   const targetId = typeof action?.targetId === 'string' ? action.targetId : '';
-  return `${name}\u0000${targetId}\u0000${name === 'scroll' ? action?.direction || 'down' : ''}\u0000${action?.text || ''}`;
+  return `${name}\u0000${targetId}\u0000${name === 'scroll' ? action?.direction || 'down' : ''}\u0000${action?.text || ''}\u0000${JSON.stringify(action?.answers || [])}`;
+}
+
+function validAnswerGroup(action, snapshot, mode) {
+  if (mode !== 'quiz' || !/^[a-f0-9]{64}$/.test(action.pageId || '') || action.pageId !== snapshot.answerPageId
+    || !Array.isArray(action.answers) || action.answers.length < 1 || action.answers.length > 8) return false;
+  const seen = new Set(), radios = new Set();
+  for (const answer of action.answers) {
+    if (!answer || typeof answer !== 'object' || seen.has(answer.targetId)) return false;
+    seen.add(answer.targetId);
+    const choice = snapshot.choices?.find(control => control.id === answer.targetId);
+    const field = snapshot.fields?.find(control => control.id === answer.targetId);
+    if (choice && ['radio','checkbox'].includes(choice.answerKind) && choice.groupId && typeof answer.checked === 'boolean' && answer.text == null) {
+      if (choice.answerKind === 'radio') {
+        if (!answer.checked || radios.has(choice.groupId)) return false;
+        radios.add(choice.groupId);
+      }
+    } else if (!(field && answer.checked == null && typeof answer.text === 'string' && answer.text.trim() && answer.text.length <= 2000)) return false;
+  }
+  return true;
 }
 
 function noteRepeatedLearnerAction(state, action, snapshot) {
@@ -153,6 +177,7 @@ function noteRepeatedLearnerAction(state, action, snapshot) {
 function localActionAllowed(action, snapshot, mode = 'read') {
   if (!action || typeof action !== 'object') return false;
   if (!ALLOWED.has(action.action)) return false;
+  if (action.action === 'answer-group') return validAnswerGroup(action, snapshot, mode);
   if (action.action === 'scroll') return action.direction == null || action.direction === 'up' || action.direction === 'down';
   if (action.action === 'find-text') return typeof action.text === 'string' && action.text.trim().length > 0 && action.text.length <= 160;
   if (action.action === 'ask-user') return learnerQuestionPayload(snapshot, action) != null;
@@ -209,9 +234,19 @@ function dkiInformationIcon(el) {
   return index >= 0 ? {name:`Course information icon ${index + 1}`} : null;
 }
 
+async function simulationControlName(locator, name) {
+  if (!/^(?:log\s*in|sign\s*in|logmein)$/i.test(name)) return name;
+  const simulated = await locator.evaluate(el => location.origin === 'https://canon-europe.csod.com'
+    && /^\/content\/canon-europe\/publications\/\d+\//.test(location.pathname)
+    && el.matches('button.invisibutton') && Boolean(el.closest('.screenElement'))
+    && /\bSIMS\b/i.test(el.ownerDocument.body.innerText)
+    && !el.closest('form') && !el.ownerDocument.querySelector('input[type=password]')).catch(()=>false);
+  return simulated ? 'Course simulation: SIMS example entry' : name;
+}
+
 async function accessibleName(locator) {
   const aria = await locator.getAttribute('aria-label').catch(() => null);
-  if (aria && aria.trim()) return aria.replace(/\s+/g, ' ').trim().slice(0, 160);
+  if (aria && aria.trim()) return simulationControlName(locator, aria.replace(/\s+/g, ' ').trim().slice(0, 160));
   const text = await locator.evaluate((el) => {
     const labelledBy = el.getAttribute('aria-labelledby')?.trim();
     if (labelledBy) {
@@ -227,7 +262,11 @@ async function accessibleName(locator) {
         const status = parent.querySelector('.topicStatus')?.className?.replace('topicStatus', '').trim();
         if (title) return `Open topic: ${title}${status ? ` (${status})` : ''}`;
       }
-      if (parent?.matches('.menuStartBtn')) return 'Start';
+      if (parent?.matches('.menuStartBtn')) {
+        const panel = parent.closest?.('[id^=menuscreen_panel_]');
+        const title = panel?.querySelector('[class^=menuTopicButtonClosed]')?.textContent?.trim();
+        return title ? `Open topic: ${title} - Start` : 'Start';
+      }
       if (parent?.classList?.contains('screenElement')) {
         const slide = /^(\d+_\d+)_click_?\d+$/.exec(parent.id || '');
         if (slide && parent.ownerDocument) {
@@ -246,6 +285,10 @@ async function accessibleName(locator) {
           const subject = subjects.length === 1 ? subjects[0].textContent.replace(/\s+/g, ' ').trim() : '';
           if (targets.length === 1 && targets[0] === parent && subject && subject.length <= 120) return `Open topic: ${subject}`;
         }
+        if (parent.classList.contains('box') && /^[\w-]{1,96}$/.test(parent.id || '') && !/wrong|incorrect|blocker/i.test(parent.id)) {
+          const known = /^\d+_\d+_click_?\d+$/.test(parent.id) || parent.classList.contains('backbtn') || parent.classList.contains('nextbtn');
+          if (!known) return `Course hotspot: ${parent.id}`;
+        }
         return { screenElement: true, id: parent.id || '', className: String(parent.className || '') };
       }
     }
@@ -260,7 +303,7 @@ async function accessibleName(locator) {
     return screenElementControlName(text.id, text.className).slice(0, 160);
   }
   const normalized = String(text).replace(/\s+/g, ' ').trim().slice(0, 160);
-  return normalized || (await locator.evaluate(dkiInformationIcon).catch(() => null))?.name || '';
+  return normalized ? simulationControlName(locator, normalized) : (await locator.evaluate(dkiInformationIcon).catch(() => null))?.name || '';
 }
 
 async function controlName(handle) {
@@ -451,7 +494,8 @@ async function captureCurrentView(page) {
     for(let index=0;index<count;index++) if(await sensitive.nth(index).isVisible().catch(()=>true)) {state.feedback='Screenshot skipped because an authentication or sensitive field is visible.';return;}
   }
   try {
-    const jpeg=await page.screenshot({type:'jpeg',quality:55,fullPage:false,scale:'css',timeout:10_000});
+    const viewport=await page.evaluate(()=>({width:innerWidth,height:innerHeight,dpr:devicePixelRatio}));
+    const jpeg=await captureStableViewport(page,viewport,'jpeg');
     const image=`data:image/jpeg;base64,${jpeg.toString('base64')}`;
     if(image.length>MAX_CAPTURE_DATA_URL){state.feedback='Screenshot skipped because the viewport image exceeds the size limit.';return;}
     state.image=image;state.imageUrl=page.url();state.imageIdentity={id:randomUUID(),...(state.questionId?{questionId:state.questionId}:{})};
@@ -502,6 +546,20 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
         const rect = el.getBoundingClientRect();
         const style = getComputedStyle(el);
         if (!el.getClientRects().length || !rect.width || !rect.height || style.visibility === 'hidden' || style.visibility === 'collapse') continue;
+        if (el.matches('button.invisibutton')) {
+          let hidden = false;
+          for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+            const s = getComputedStyle(parent);
+            if (s.display === 'none' || s.visibility === 'hidden' || Number(s.opacity) === 0) { hidden = true; break; }
+          }
+          if (hidden || /wrong|incorrect|blocker/i.test(el.parentElement?.id || '')
+            || rect.width * rect.height > innerWidth * innerHeight * 0.65) continue;
+          const points = [[0.5,0.5],[0.25,0.25],[0.75,0.75]];
+          if (!points.some(([x,y]) => {
+            const hit = document.elementFromPoint(rect.x + rect.width*x, rect.y + rect.height*y);
+            return hit && (hit === el || el.contains(hit));
+          })) continue;
+        }
         // Cornerstone uses this marker on passive layout/progress containers,
         // unlike actual collapse/tab controls. Preserve interactive evidence.
         if (el.getAttribute('data-toggle') === 'cso-frame' && !el.matches('a,button,input,summary,[role],[onclick],[tabindex]') && style.cursor !== 'pointer') continue;
@@ -581,7 +639,17 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
       const nested = el.querySelectorAll('input[type=radio],input[type=checkbox],[role=radio],[role=checkbox]');
       return nested.length === 1 ? state(nested[0]) : undefined;
     }).catch(() => undefined);
-    listed.push({ id, name, ...(kind ? { kind } : {}), ...(typeof checked === 'boolean' ? {checked} : {}) });
+    const answerMeta = role === 'answer' ? await handle.evaluate(el => {
+      const group = el.closest('fieldset,[role=radiogroup],[role=group],.quiz-card');
+      const scope = group || el.form || el.ownerDocument.body;
+      return { kind: el.matches('input[type=checkbox],[role=checkbox]') ? 'checkbox' : 'radio',
+        group: [location.href, [...document.querySelectorAll('fieldset,[role=radiogroup],[role=group],.quiz-card,form')].indexOf(scope), el.getAttribute('name') || ''],
+        prompt: scope.innerText, document: performance.timeOrigin, value: el.getAttribute('value'), domId: el.id };
+    }) : null;
+    const groupId = answerMeta ? createHash('sha256').update(JSON.stringify(answerMeta.group)).digest('hex') : undefined;
+    listed.push({ id, name, ...(kind ? { kind } : {}), ...(typeof checked === 'boolean' ? {checked} : {}),
+      ...(answerMeta ? {answerKind:answerMeta.kind,groupId} : {}) });
+    if (answerMeta) Object.defineProperty(listed[listed.length-1], 'answerIdentity', {value:answerMeta});
     if (listed.length >= 40) return { listed, handles };
   }
   return { listed, handles };
@@ -779,7 +847,10 @@ async function readSnapshot(page, mode = 'read') {
   const handles = new Map([...buttons.handles, ...answers.handles]);
   const fields = [];
   for (const frame of await visibleFrames(page)) {
-    const courseFrame = await frame.evaluate(() => location.hostname === 'www.brainshark.com').catch(() => false);
+    const courseFrame = await frame.evaluate(() => location.hostname === 'www.brainshark.com'
+      || (location.origin === 'https://canon-europe.csod.com' && !/login|signin|oauth|sso/i.test(location.pathname)
+        && Boolean(document.querySelector('fieldset input[type=radio],fieldset input[type=checkbox],[role=radiogroup]'))
+        && !document.querySelector('input[type=password],form[action*=login i],form[action*=signin i]'))).catch(() => false);
     if (!courseFrame || mode !== 'quiz') continue;
     const inputs = frame.locator('input:not([type]),input[type=text],textarea').filter({visible:true});
     for (let index=0; index<Math.min(await inputs.count(), 8); index++) {
@@ -788,7 +859,10 @@ async function readSnapshot(page, mode = 'read') {
       const name = await controlName(handle) || await handle.getAttribute('placeholder');
       if (!name || /password|secret|email|login|username|token/i.test(name)) continue;
       const id = `f${fields.length+1}`;
+      const identity = await handle.evaluate(el => ({source:location.href,document:performance.timeOrigin,
+        prompt:(el.closest('fieldset,[role=group],.question') || el.ownerDocument.body).innerText,domId:el.id}));
       fields.push({id,name:name.slice(0,160),value:(await handle.inputValue()).slice(0,2000)});
+      Object.defineProperty(fields[fields.length-1], 'answerIdentity', {value:identity});
       handles.set(id,handle);
     }
   }
@@ -825,6 +899,11 @@ async function readSnapshot(page, mode = 'read') {
       text: `${await observePlayerEvidence(page)}\n${state.feedback?`Tool feedback: ${state.feedback}\n`:''}${sections.map(section => section.slice(0, Math.floor(7400 / Math.max(1, sections.length)))).join('\n')}`.slice(0, 8000),
       buttons: buttons.listed,
       choices: answers.listed,
+      ...(answers.listed.length || fields.length ? {answerPageId:createHash('sha256').update(JSON.stringify([
+        page.url(), question, answers.listed.map(({id,name,answerIdentity}) => ({id,name,...answerIdentity,
+          prompt:answerIdentity?.prompt?.replace(/Time remaining\s*\n?\s*\d{1,3}:\d{2}(?::\d{2})?/gi,'Time remaining [countdown]')})),
+        fields.map(({id,name,answerIdentity})=>({id,name,...answerIdentity})),
+      ])).digest('hex')} : {}),
       ...(fields.length ? {fields} : {}),
       tabs,
       ...(image?{image}:{}),
@@ -877,7 +956,7 @@ function revalidateLearnerDecision(before, after, action) {
 function sameLearnerView(before, after) {
   const comparable = value => {
     if (!value || typeof value !== 'object') return value;
-    const { image, imageIdentity, coordinationStart, unchangedAction, playback, ...view } = value;
+    const { image, imageIdentity, coordinationStart, unchangedAction, playback, sourceMaterials, sourceExtraction, sourcePublication, ...view } = value;
     if (playback) {
       view.playback = { identity: playback.identity, slide: playback.slide, completed: playback.completed, question: playback.question };
       if (typeof view.text === 'string') view.text = view.text.replace(/^(?:\d{1,2}:\d{2}(?::\d{2})?|\/)$/gm, '[playback time]');
@@ -941,6 +1020,7 @@ function createActionReader() {
 
 async function applyAction(page, action, snapshot, handles, mode = 'read') {
   if (!localActionAllowed(action, snapshot, mode)) throw new Error('Learner action is not allowed');
+  if (action.action === 'answer-group') return applyAnswerGroup(page, action, snapshot, mode);
   if(snapshot.question && (await readSnapshot(page,mode)).snapshot.question?.id!==snapshot.question.id)throw new Error('Learner question target changed');
   const state=observationFor(page);delete state.feedback;delete state.blockedControl;delete state.screenshotBlocked;
   if (action.action === 'select-tab') {
@@ -950,6 +1030,49 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
     if (new URL(page.url()).origin !== new URL(target.url).origin) throw new Error('Learner tab website changed');
     await target.page.bringToFront();
     return target.page;
+  }
+
+  async function applyAnswerGroup(page, action, snapshot, mode) {
+    const fresh = await readSnapshot(page, mode);
+    if (!validAnswerGroup(action, fresh.snapshot, mode) || !sameLearnerView(snapshot, fresh.snapshot)) throw new Error('Grouped answer page changed before preflight');
+    const expected = new Map();
+    for (const answer of action.answers) {
+      const handle = fresh.handles.get(answer.targetId);
+      const target = [...fresh.snapshot.choices, ...(fresh.snapshot.fields || [])].find(control => control.id === answer.targetId);
+      if (!handle || !target || !await handle.isVisible() || !await handle.isEnabled()) throw new Error('Grouped answer target unavailable');
+      if ('text' in answer && !await handle.isEditable()) throw new Error('Grouped response is not editable');
+      if ('checked' in answer && await handle.evaluate(el => el.matches('input[type=radio],input[type=checkbox]'))) {
+        await handle.setChecked(answer.checked, {trial:true,timeout:2500});
+      } else await handle.click({trial:true,timeout:2500});
+      expected.set(answer.targetId, {handle, target});
+    }
+    for (const answer of action.answers) {
+      const current = await readSnapshot(page, mode);
+      if (current.snapshot.answerPageId !== action.pageId) throw new Error('Grouped answers stopped: navigation, question or options changed; inspect current state');
+      const {handle, target} = expected.get(answer.targetId);
+      const now = [...current.snapshot.choices, ...(current.snapshot.fields || [])].find(control => control.id === answer.targetId);
+      if (!now || now.name !== target.name || now.groupId !== target.groupId || !await handle.isVisible() || !await handle.isEnabled()) throw new Error('Grouped answers stopped: target changed');
+      if ('text' in answer) {
+        await handle.fill(answer.text, {timeout:5000});
+        if (await handle.inputValue() !== answer.text) throw new Error('Grouped written response was not confirmed');
+      } else {
+        const native = await handle.evaluate(el => el.matches('input[type=radio],input[type=checkbox]'));
+        if (native) await handle.setChecked(answer.checked, {timeout:5000});
+        else if (now.checked !== answer.checked) {
+          if (answer.checked) await applyAction(page, {action:'answer-select',targetId:answer.targetId}, current.snapshot, current.handles, mode);
+          else await handle.press('Space', {timeout:5000});
+        }
+        const checked = await handle.evaluate(el => el.matches('input') ? el.checked : el.getAttribute('aria-checked') === 'true');
+        if (checked !== answer.checked) throw new Error('Grouped answer selection was not confirmed');
+      }
+    }
+    const post = await readSnapshot(page, mode);
+    if (post.snapshot.answerPageId !== action.pageId) throw new Error('Grouped answers stopped: page changed after selection');
+    for (const answer of action.answers) {
+      const target = [...post.snapshot.choices, ...(post.snapshot.fields || [])].find(control => control.id === answer.targetId);
+      if (!target || ('text' in answer ? target.value !== answer.text : target.checked !== answer.checked)) throw new Error('Grouped answer post-state mismatch');
+    }
+    observationFor(page).feedback = `Set and verified ${action.answers.length} answers on the current page. No navigation or submission was performed.`;
   }
   if (action.action === 'scroll') {
     // Scroll each visible course frame as well as the outer wrapper.
@@ -1174,6 +1297,7 @@ async function main() {
     }
     if(landing===page && await currentCourseSuccessful(landing) && await verifyCourse())return;
     let coordinatedStalls=0;
+    const collectedPublications = new Set();
     for (let step = 1; step <= MAX_STEPS; step += 1) {
       if (page.isClosed()) {
         if (await verifyCourse()) return;
@@ -1235,6 +1359,21 @@ async function main() {
         }
       }
       let { snapshot, handles } = await readSnapshot(page, mode);
+      if ((mode === 'read' || process.env.VITRIOL_LEARNER_INTENT) && !snapshot.choices.length) {
+        for (const frame of await visibleFrames(page)) {
+          const root = publicationRoot(frame.url());
+          if (!root || collectedPublications.has(root)) continue;
+          console.log(`LEARNER_PROGRESS ${JSON.stringify({message:'Collecting referenced lesson text within this publication; images and missing sources remain explicit gaps.'})}`);
+          const material = await collectAuthoredMaterial(frame, {title:snapshot.title});
+          if (!material) continue;
+          collectedPublications.add(root);
+          snapshot.sourceMaterials = material.materials;
+          snapshot.sourcePublication = frame.url().split(/[?#]/)[0];
+          snapshot.sourceExtraction = JSON.stringify({...material,materials:undefined}).slice(0,4000);
+          console.log(`LEARNER_PROGRESS ${JSON.stringify({message:`Collected ${material.materials.length} source-labelled text chunks from ${material.pages} lesson sources${material.incomplete ? '; gaps or limits remain' : ''}. Retaining course material.`})}`);
+          break;
+        }
+      }
       if(mode==='quiz' && snapshot.question && observationFor(page).capturedQuestionId!==snapshot.question.id) {
         await captureCurrentView(page);
         const state=observationFor(page);
@@ -1331,12 +1470,13 @@ async function main() {
         finish(true);
         return;
       }
-      const popup = action.action === 'click' ? page.waitForEvent('popup', { timeout: 2500 }).catch(() => null) : null;
+      const popup = action.action === 'click' ? await watchCoursePopup(page) : null;
       let switched;
       try {
         switched = await applyAction(page, action, view, viewHandles, mode);
-        if (['click', 'answer-select'].includes(action.action)) delete observationFor(page).lastBlockedControl;
+        if (['click', 'answer-select', 'answer-group'].includes(action.action)) delete observationFor(page).lastBlockedControl;
       } catch (error) {
+        popup?.close();
         if (!['click', 'answer-select'].includes(action.action) || page.isClosed()
           || !(error instanceof CourseControlBlocked || error?.name === 'TimeoutError' || /element is not attached|target changed/i.test(error?.message || ''))) throw error;
         const state = observationFor(page);
@@ -1355,17 +1495,16 @@ async function main() {
         continue;
       }
       if (switched) page = switched;
-      const opened = popup ? await popup : null;
+      const opened = popup && !switched ? await popup.resolve() : null;
+      if (switched) popup?.close();
       if (opened) {
-        if (!/^https?:/i.test(opened.url())) await opened.waitForURL(url => /^https?:$/.test(url.protocol), {timeout:10_000}).catch(() => undefined);
-        await opened.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => undefined);
         landing = landing || originatingSabaPage(opened) || (/^https:\/\/hpi-external\.sabacloud\.com\//i.test(page.url()) ? page : null);
         page = opened;
         await protectSabaPopups(page);
         console.log('Following the course window opened by the selected control');
       }
       const target = [...(view.buttons || []), ...(view.choices || []), ...(view.tabs || [])].find((item) => item.id === action.targetId);
-      const activity = action.action === 'select-tab' ? `Switched to ${target?.name || 'the selected course page'}.` : action.action === 'click' ? (target?.name?.startsWith('Course interaction:') ? 'Opened an interactive part of the course.' : `Opened ${target?.name || 'the selected control'}.`) : action.action === 'answer-select' ? `Selected ${target?.name || 'an answer'}.` : action.action === 'scroll' ? 'Scrolled to look for more course content.' : 'Checking the current page.';
+      const activity = action.action === 'answer-group' ? `Set and verified ${action.answers.length} answers. Checking the fresh page before continuing.` : action.action === 'select-tab' ? `Switched to ${target?.name || 'the selected course page'}.` : action.action === 'click' ? (target?.name?.startsWith('Course interaction:') ? 'Opened an interactive part of the course.' : `Opened ${target?.name || 'the selected control'}.`) : action.action === 'answer-select' ? `Selected ${target?.name || 'an answer'}.` : action.action === 'scroll' ? 'Scrolled to look for more course content.' : 'Checking the current page.';
       console.log(`LEARNER_PROGRESS ${JSON.stringify({ message: activity })}`);
       console.log(`Learner step ${step}: ${action.action}`);
     }
@@ -1386,7 +1525,7 @@ async function main() {
 if (require.main === module) {
   main().catch((error) => {
     console.error(String(error?.message || error));
-    finish(false, 'learner-error');
+    finish(false, /Learner input (?:timed out|closed)|coordination.{0,30}timed out/i.test(error?.message || '') ? 'learner-interrupted' : 'learner-error');
   });
 }
 

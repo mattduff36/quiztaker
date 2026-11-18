@@ -30,6 +30,10 @@
  */
 'use strict';
 
+// At browser zoom other than 100%, capture the existing Chrome surface and
+// normalize pixels offline; no screenshot clip, viewport or zoom overrides.
+const {captureStableViewport} = require('./lib/stable-viewport-capture');
+
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -259,7 +263,7 @@ async function startRecorder(page, options = {}) {
   }
 
   async function captureLayout(target, states) {
-    const viewport = await target.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    const viewport = await target.evaluate(() => ({ width: innerWidth, height: innerHeight, dpr:devicePixelRatio }));
     const examined = new Map(states.map(state => [state.frame, state.safe]));
     const frames = target.frames();
     const rectangles = [];
@@ -326,14 +330,11 @@ async function startRecorder(page, options = {}) {
         try {
           before = await captureLayout(target, states);
           if (before.viewport.width * before.viewport.height > 8000000) { requestStop('viewport-limit'); break; }
-          const imageFormat = before.rectangles.length ? { type: 'png' } : { type: 'jpeg', quality: 55 };
-          pixels = await target.screenshot({
-            ...imageFormat, scale: 'css', caret: 'initial', timeout: 3000,
-          });
+          pixels = await captureStableViewport(target, before.viewport, before.rectangles.length ? 'png' : 'jpeg');
           const checked = await inspect(target, false);
           if (checked) after = await captureLayout(target, checked);
         } catch (error) {
-          if (/detached|destroyed|navigation|closed|timeout/i.test(error.message)) continue;
+          if (/detached|destroyed|navigation|closed|timeout|viewport dimensions changed/i.test(error.message)) continue;
           throw error;
         }
         if (reason) break;

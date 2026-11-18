@@ -9,6 +9,7 @@ export const learnerActions = new Set([
   'click',
   'answer-select',
   'answer-text',
+  'answer-group',
   'scroll',
   'find-text',
   'wait',
@@ -31,6 +32,8 @@ export interface LearnerControl {
   kind?: 'content' | 'navigation' | 'quiz-navigation' | 'submission';
   checked?: boolean;
   selection?: { value: string; answered: boolean };
+  groupId?: string;
+  answerKind?: 'radio' | 'checkbox';
 }
 
 export interface LearnerSnapshot {
@@ -48,6 +51,10 @@ export interface LearnerSnapshot {
   image?: string;
   question?: { id: string; number: number; total: number; stem: string };
   imageIdentity?: { id: string; questionId?: string };
+  answerPageId?: string;
+  sourceMaterials?: Array<{ title: string; url: string; text: string }>;
+  sourceExtraction?: string;
+  sourcePublication?: string;
   /** Observed course headings; inventory is not evidence of reading. */
   outlines?: Array<{ url: string; title: string; topics: string[] }>;
 }
@@ -56,6 +63,7 @@ export type LearnerAction =
   | { action: 'click'; targetId: string }
   | { action: 'answer-select'; targetId: string }
   | { action: 'answer-text'; targetId: string; text: string }
+  | { action: 'answer-group'; pageId: string; answers: Array<{ targetId: string; checked: boolean } | { targetId: string; text: string }> }
   | { action: 'select-tab'; targetId: string }
   | { action: 'scroll'; direction?: 'up' | 'down' }
   | { action: 'find-text'; text: string }
@@ -121,6 +129,30 @@ export function parseLearnerAction(
   const name = typeof record.action === 'string' ? record.action : '';
   if (deniedLearnerActions.has(name) || !learnerActions.has(name)) {
     return { ok: false, error: 'Learner action is not allowed' };
+  }
+  if (name === 'answer-group') {
+    if (policy.mode !== 'quiz' || !snapshot.answerPageId || !/^[a-f0-9]{64}$/.test(snapshot.answerPageId) || record.pageId !== snapshot.answerPageId
+      || !Array.isArray(record.answers) || record.answers.length < 1 || record.answers.length > 8) {
+      return { ok: false, error: 'Grouped answers require quiz mode, the current answerPageId and 1 to 8 observed answers' };
+    }
+    const answers: Extract<LearnerAction, {action:'answer-group'}>['answers'] = [];
+    const seen = new Set<string>(), radios = new Set<string>();
+    for (const item of record.answers) {
+      if (!item || typeof item !== 'object') return {ok:false,error:'Grouped answer is invalid'};
+      const entry = item as Record<string, unknown>, id = entry.targetId;
+      if (typeof id !== 'string' || seen.has(id)) return {ok:false,error:'Grouped answer targets must be unique'};
+      seen.add(id);
+      const choice = snapshot.choices?.find(control => control.id === id);
+      const field = snapshot.fields?.find(control => control.id === id);
+      if (choice && typeof entry.checked === 'boolean' && entry.text == null && choice.answerKind && choice.groupId) {
+        if (choice.answerKind === 'radio' && (!entry.checked || radios.has(choice.groupId))) return {ok:false,error:'Select only one answer per radio question'};
+        if (choice.answerKind === 'radio') radios.add(choice.groupId);
+        answers.push({targetId:id,checked:entry.checked});
+      } else if (field && entry.checked == null && typeof entry.text === 'string' && entry.text.trim() && entry.text.length <= 2000) {
+        answers.push({targetId:id,text:entry.text});
+      } else return {ok:false,error:'Grouped answers must use observed answer controls, never navigation or submission'};
+    }
+    return {ok:true,action:{action:'answer-group',pageId:snapshot.answerPageId,answers}};
   }
   if (name === 'select-tab') {
     const targetId = typeof record.targetId === 'string' ? record.targetId : '';

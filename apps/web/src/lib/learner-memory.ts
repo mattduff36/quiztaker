@@ -201,6 +201,8 @@ export function composeLearnerSnapshot(
     url: current.url,
     text: currentText,
     choices: current.choices,
+    answerPageId: current.answerPageId,
+    sourceExtraction: current.sourceExtraction,
     fields: current.fields,
     playback: current.playback,
     question: current.question,
@@ -221,7 +223,7 @@ export function composeLearnerSnapshot(
   parts.push(MEMORY_NOTE);
   const materialBudget = Math.max(0, Math.min(LEARNER_CONTEXT_MATERIAL_CHARS, 24_000 - parts.join('\n\n').length - 40));
   const query = [current.title, current.choices?.length ? currentText : '', memory.objective].filter(Boolean).join('\n');
-  const material = fitLines(materialLines(memory.materials, query), materialBudget);
+  const material = fitLines(materialLines(withAuthoredMaterials(memory.materials, current), query), materialBudget);
   if (material) parts.push(`Retained course material:\n${material}`);
   snapshot.text = parts.filter((part) => part.length > 0).join('\n\n');
   return snapshot;
@@ -363,7 +365,7 @@ export async function readLearnerSessionForOperator(
 export async function recordLearnerTurn(
   input: LearnerMemoryScope & {
     conversationId: string;
-    observed: { title?: string; url?: string; text?: string };
+    observed: LearnerSnapshot;
     decision: { action?: unknown; stop?: boolean; error?: string };
   },
   deps?: LearnerMemoryDeps,
@@ -389,10 +391,39 @@ export async function recordLearnerTurn(
         ...existing.history,
         { role: 'assistant', text: decision, at: new Date().toISOString(), ...(input.observed.url ? { url: input.observed.url.slice(0, 2000) } : {}) },
       ]),
-      materials: addLearnerMaterial(existing.materials, input.observed),
+      materials: withAuthoredMaterials(addLearnerMaterial(existing.materials, input.observed), input.observed),
     });
     return true;
   });
+}
+
+/** Keep authored excerpts inside the same owner/helper/browser memory bounds. */
+export function withAuthoredMaterials(materials: LearnerMaterial[], snapshot: LearnerSnapshot): LearnerMaterial[] {
+  let root: string;
+  try {
+    const selected = new URL(snapshot.url || '');
+    const url = new URL(snapshot.sourcePublication || snapshot.url || '');
+    const path = /^\/content\/canon-europe\/publications\/\d+\//.exec(url.pathname)?.[0];
+    const selectedPath = /^\/content\/canon-europe\/publications\/\d+\//.exec(selected.pathname)?.[0];
+    if (url.origin !== 'https://canon-europe.csod.com' || selected.origin !== url.origin || !path
+      || url.username || url.password || url.search || url.hash || (selectedPath && selectedPath !== path)) {
+      if (snapshot.sourceMaterials?.length) throw new Error('Authored material is outside the selected course origin');
+      return materials;
+    }
+    root = url.origin + path;
+  } catch {
+    if (snapshot.sourceMaterials?.length) throw new Error('Invalid authored publication scope; no material retained');
+    return materials;
+  }
+  let next = materials;
+  for (const source of (snapshot.sourceMaterials ?? []).slice(0,32)) {
+    try {
+      const url = new URL(source.url);
+      if (!url.href.startsWith(root) || url.username || url.password || url.search || url.hash || /%|\\/.test(url.pathname) || !/\.xml$/i.test(url.pathname)) throw new Error('Authored material source is outside its publication');
+      next = addLearnerMaterial(next, source);
+    } catch { throw new Error('Invalid authored material source; no material retained'); }
+  }
+  return next;
 }
 
 export interface StoredLearnerPauseScope {

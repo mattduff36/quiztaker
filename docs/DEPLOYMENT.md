@@ -344,3 +344,43 @@ changes can reuse a stable target, while changed questions and selections still
 invalidate decisions. Browser status says Working during active learner work
 when the separate connection check is deferred. Container actions use the exact
 observed title and identity and return structured failure for incomplete results.
+
+## Helper 1.0.46: Canon authored material and current-page recovery
+
+Install helper 1.0.46 alongside the control plane for these executor changes.
+Normal reading can collect the observed Canon Brightwave publication's authored
+lesson XML and recursively referenced dialogues. Requests stay on the selected
+HTTPS publication root, use the browser's existing same-origin authentication
+and reject redirects. Limits are 200 requests, 160 XML pages, depth 6, 8 MiB total,
+512 KiB per response and 45 seconds; retained text is also bounded. Source-labelled
+excerpts use the existing owner/helper/browser-session conversation memory, not a
+direct database import. Missing, image-only, excluded assessment and bounded-out
+sources remain explicit gaps, not claims of full coverage or course completion.
+Short pages share source-labelled text groups, so the 32-group retention limit
+does not stop collection at the first 32 pages of a longer lesson.
+
+The model can set up to eight observed same-page answers in one `answer-group`.
+The core parser and helper executor require the current page identity, preflight
+every target, set rather than toggle selections and verify the final DOM.
+Navigation, submission, stale questions and changed options cannot join a group.
+Single answers remain supported; no new capability-version gate is necessary
+because older snapshots do not expose the required answer-page identity.
+
+Quick-scrape and learner viewport captures use a no-clip native CDP capture,
+resized offline to CSS pixels. They never change Chrome zoom or device metrics;
+quick-scrape's existing sensitive-field masking and before/after gates remain.
+An isolated headed Chrome fixture checks actual 80% zoom with 5 fps recording
+and repeated captures. This is regression evidence, not a live flicker/pass claim.
+
+Brightwave topic Start controls are topic-labelled and graphical hotspots must
+be visible and hit-tested. Only publication-scoped graphical SIMS example-login
+controls without credential forms are treated as simulations. Real sign-in stays
+user-only. New or reused named course windows must belong to the exact opener;
+unchanged, unrelated and external pages are not followed.
+
+Interrupted runs discard stale questions and offer explicit current-page resume,
+without replaying old guidance or restarting an assessment. Completed-task starts
+invalidate older context responses and preserve the new goal and selected tab.
+Assessment permission is clause-scoped; read-only and no-submit restrictions
+remain binding. No schema migration is needed for this release. Parent-owned
+release gates and real Windows installation/heartbeat validation still apply.

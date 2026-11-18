@@ -16,13 +16,17 @@ export function independentIntent(goal: string): IndependentIntent | null {
   const material = /\b(?:material|lessons?|modules?|content|slides?|course|transcript|notes)\b/.test(text);
   const assessment = /\b(?:quiz|quizzes|assessments?|exams?|tests?|knowledge checks?)\b/.test(text);
   if (!assessment) return reading ? 'read' : null;
-  if (/\b(?:without|skip|do not|don't|never|avoid|no|only read|read only)\b/.test(text)) {
-    return reading && !/\b(?:then|but|also)\s+(?:take|pass|submit|answer|complete)\b/.test(text) ? 'read' : null;
+  // Submission prohibitions are global; exclusions of a named completed course
+  // and optional review wording apply only to their own clause.
+  if (/\b(?:read[- ]only|only read|(?:do not|don't|never|without)\s+submit(?:ting)?|no submissions?)\b/.test(text)) return reading ? 'read' : null;
+  const clauses = text.split(/[.;\n]|\b(?:and then|then|but|also|and)\b/);
+  let action = false, denied = false;
+  for (const clause of clauses) {
+    if (/\b(?:without|skip|do not|don't|never|avoid|no)\b/.test(clause)) { denied = true; continue; }
+    if (/\b(?:how to|whether|if|later|help me|explain|prepare)\b/.test(clause)) continue;
+    if (/\b(?:take|pass|submit|answer|complete|attempt|do|finish|work through)\s+[^.;\n]{0,100}\b(?:quiz|quizzes|assessments?|exams?|tests?|knowledge checks?)\b/.test(clause)) action = true;
   }
-  const decisionText = text.replace(/\b(?:if needed|if necessary|when needed)\b/g, '');
-  if (/\b(?:how to|whether|if|later|practice|help me|explain|prepare)\b/.test(decisionText)) return null;
-  const action = /\b(?:take|pass|submit|answer|complete|attempt|do|finish|work through)\s+(?:(?:the|this|all|its|final|practice|course)\s+)*(?:quiz|quizzes|assessments?|exams?|tests?|knowledge checks?)\b/.test(text);
-  return action ? (reading && material ? 'read-and-assess' : 'quiz') : null;
+  return action ? (reading && material ? 'read-and-assess' : 'quiz') : denied && reading ? 'read' : null;
 }
 
 export type GuidedDetection = {
@@ -63,6 +67,14 @@ export function decideGuidedFlow(detection: GuidedDetection, mode: GuidedLearnin
 }
 
 export function learnerQuestion(output: string): { question: string; options: string[]; url?: string } | null {
+  if (/Learner input (?:timed out|closed)|(?:decision|coordination).{0,30}timed out/i.test(output)) return null;
+  const terminal = output.split('\n').findLast(line => line.startsWith('AUTOMATION_RESULT '));
+  if (terminal) {
+    try {
+      const result = JSON.parse(terminal.slice('AUTOMATION_RESULT '.length));
+      if (result.ok === true || result.failures?.some((failure: {reason?:string}) => failure.reason && failure.reason !== 'needs-user-input')) return null;
+    } catch { return null; }
+  }
   const lines = output.split('\n').filter((line) => line.startsWith('LEARNER_QUESTION '));
   try {
     const value = JSON.parse(lines.at(-1)?.slice('LEARNER_QUESTION '.length) || 'null');
@@ -83,7 +95,7 @@ export function learnerStopMessage(output: string): string | null {
   if (reason === 'quiz-failed') return 'The assessment showed a failed result. Review the feedback in the course browser.';
   if (reason === 'step-cap') return 'Vitriol reached the step limit for this run. Continue from the current page in the course browser.';
   if (reason === 'rejected-action') return 'The suggested action did not match an available course control. Inspect the current page again.';
-  if (/Learner input timed out/i.test(output)) return 'Vitriol timed out waiting for a next-step decision. The course page was left open.';
+  if (reason === 'learner-interrupted' || /Learner input (?:timed out|closed)/i.test(output)) return 'The run was interrupted while waiting for a next-step decision. The course page was left open. Resume from the current page; do not restart the assessment.';
   return null;
 }
 

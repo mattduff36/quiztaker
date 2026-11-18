@@ -25,6 +25,7 @@ function describeReply(action: LearnerAction, snapshot: LearnerSnapshot): string
     case 'click': return `Click ${snapshot.buttons?.find(button => button.id === action.targetId)?.name ?? 'the course control'}.`;
     case 'answer-select': return `Select ${snapshot.choices?.find(choice => choice.id === action.targetId)?.name ?? 'the answer'}.`;
     case 'answer-text': return 'Enter the answer in the observed course response field.';
+    case 'answer-group': return `Set and verify ${action.answers.length} answers on the current page without navigation or submission.`;
     case 'select-tab': return 'Switch to the selected course tab.';
     case 'scroll': return `Scroll ${action.direction === 'up' ? 'up' : 'down'}.`;
     case 'find-text': return 'Find the requested text on the page.';
@@ -53,13 +54,13 @@ export async function askCoordinator(
   const reply = join(directory, `${id}.reply.json`);
   const temporary = `${request}.tmp`;
   const expiresAt = Math.min(connection.expiresAt, Date.now() + timeoutMs);
-  const { title, url, text, buttons, choices, fields, playback, tabs, outlines, question, imageIdentity } = snapshot;
+  const { title, url, text, buttons, choices, fields, playback, tabs, outlines, question, imageIdentity, answerPageId, sourceExtraction } = snapshot;
   try {
     await mkdir(directory, { recursive: true });
     await writeFile(temporary, JSON.stringify({
       id, connectionId: connection.id, expiresAt, jobId,
       reason: sanitizeLogValue(reason.slice(0, 500)),
-      snapshot: sanitizeLogValue({ title, url, text, buttons, choices, fields, playback, tabs, outlines, question, imageIdentity }),
+      snapshot: sanitizeLogValue({ title, url, text, buttons, choices, fields, playback, tabs, outlines, question, imageIdentity, answerPageId, sourceExtraction }),
     }), { flag: 'wx' });
     await rename(temporary, request);
     showExchange?.(`Vitriol → ChatGPT · ${reason}`);

@@ -23,6 +23,23 @@ const snapshot = {
   ],
 };
 
+test('grouped answers are quiz-only, page-bound, bounded, unique and contain no navigation',()=>{
+  const view={answerPageId:'a'.repeat(64),choices:[
+    {id:'c1',name:'A',groupId:'question-one',answerKind:'radio',checked:true},
+    {id:'c2',name:'B',groupId:'question-one',answerKind:'radio'},
+    {id:'k1',name:'C',groupId:'question-two',answerKind:'checkbox'}],buttons:[{id:'b1',name:'Submit'}]};
+  const action={action:'answer-group',pageId:view.answerPageId,answers:[{targetId:'c1',checked:true},{targetId:'k1',checked:false}]};
+  assert.equal(parseLearnerAction(action,view,{mode:'quiz'}).ok,true);
+  assert.equal(parseLearnerAction(action,view,{mode:'read'}).ok,false);
+  assert.equal(parseLearnerAction({...action,pageId:'b'.repeat(64)},view,{mode:'quiz'}).ok,false);
+  assert.equal(parseLearnerAction({...action,pageId:'invalid'},{...view,answerPageId:'invalid'},{mode:'quiz'}).ok,false);
+  for(const answers of [[],Array(9).fill({targetId:'k1',checked:true}),[{targetId:'b1',checked:true}],
+    [{targetId:'c1',checked:false}],[{targetId:'c1',checked:true},{targetId:'c2',checked:true}],
+    [{targetId:'k1',checked:true},{targetId:'k1',checked:false}]]) {
+    assert.equal(parseLearnerAction({...action,answers},view,{mode:'quiz'}).ok,false);
+  }
+});
+
 test('ordinary course exits are reserved for the scoped terminal finalizer in every mode', () => {
   for (const name of ['Close module', 'CLOSE PLAYER', 'Exit course', 'Exit and finish', 'Close browser', 'Delete account']) {
     for (const mode of ['read', 'quiz']) {

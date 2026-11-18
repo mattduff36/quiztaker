@@ -37,6 +37,24 @@ const helperB = '22222222-2222-4222-8222-222222222222';
 const browserA = '33333333-3333-4333-8333-333333333333';
 const browserB = '44444444-4444-4444-8444-444444444444';
 
+test('authored source chunks use the normal scoped turn transaction and retained model context',async()=>{
+  const db=createHarness(),scope={userId:userA,helperId:helperA,browserSessionId:browserA};
+  const session=await ensureLearnerSession({...scope,objective:'Read the firmware lesson'},db);
+  const root='https://canon-europe.csod.com/content/canon-europe/publications/1194/';
+  const observed={url:root+'lib_en/templates/master.htm',text:'Firmware overview',sourcePublication:root+'index.htm',
+    sourceMaterials:[{url:root+'lib_en/xml/dialogue.xml',title:'Firmware source',text:'[Source: dialogue.xml]\nFirmware is updated through the observed utility.'}]};
+  assert.equal(await recordLearnerTurn({...scope,conversationId:session.id,observed,decision:{action:{action:'wait',ms:0}}},db),true);
+  const retained=await readLearnerSessionForModel({...scope,conversationId:session.id},db);
+  assert.ok(retained?.materials.some(item=>item.url===observed.sourceMaterials[0].url));
+  assert.match(composeLearnerSnapshot({text:'How is firmware updated?'},retained).text||'',/updated through the observed utility/);
+  assert.equal(await readLearnerSessionForModel({...scope,userId:userB,conversationId:session.id},db),null);
+  await assert.rejects(recordLearnerTurn({...scope,conversationId:session.id,observed:{
+    ...observed,sourceMaterials:[{...observed.sourceMaterials[0],url:'https://external.invalid/secret.xml'}],
+  },decision:{}},db),/Invalid authored material source/);
+  assert.throws(()=>composeLearnerSnapshot({...observed,url:'https://external.invalid/course'},retained),/Invalid authored publication scope/);
+  assert.throws(()=>composeLearnerSnapshot({...observed,url:observed.url.replace('/1194/','/1195/')},retained),/Invalid authored publication scope/);
+});
+
 test('a new task creates empty course memory while preserving the previous conversation',async()=>{
   const db=createHarness();
   const scope={userId:userA,helperId:helperA,browserSessionId:browserA};

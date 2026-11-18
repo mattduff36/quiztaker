@@ -49,7 +49,7 @@ function reply(path,method,body,now,s){
     s.finishPosts++;const task=s.jobs.get(body.jobId);task.status=body.result;task.outcome={status:`operator-${body.result}`,verified:false,operatorResolution:{result:body.result,requestedAt:new Date(now).toISOString(),resolvedAt:new Date(now).toISOString(),reportedBy:'operator'}};s.task=task;return{ok:true,status:body.result,jobId:task.id};
   }
   if(path==='/api/services/status')return s.statusFailed?{__status:503,error:'Service status is unavailable.'}:{checkedAt:new Date(now).toISOString(),activity:{session:!s.paused&&s.online&&s.connected&&!s.noSession,task:Boolean(s.task&&['queued','running','dispatched'].includes(s.task.status))},helper:{online:s.online,lastSeenAt:new Date(now).toISOString()},browser:{connected:s.connected&&!s.noSession,checkedAt:new Date(now-(s.statusStale?120_000:0)).toISOString()},assistant:{ready:true,source:'personal',provider:'openai'}};
-  if(path.startsWith('/api/operations/learning'))return{id:null,objective:null,history:[]};
+  if(path.startsWith('/api/operations/learning'))return s.memory||{id:null,objective:null,history:[]};
   if(path==='/api/operations/actions'){
     if(body.capabilityId==='start-browser'){s.startConfirm=body.confirm;s.starts=(s.starts||0)+1;if(s.actionError)return{__status:503,error:'Start unavailable.'};return{jobId:makeJob('start-browser')};}
     if(body.capabilityId==='detect'&&!s.blocked){s.blocked=true;makeJob('list-tabs');return{plan:{planId:'detect-plan'},waitingForJob:true};}
@@ -66,7 +66,7 @@ function reply(path,method,body,now,s){
       if(s.recordingFinished&&!s.waitForSaving){job.status='completed';job.result={ok:true,result:{folder:'C:/Fixtures/recording',pages:3,frames:7}};}
       return{job,events:s.waitForRecording ? [] : [{data:{text:'QUICK_SCRAPE_READY {}\n'}}],artifacts:[]};
     }
-if(job&&job.capability_id!==s.holdCapability&&job.status!=='failed')job.status='completed';if(job?.capability_id==='quiz-learn'&&s.questionOutput){job.status='awaiting-input';job.outcome={verified:false,status:'needs-user-input'};}return{job,events:job?.capability_id==='quiz-learn'?[{data:{text:s.questionOutput}}]:[],artifacts:[]};}
+if(job&&job.capability_id!==s.holdCapability&&job.status!=='failed')job.status='completed';if(job?.capability_id==='quiz-learn'&&job.status!=='failed'&&s.questionOutput){job.status='awaiting-input';job.outcome={verified:false,status:'needs-user-input'};}return{job,events:job?.capability_id==='quiz-learn'?[{data:{text:s.questionOutput}}]:[],artifacts:[]};}
   throw Error(`Unexpected fixture request: ${method} ${path}`);
 }
 let servedState=state();
@@ -126,22 +126,43 @@ try{
       await expect(page.getByRole('button',{name:'Confirm and queue',exact:true})).toHaveCount(0);
       await page.close();
     }
-    for(const completion of ['verified','operator']) {
+    for(const completion of ['verified','operator','verified-direct']) {
       const page=await browser.newPage({viewport});const fixture=state();
-      fixture.task={id:'finished-course',capability_id:'quiz-learn',status:'completed',outcome:completion==='verified'
+      fixture.task={id:'finished-course',capability_id:'quiz-learn',status:'completed',outcome:completion.startsWith('verified')
         ? {verified:true,status:'1/1 completed'}
         : {operatorResolution:{result:'completed',requestedAt:new Date().toISOString(),resolvedAt:new Date().toISOString()}}};
       fixture.jobs.set(fixture.task.id,fixture.task);
-      await page.route('**/api/**',async route=>{const req=route.request();const {__status,...json}=reply(new URL(req.url()).pathname,req.method(),req.postDataJSON()||{},Date.now(),fixture);await route.fulfill({status:__status||200,json});});
+      let holdNext=false,heldContext=false,release;const held=new Promise(done=>{release=done;});let learnerInput;
+      await page.route('**/api/**',async route=>{
+        const req=route.request(),path=new URL(req.url()).pathname,body=req.postDataJSON()||{};
+        if(path==='/api/operations/actions'&&body.capabilityId==='quiz-learn')learnerInput=body.capabilityInput;
+        const {__status,...json}=reply(path,req.method(),body,Date.now(),fixture);
+        if(path==='/api/operations/context'&&holdNext){holdNext=false;heldContext=true;await held;}
+        await route.fulfill({status:__status||200,json});
+      });
       await page.goto(url);
       await expect(page.getByRole('heading',{name:'Task complete',exact:true})).toBeVisible();
       await expect(page.getByRole('button',{name:'Pause session',exact:true})).toBeHidden();
       await expect(page.getByRole('button',{name:'Start a new task',exact:true})).toBeEnabled();
       expect(fixture.connected).toBe(true);
       await page.screenshot({path:join(artifacts,`${viewport.width}-${completion}-task-complete.png`),fullPage:true});
-      await page.getByRole('button',{name:'Start a new task',exact:true}).click();
-      await expect(page.getByRole('heading',{name:'Task complete',exact:true})).toBeHidden();
-      await expect(page.getByRole('button',{name:'Pause session',exact:true})).toBeVisible();
+      holdNext=true;await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+      await expect.poll(()=>heldContext).toBe(true);
+      if(completion!=='verified-direct') {
+        await page.getByRole('button',{name:'Start a new task',exact:true}).click();
+        await expect(page.getByRole('heading',{name:'Task complete',exact:true})).toBeHidden();
+        await expect(page.getByRole('button',{name:'Pause session',exact:true})).toBeVisible();
+      }
+      await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');
+      const goal='Take the Firmware assessment; do not retake Device Features.';
+      await page.getByRole('textbox',{name:/What would you like to achieve/}).fill(goal);
+      release();
+      await expect(page.getByRole('textbox',{name:/What would you like to achieve/})).toHaveValue(goal);
+      await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
+      await expect.poll(()=>learnerInput?.objective,{timeout:20_000}).toBe(goal);
+      expect(learnerInput.mode).toBe('quiz');
+      await expect(page.getByText('Ready',{exact:true})).toBeVisible();
+      await expect(page.getByRole('heading',{name:'Vitriol has a question',exact:true})).toBeHidden();
       await page.close();
     }
     const page=await browser.newPage({viewport});const fixture=state();
@@ -312,6 +333,42 @@ try{
     await page.close();
   }
   console.log('PASS browser close progress clears after success and reports failure.');
+  {
+    const page=await browser.newPage(),fixture=state();
+    const oldQuestion='Should I retake Device Features?';
+    fixture.questionOutput='LEARNER_QUESTION '+JSON.stringify({question:oldQuestion,options:['Retake Device Features'],url:'https://example.invalid/course'})
+      +'\nLearner input timed out\nAUTOMATION_RESULT '+JSON.stringify({failures:[{reason:'learner-interrupted'}]});
+    const failed={id:'interrupted-quiz',capability_id:'quiz-learn',status:'failed',outcome:{verified:false,status:'failed'},
+      input:{mode:'quiz',intent:'quiz',target:{targetId:'course',browserSessionId:'22222222-2222-4222-8222-222222222222',fingerprint:'course-fingerprint'}}};
+    fixture.latest=failed;fixture.jobs.set(failed.id,failed);
+    fixture.memory={id:'previous-course-memory',objective:'Continue the Firmware assessment from the current page.',history:[
+      {role:'assistant',text:JSON.stringify({action:{action:'ask-user',question:oldQuestion,options:['Retake Device Features']}}),url:'https://example.invalid/course'},
+      {role:'user',text:'Previous question: '+oldQuestion+'\nUser answer: No, continue Firmware.',guidance:true},
+    ]};
+    let learnerInput;
+    await page.route('**/api/**',async route=>{
+      const req=route.request(),path=new URL(req.url()).pathname,body=req.postDataJSON()||{};
+      if(path==='/api/operations/actions'&&body.capabilityId==='quiz-learn')learnerInput=body.capabilityInput;
+      const {__status,...json}=reply(path,req.method(),body,Date.now(),fixture);
+      await route.fulfill({status:__status||200,json});
+    });
+    await page.goto(url);
+    await expect(page.getByText('Run interrupted',{exact:true})).toBeVisible();
+    await expect(page.getByRole('heading',{name:'Vitriol has a question',exact:true})).toBeHidden();
+    await expect(page.getByRole('button',{name:'Retake Device Features',exact:true})).toBeHidden();
+    const goal='Take the Firmware assessment; do not retake Device Features.';
+    await page.getByRole('combobox',{name:'Course tab',exact:true}).selectOption('course');
+    await page.getByRole('textbox',{name:/What would you like to achieve/}).fill(goal);
+    fixture.questionOutput='';
+    await page.getByRole('button',{name:'Resume from current page',exact:true}).click();
+    await expect.poll(()=>learnerInput?.objective,{timeout:20_000}).toBe(goal);
+    expect(learnerInput.mode).toBe('quiz');expect(learnerInput.guidance).toBeUndefined();
+    await expect(page.getByText('Ready',{exact:true})).toBeVisible();
+    await expect(page.getByRole('heading',{name:'Vitriol has a question',exact:true})).toBeHidden();
+    await page.screenshot({path:join(artifacts,'interrupted-current-page-resume.png'),fullPage:true});
+    await page.close();
+  }
+  console.log('PASS interrupted runs do not restore an answered question and resume with fresh inspection.');
   for (const [label, intent, goal] of [
     ['Work independently', 'read-and-assess', 'Read the lessons, then take the quiz'],
     ['Co-ordinate with ChatGPT', 'coordinate', /progress and lesson checklist.*connected Codex chat/],

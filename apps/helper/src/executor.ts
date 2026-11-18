@@ -126,6 +126,7 @@ export function startJob(
       ...(selectedCapture ? { VITRIOL_CAPTURE_TARGET: selectedCapture.url } : {}),
       VITRIOL_LEARNER_MODE: capability.id === 'quiz-learn' ? parseLearnerMode(envelope.payload.input?.mode) : 'read',
       VITRIOL_COORDINATE: capability.id === 'quiz-learn' && envelope.payload.input?.mode === 'quiz' && envelope.payload.input.intent === 'coordinate' ? '1' : '',
+      VITRIOL_LEARNER_INTENT: capability.id === 'quiz-learn' ? String(envelope.payload.input?.intent || '') : '',
       VITRIOL_LEARNER_CONVERSATION: capability.id === 'quiz-learn' ? String(envelope.payload.input?.conversationId || '') : '',
       VITRIOL_LEARNER_GUIDANCE: capability.id === 'quiz-learn' ? String(envelope.payload.input?.guidance || '') : '',
       QUIZTAKER_HOME: getHelperHome(),

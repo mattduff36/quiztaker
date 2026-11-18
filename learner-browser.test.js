@@ -216,7 +216,7 @@ test('learner process recognizes results and returns a resume prompt at the step
         cwd: __dirname, env: { ...process.env, VITRIOL_LEARNER_MODE: 'quiz', PLAYWRIGHT_CDP_URL: `http://127.0.0.1:${port}` },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-      let output = '';
+      let output = '', error = '';
       let sent = false;
       const timer = setTimeout(() => { child.kill(); reject(new Error('No step-limit pause')); }, 15000);
       child.stdout.on('data', chunk => {
@@ -227,9 +227,11 @@ test('learner process recognizes results and returns a resume prompt at the step
         }
       });
       child.on('error', reject);
-      child.on('exit', code => { clearTimeout(timer); resolve({ code, output }); });
+      child.stderr.on('data', chunk => {error += chunk;});
+      child.on('exit', code => { clearTimeout(timer); resolve({ code, output, error }); });
     });
     assert.equal(paused.code, 1);
+    assert.match(paused.output,/^LEARNER_QUESTION (.+)$/m,paused.error);
     const question = JSON.parse(paused.output.match(/^LEARNER_QUESTION (.+)$/m)[1]);
     assert.deepEqual(question.options, ['Resume from this page']);
     assert.equal(question.url, courseUrl);
@@ -477,7 +479,19 @@ test('capture attaches one bounded viewport JPEG and skips visible password/auth
   try {
     const page=await browser.newPage({viewport:{width:800,height:400}});
     await page.setContent('<h1>Course diagram</h1><p>A visible diagram explanation.</p>');
-    let captures=0;const screenshot=page.screenshot.bind(page);page.screenshot=async options=>{captures++;return screenshot(options);};
+    let captures=0,oversize=false,captured;
+    const context=page.context(),createSession=context.newCDPSession.bind(context);
+    context.newCDPSession=async target=>{
+      const session=await createSession(target),send=session.send.bind(session);
+      session.send=async(method,params)=>{
+        assert.ok(!/setDeviceMetricsOverride|setPageScaleFactor/.test(method));
+        if(method!=='Page.captureScreenshot')return send(method,params);
+        captures++;
+        if(oversize)return{data:Buffer.concat([Buffer.from(captured,'base64'),Buffer.alloc(900_000)]).toString('base64')};
+        const result=await send(method,params);captured=result.data;return result;
+      };
+      return session;
+    };
     const initial=await readSnapshot(page);assert.equal(captures,0);
     await applyAction(page,{action:'capture'},initial.snapshot,initial.handles);
     const first=await readSnapshot(page);const second=await readSnapshot(page);
@@ -499,7 +513,7 @@ test('capture attaches one bounded viewport JPEG and skips visible password/auth
     assert.match(blocked.snapshot.text,/Screenshot skipped/);
     assert.doesNotMatch(blocked.snapshot.text,/fixture-only-secret/);
     await page.setContent('<h1>Course view</h1>');
-    page.screenshot=async()=>Buffer.alloc(900_000);
+    oversize=true;
     const changed = await readSnapshot(page);
     await applyAction(page,{action:'capture'},changed.snapshot,changed.handles);
     const oversized=await readSnapshot(page);assert.equal(oversized.snapshot.image,undefined);assert.match(oversized.snapshot.text,/exceeds the size limit/);

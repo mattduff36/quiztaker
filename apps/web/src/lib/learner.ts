@@ -19,8 +19,11 @@ export const STANDING_INSTRUCTIONS_LABEL = 'Operator standing instructions (trus
 export const LEARNER_SYSTEM_PROMPT = [
   'You navigate the selected course and its assessment pages for the operator.',
   'Reply with one JSON object and no other text.',
-  'Allowed browser actions are exactly {"action":"click","targetId":"b1"} {"action":"answer-select","targetId":"c1"} {"action":"select-tab","targetId":"t1"} {"action":"scroll","direction":"down"} {"action":"scroll","direction":"up"} {"action":"find-text","text":"visible course phrase"} {"action":"wait","ms":500} {"action":"capture"} {"action":"verify"} {"action":"ask-user","question":"Which module should I open?","options":["Module 1","Resume here"]}.',
+  'Use only these browser actions and the grouped/written forms below: {"action":"click","targetId":"b1"} {"action":"answer-select","targetId":"c1"} {"action":"select-tab","targetId":"t1"} {"action":"scroll","direction":"down"} {"action":"scroll","direction":"up"} {"action":"find-text","text":"visible course phrase"} {"action":"wait","ms":500} {"action":"capture"} {"action":"verify"} {"action":"ask-user","question":"Which module should I open?","options":["Module 1","Resume here"]}.',
   'click and answer-select must use a targetId from the snapshot.',
+  'For several answers already observed on the SAME page, prefer {"action":"answer-group","pageId":"<answerPageId>","answers":[{"targetId":"c1","checked":true},{"targetId":"k1","checked":false}]}. Use this only when answerPageId and the answerKind/groupId metadata are present; otherwise use single-answer actions. At most 8 unique answers; one true radio per groupId. You may include {"targetId":"f1","text":"grounded response"}. checked sets state, never toggles. The helper preflights the entire group and verifies actual DOM states. Never include Next, Submit, retake or unobserved-page answers in a group. Inspect the fresh post-state before navigating or submitting.',
+  'Supported Brightwave authored lesson sources are collected automatically when reading a lesson. sourceExtraction reports bounds and gaps; source-labelled excerpts are retained privately through normal course memory. Missing, image-only and interactive content still needs visual inspection. Extraction is not full course coverage or completion.',
+  'A publication-scoped graphical "Course simulation: SIMS example entry" is an authored example, not portal SSO. Use its observed course interaction without entering real credentials. Genuine portal sign-in and password fields always remain user-only.',
   'For an observed fields entry in quiz mode, use {"action":"answer-text","targetId":"f1","text":"your grounded answer"}. Read the actual prompt, use retained material or capture for diagrams, fill the response, then use its observed Submit. Never fill authentication or account fields.',
   'Brainshark playback is handled locally after the operator accepts its listening requirement. At a paused inline question, answer it and submit. Never skip an unanswered question, jump through the outline to simulate reading, or report a completed course from a counter alone. The helper checks listening progress and Saba success. Ask only about an actual missing decision or control, using an action the user can take in the course browser.',
   'Use ask-user when the page is ambiguous, a needed capability is missing, or required information is missing.',
@@ -202,6 +205,8 @@ export function boundLearnerSnapshot(snapshot: LearnerSnapshot): LearnerSnapshot
     url: learnerPageAddress(snapshot.url),
     text: snapshot.text?.slice(0, LEARNER_CONTEXT_CHARS) ?? '',
     choices: (snapshot.choices ?? []).slice(0, 40).map(boundControl),
+    ...(snapshot.answerPageId ? {answerPageId:snapshot.answerPageId.slice(0,64)} : {}),
+    ...(snapshot.sourceExtraction ? {sourceExtraction:snapshot.sourceExtraction.slice(0,4000)} : {}),
     ...(snapshot.fields ? {fields:snapshot.fields.slice(0,8).map(field=>({...boundControl(field),value:field.value?.slice(0,2000) ?? ''}))} : {}),
     ...(snapshot.playback ? {playback:snapshot.playback} : {}),
     ...(snapshot.question ? {question:{id:snapshot.question.id.slice(0,64),number:snapshot.question.number,total:snapshot.question.total,stem:snapshot.question.stem.slice(0,1000)}} : {}),
@@ -269,6 +274,8 @@ function boundControl(control: import('@quiztaker/core').LearnerControl): import
     ...(control.kind ? { kind: control.kind } : {}),
     ...(typeof control.checked === 'boolean' ? { checked: control.checked } : {}),
     ...(control.selection ? {selection:{value:control.selection.value.slice(0,160),answered:control.selection.answered}} : {}),
+    ...(control.groupId ? {groupId:control.groupId.slice(0,64)} : {}),
+    ...(control.answerKind ? {answerKind:control.answerKind} : {}),
   };
 }
 

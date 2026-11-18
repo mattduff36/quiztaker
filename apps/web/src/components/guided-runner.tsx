@@ -17,11 +17,6 @@ type Question = { question: string; options?: string[]; next?: string; model?: b
 type CourseMode = 'independent' | 'coordinate' | 'quick';
 type RememberedTurn = { role: 'user' | 'assistant'; text: string; url?: string; guidance?: boolean };
 type CourseMemory = { browserSessionId?: string; id: string | null; objective: string | null; history: RememberedTurn[] };
-function rememberedQuestion(memory: CourseMemory | null) {
-  const last = memory?.history.findLast((turn) => !turn.guidance);
-  if (last?.role !== 'assistant' || !last.url) return null;
-  try { const decision = JSON.parse(last.text); return decision.action?.action === 'ask-user' ? learnerQuestion(`LEARNER_QUESTION ${JSON.stringify({ ...decision.action, url: last.url })}`) : null; } catch { return null; }
-}
 function conversationText(turn: RememberedTurn): string | null {
   if (turn.role === 'user') return turn.text.replace(/^Previous question:[\s\S]*?\nUser answer: /, '');
   try { const value = JSON.parse(turn.text); return value.action?.action === 'ask-user' ? value.action.question : null; } catch { return null; }
@@ -110,9 +105,11 @@ export function GuidedRunner(props: {
   const savedTarget = props.lastJob?.input?.target;
   const rawSavedIntent = props.lastJob?.input?.intent ?? props.lastJob?.input?.mode;
   const savedIntent = rawSavedIntent === 'read' || rawSavedIntent === 'quiz' || rawSavedIntent === 'read-and-assess' || rawSavedIntent === 'coordinate' ? rawSavedIntent : undefined;
-  const outputQuestion = !props.finalized && !busy && props.lastJob?.id === props.outputJobId && props.lastJob?.capability_id === 'quiz-learn' && !running(props.lastJob.status)
+  const outputQuestion = !props.finalized && !busy && props.lastJob?.id === props.outputJobId && props.lastJob?.capability_id === 'quiz-learn' && props.lastJob.status === 'awaiting-input'
     && savedTarget?.browserSessionId === session?.id ? learnerQuestion(props.lastOutput) : null;
-  const restoredQuestion = props.finalized || suppressRestoredQuestion ? null : outputQuestion || (!busy ? rememberedQuestion(currentMemory) : null);
+  // Only this job's fresh marker can ask for input. Conversation history can
+  // contain an answered question from an earlier interrupted job.
+  const restoredQuestion = props.finalized || suppressRestoredQuestion ? null : outputQuestion;
   const currentPauseTab = uniqueQuestionTab(currentQuestion?.url, session?.tabs || []);
   const restoredPauseTab = uniqueQuestionTab(restoredQuestion?.url, session?.tabs || []);
   const question: Question | null = props.finalized || mode === 'quick' ? null : (currentQuestion && currentPauseTab && currentQuestion.sessionId === session?.id
@@ -190,7 +187,7 @@ export function GuidedRunner(props: {
     if (!props.finalized) return;
     cancellationRequested.current = true; stopped.current = true; runGeneration.current += 1; memoryRequest.current += 1;
     clearPageQuestion(); setGuidance(''); setRunOutput(''); setSettingsNeeded(false);
-    objectiveEdited.current = false; setObjective('');
+    if (!objectiveEdited.current) setObjective('');
     setStage(props.taskReset ? 'Task recorded' : 'Ready'); setMessage('Choose your next page and set a goal when you are ready.');
   }, [props.taskReset, props.finalized]);
 
@@ -210,8 +207,17 @@ export function GuidedRunner(props: {
   }, [mode, props.selectedTarget, selected?.url, selected?.title, busy]);
 
   async function api<T>(url: string, body?: unknown, method?: string): Promise<T> {
+    const generation = runGeneration.current, scope = scopeRef.current;
     const response = await fetch(url, { method: method || (body ? 'POST' : 'GET'), cache: 'no-store', signal: AbortSignal.timeout(20_000), ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
-    return readJsonResponse<T>(response, 'The request did not complete. Check the connection and try again.');
+    const value = await readJsonResponse<T>(response, 'The request did not complete. Check the connection and try again.');
+    if (!mounted.current || generation !== runGeneration.current || scope !== scopeRef.current) {
+      if (cancellationRequested.current && value && typeof value === 'object' && 'jobId' in value && typeof value.jobId === 'string') {
+        const cancelled = await fetch(`/api/jobs/${encodeURIComponent(value.jobId)}`, {method:'DELETE',signal:AbortSignal.timeout(20_000)});
+        await readJsonResponse(cancelled,'Could not stop the acknowledged job. Check Advanced tools.');
+      }
+      throw new Error('This task changed. Inspect the current page again.');
+    }
+    return value;
   }
 
   function checkStopped() { if (stopped.current || !mounted.current || finalized.current) throw new Error('Stopped. Inspect again when you are ready.'); }
@@ -220,7 +226,7 @@ export function GuidedRunner(props: {
     checkStopped();
     const context = await api<Context>('/api/operations/context');
     checkStopped();
-    if (context.helper?.id !== props.helperId || !context.helper.is_online || !context.session?.cdp_connected) throw new Error('The helper or browser is disconnected. Reconnect it, then inspect again.');
+    if (context.helper?.id !== props.helperId || !context.helper.is_online || !context.session?.cdp_connected || context.session.id !== session?.id) throw new Error('The helper or browser session changed or disconnected. Reconnect it, then inspect again.');
     const tab = context.session.tabs.find((item) => item.targetId === targetId);
     if (!tab) throw new Error('The selected tab has closed or changed. Refresh the tab list and choose the course again.');
     return { context, tab, target: { browserSessionId: context.session.id, revision: context.session.revision, targetId, fingerprint: tab.fingerprint } };
@@ -301,16 +307,19 @@ export function GuidedRunner(props: {
     props.onTaskStart?.();
     finalized.current = false;
     const generation = ++runGeneration.current;
+    const scope = scopeRef.current;
     setBusy(true); props.onBusy(true); setSettingsNeeded(false); setReplyError(null); setRunOutput('');
     const reply = quickReply ?? answer.trim();
     const guidance = question?.model && reply ? `Previous question: ${question.question}\nUser answer: ${reply}`.slice(0, 2000) : undefined;
-    setQuestion(null);
+    clearPageQuestion();
     let targetId = (pauseTab || selected)!.targetId;
     try {
       setStage('Inspecting the page'); setMessage(`Reading ${(pauseTab || selected)!.title || 'the selected course tab'}…`);
       const tabsRun = await waitForJob(await queue('list-tabs'));
       if (tabsRun.job.status !== 'completed') throw new Error('Could not refresh the browser tabs. Check the helper connection.');
       await props.onRefresh();
+      checkStopped();
+      if (generation !== runGeneration.current || scope !== scopeRef.current) return;
       if (guidance) {
         const refreshed = await api<Context>('/api/operations/context');
         checkStopped();
@@ -353,7 +362,7 @@ export function GuidedRunner(props: {
       const launch = await freshContext(targetId);
       if (launch.tab.fingerprint !== fresh.tab.fingerprint) throw new Error('The page changed before the run started. Inspect it again.');
       const result = await waitForJob(await queue(capability, launch.target, guidance, intent));
-      const asked = learnerQuestion(result.output);
+      const asked = result.job.status === 'awaiting-input' ? learnerQuestion(result.output) : null;
       if (asked) {
         setAnswer(''); setCustomReply(false);
         const paused = await api<Context>('/api/operations/context');
@@ -369,21 +378,23 @@ export function GuidedRunner(props: {
       }
       if (result.job.status === 'completed' && result.job.outcome?.verified === true) {
         setAnswer(''); setCustomReply(false);
-        setStage('Run finished'); setMessage('Review the evidence in History or Advanced tools and check the course status in the learning portal.');
+        clearPageQuestion(); setStage('Ready'); setMessage('The run finished with verified evidence. Choose your next page and goal when ready.');
       } else {
-        if (question) { setQuestion(question); setReplyError('The run could not continue. Your reply is still here; check the message below before trying again.'); }
-        setStage('The run needs attention');
+        clearPageQuestion();
+        setStage('Run interrupted');
         const providerProblem = /provider|learner.*(?:request|key|connection)|api key|quota|rate limit/i.test(result.output);
         setSettingsNeeded(providerProblem);
         setMessage(learnerStopMessage(result.output) ?? (providerProblem ? 'The AI connection did not complete a request. Test your provider in Settings, then try again.' : 'The run stopped without verified completion. You can inspect again after opening the intended question or resolving the issue shown in Advanced tools.'));
       }
     } catch (error) {
-      if (mounted.current && generation === runGeneration.current) { if (question) { setQuestion(question); setReplyError(error instanceof Error ? error.message : 'Could not continue. Your reply has been kept.'); } setStage(stopped.current ? 'Stopped' : 'Your input is needed'); setMessage(error instanceof Error ? error.message : 'The run could not continue. Inspect again.'); }
+      if (mounted.current && generation === runGeneration.current && scope === scopeRef.current) { clearPageQuestion(); setStage(stopped.current ? 'Stopped' : 'Run interrupted'); setMessage(error instanceof Error ? error.message : 'The run could not continue. Resume from the current page.'); }
     } finally {
-      locked.current = false;
-      if (mounted.current) setBusy(false);
-      props.onBusy(false);
-      if (mounted.current || cancellationRequested.current) void props.onRefresh();
+      if (generation === runGeneration.current || cancellationRequested.current) {
+        locked.current = false;
+        if (mounted.current) setBusy(false);
+        props.onBusy(false);
+        if (mounted.current || cancellationRequested.current) void props.onRefresh();
+      }
     }
   }
 
@@ -514,11 +525,11 @@ export function GuidedRunner(props: {
     {!question || !question.model || showReplyField || busy || settingsNeeded ? <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-4">
         {!question ? <div role="status" aria-live="polite" className="min-w-0 flex-1 basis-56">
-          <p className={recordingReady ? 'font-semibold text-red-800' : 'font-semibold text-slate-950'}>{finishPending ? 'Saving recording' : recordingReady ? 'Recording' : recordingId ? 'Starting recorder' : props.paused ? 'Waiting for your session to resume' : savedRecording?.folder ? 'Recording saved' : quizResult?.heading || (recordedStop ? 'The run needs attention' : props.refreshing ? 'Updating your course tabs' : stage)}</p>
+          <p className={recordingReady ? 'font-semibold text-red-800' : 'font-semibold text-slate-950'}>{finishPending ? 'Saving recording' : recordingReady ? 'Recording' : recordingId ? 'Starting recorder' : props.paused ? 'Waiting for your session to resume' : savedRecording?.folder ? 'Recording saved' : quizResult?.heading || (recordedStop ? (/interrupted/i.test(recordedStop) ? 'Run interrupted' : 'The run needs attention') : props.refreshing ? 'Updating your course tabs' : stage)}</p>
           <p className="mt-1 text-sm leading-6 text-slate-600">{finishPending ? 'Keep the course window open while the recording saves.' : recordingReady ? 'You can click through the course now.' : recordingId ? 'Wait for the button to turn red before clicking through.' : props.paused ? 'Use Resume session above.' : savedRecording?.folder ? `${savedRecording.pages} page observations · ${savedRecording.frames} frames saved on this PC.` : quizResult?.detail || recordedStop || currentProgress || (!selected ? 'Choose a course tab to start.' : message)}</p>
         </div> : null}
         <div className="flex flex-wrap items-center gap-3">
-          {!recordingId && (selected || busy || question) && (!question?.model || showReplyField || busy) ? <button type="button" onClick={() => void start()} disabled={!props.ready || !(pauseTab || selected) || (mode !== 'quick' && (!objective.trim() || !resolvedIntent)) || busy || props.active || props.paused || props.suspended || Boolean(question?.model && !answer.trim())} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}{busy ? (mode === 'quick' ? 'Starting recorder…' : 'Working…') : mode === 'quick' ? 'Start recording' : question?.model ? 'Send answer and continue' : question?.next || 'Inspect and start'}</button> : null}
+          {!recordingId && (selected || busy || question) && (!question?.model || showReplyField || busy) ? <button type="button" onClick={() => void start()} disabled={!props.ready || !(pauseTab || selected) || (mode !== 'quick' && (!objective.trim() || !resolvedIntent)) || busy || props.active || props.paused || props.suspended || Boolean(question?.model && !answer.trim())} className="inline-flex min-h-11 items-center gap-2 rounded-md bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{busy ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}{busy ? (mode === 'quick' ? 'Starting recorder…' : 'Working…') : mode === 'quick' ? 'Start recording' : question?.model ? 'Send answer and continue' : question?.next || (recordedStop || stage === 'Run interrupted' ? 'Resume from current page' : 'Inspect and start')}</button> : null}
           {recordingId ? <button type="button" disabled={finishPending} aria-busy={finishPending} onClick={() => void finishRecording()} className={`inline-flex min-h-11 items-center gap-2 rounded-md px-5 py-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 ${recordingReady ? 'bg-red-700 text-white hover:bg-red-800 focus-visible:outline-red-700' : 'border border-slate-300 bg-white text-slate-800 disabled:opacity-60'}`}><Square aria-hidden="true" className={`size-4 ${recordingReady ? 'fill-current' : ''}`}/>{finishPending ? 'Saving recording…' : recordingReady ? 'Finish recording' : 'Stop recorder'}</button> : busy ? <button type="button" disabled={stopPending} aria-busy={stopPending} onClick={() => void stop()} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold"><Square className="size-4" />{stopPending ? 'Requesting stop…' : 'Stop'}</button> : null}
           {settingsNeeded ? <a href="/settings" className="font-semibold text-cyan-800 underline">Connect or test AI in Settings</a> : null}
         </div>

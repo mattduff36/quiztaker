@@ -141,6 +141,8 @@ export function OperationsClient(props: { helperId: string }) {
   const refreshLock = useRef(false);
   const finalizedJobs = useRef(new Set<string>());
   const dismissedTask = useRef<string | null>(null);
+  const draftGeneration = useRef(0);
+  const draftMode = useRef(false);
   const newTaskHeading = useRef<HTMLHeadingElement>(null);
   const [awaitingQuestion, setAwaitingQuestion] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
@@ -175,13 +177,14 @@ export function OperationsClient(props: { helperId: string }) {
       setContextError('');
       const task = value.latestTask;
       const resolution = task?.outcome?.operatorResolution;
-      if (task && resolution && task.id !== dismissedTask.current && !guidedLock.current && !actionLock.current) {
+      if (task && resolution && !draftMode.current && task.id !== dismissedTask.current && !guidedLock.current && !actionLock.current) {
         finalizedJobs.current.add(task.id);
         setFinishedTask(current => current?.jobId === task.id && current.stopping === Boolean(task.stopping) ? current : {jobId:task.id,result:resolution.result,stopping:Boolean(task.stopping)});
         if (!guidedLock.current) setJob(task);
       } else if (!guidedLock.current && !actionLock.current) {
-        const next = task?.id === dismissedTask.current ? value.activeJob : task ?? value.activeJob;
-        if (next && next.id !== dismissedTask.current && !finalizedJobs.current.has(next.id)) {
+        const next = draftMode.current || task?.id === dismissedTask.current ? value.activeJob : task ?? value.activeJob;
+        if (next && next.id !== dismissedTask.current && !finalizedJobs.current.has(next.id)
+          && !(draftMode.current && isTaskJob(next) && !isRunningJob(next))) {
           setJob(current => retainTaskJob(current?.id === dismissedTask.current && !isRunningJob(current) ? null : current, next));
         }
       }
@@ -215,13 +218,15 @@ export function OperationsClient(props: { helperId: string }) {
     if (!force && Date.now() - browserProbe.current < (afterOpen ? 2_000 : BROWSER_REFRESH_MS)) return;
     browserProbe.current=Date.now();
     refreshLock.current=true; setRefreshPending(true);
+    const generation = draftGeneration.current;
     try {
       const response=await fetch('/api/operations/activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({helperId:props.helperId,action:'refresh',force:force || afterOpen}),signal:AbortSignal.timeout(15_000)});
       const value=await readJsonResponse<{status?:string;jobId?:string}>(response,'Could not refresh browser tabs.');
+      if (generation !== draftGeneration.current) return;
       if (afterOpen && value.jobId) refreshAfterOpen.current = false;
       setRefreshJobId(value.jobId ?? null); if (!value.jobId) setRefreshPending(false);
       setRefreshError('');await load();
-    } catch(cause){if(afterOpen)refreshAfterOpen.current=false;setRefreshPending(false);setRefreshError(errorMessage(cause,'Could not refresh browser tabs. Check the helper and retry.'));}
+    }     catch(cause){if(generation!==draftGeneration.current)return;if(afterOpen)refreshAfterOpen.current=false;setRefreshPending(false);setRefreshError(errorMessage(cause,'Could not refresh browser tabs. Check the helper and retry.'));}
     finally { refreshLock.current=false; }
   },[refreshPending,awaitingQuestion,activity.ready,activity.paused,visible,operationBusy,guidedBusy,active,replacingHelper,updateBusy,finishedTask,context?.helper?.is_online,context?.session?.cdp_connected,props.helperId,load]);
 
@@ -280,6 +285,7 @@ export function OperationsClient(props: { helperId: string }) {
   const jobStatus = job?.status;
   useEffect(() => {
     if (!jobId || guidedBusy || activity.paused || replacingHelper || updateBusy || finalizedJobs.current.has(jobId)) return;
+    const generation = draftGeneration.current;
     let disposed = false;
     let refreshing = false;
     const isActive = ['queued', 'dispatched', 'running'].includes(jobStatus ?? '');
@@ -293,7 +299,7 @@ export function OperationsClient(props: { helperId: string }) {
         events: Array<{ data: { text?: string } }>;
       }>(response, 'Could not refresh job status.');
       if (!value.job || !Array.isArray(value.events)) throw new Error('Job status response is incomplete. Retry in a moment.');
-      if (disposed || actionLock.current || guidedLock.current || finalizedJobs.current.has(value.job.id)) return;
+      if (disposed || generation !== draftGeneration.current || actionLock.current || guidedLock.current || finalizedJobs.current.has(value.job.id)) return;
       setPollError('');
       setJob(value.job);
       setOutputJobId(value.job.id);
@@ -307,7 +313,7 @@ export function OperationsClient(props: { helperId: string }) {
     void refreshJob();
     const timer = isActive ? window.setInterval(() => void refreshJob(), 2000) : null;
     return () => { disposed = true; if (timer) window.clearInterval(timer); };
-  }, [jobId, jobStatus, load, guidedBusy, activity.paused, replacingHelper, updateBusy]);
+  }, [jobId, jobStatus, load, guidedBusy, activity.paused, replacingHelper, updateBusy, newTask]);
 
   const readiness = connectionState(context, Boolean(contextError));
   useEffect(()=>{if(context?.helper?.is_online)rememberHelperConnection();},[context?.helper?.is_online]);
@@ -504,6 +510,9 @@ export function OperationsClient(props: { helperId: string }) {
     const cancelId = ownedJobId ?? (isTaskJob(currentTask) && isRunningJob(currentTask) && !finishedTask?.stopping ? currentTask?.id : null);
     actionLock.current = true;
     contextRequest.current += 1;
+    draftGeneration.current += 1;
+    draftMode.current = true;
+    setRefreshJobId(null); setRefreshPending(false); setRefreshError('');
     setBusy(true);
     setActionLabel('Preparing a new task…');
     setError('');
@@ -634,7 +643,7 @@ export function OperationsClient(props: { helperId: string }) {
       <div hidden={!normalCourseVisible}><GuidedRunner key={newTask} freshTask={newTask > 0} preparing={freshDraft} courseLauncher={courseLauncher} sessionActions={view === 'normal' && normalCourseVisible ? sessionActions : null} courseCoverage={hasCourseTab ? <CourseCoverage courses={context?.courseCoverage || []} /> : null} helperId={props.helperId} session={session} selectedTarget={selectedTarget} onSelect={setSelectedTarget}
         ready={browserReady && protocolReady && !operationBusy && !guidedBusy && activity.ready && !activity.paused && !replacingHelper && !updateBusy} active={foregroundActive} refreshing={backgroundRefresh || refreshPending} onBusy={onGuidedBusy} onRefresh={load}
         suspended={replacingHelper || updateBusy || operationBusy} paused={activity.paused||!activity.ready} connection={readiness} onConnect={()=>void run('start-browser',{capabilityId:'start-browser'},true)} onRefreshTabs={()=>void refreshBrowser(true)} refreshError={refreshError} snapshotStale={snapshotStale}
-        lastJob={displayedJob} lastOutput={output} outputJobId={outputJobId} taskReset={taskReset} finalized={Boolean(finishedTask) || verifiedTaskComplete} onStopControl={registerGuidedStop} onAwaitingQuestion={setAwaitingQuestion} onTaskStart={()=>{setTaskRecordedHere(false);if(finishedTask) dismissedTask.current=finishedTask.jobId;setFinishedTask(null);contextRequest.current+=1;}} onJob={(next)=>{contextRequest.current+=1;setJob(current=>({...next,capability_id:next.capability_id ?? (current?.id===next.id ? current.capability_id : undefined)}));}} />
+        lastJob={displayedJob} lastOutput={output} outputJobId={outputJobId} taskReset={taskReset} finalized={Boolean(finishedTask) || verifiedTaskComplete} onStopControl={registerGuidedStop} onAwaitingQuestion={setAwaitingQuestion} onTaskStart={()=>{draftGeneration.current+=1;draftMode.current=true;setTaskRecordedHere(false);dismissedTask.current=finishedTask?.jobId ?? displayedJob?.id ?? context?.latestTask?.id ?? null;setJob(null);setOutput('');setOutputJobId('');setFinishedTask(null);contextRequest.current+=1;}} onJob={(next)=>{contextRequest.current+=1;if(isTaskJob(next))draftMode.current=false;setJob(current=>({...next,capability_id:next.capability_id ?? (current?.id===next.id ? current.capability_id : undefined)}));}} />
       </div>
       </div>
       {error ? <div role="alert" className="flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><AlertTriangle className="size-4" />{error}</div> : null}
