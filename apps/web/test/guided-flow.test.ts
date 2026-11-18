@@ -39,8 +39,8 @@ test('reports the observed quiz score separately from course completion', () => 
 });
 
 test('unknown and Canon curriculum begin learning; login and assessments pause', () => {
-  for (const detected of ['unknown', 'document-wbt', 'csod-curriculum']) assert.equal(decideGuidedFlow({ detected }).kind, 'learn');
-  for (const detected of ['session-dead', 'server-assessment', 'certification', 'cert-landing']) assert.equal(decideGuidedFlow({ detected }).kind, 'question');
+  for (const detected of ['unknown', 'document-wbt', 'csod-curriculum','cert-landing']) assert.equal(decideGuidedFlow({ detected }).kind, 'learn');
+  for (const detected of ['session-dead', 'server-assessment', 'certification']) assert.equal(decideGuidedFlow({ detected }).kind, 'question');
 });
 
 test('only the exact inspected tab and URL can continue', () => {

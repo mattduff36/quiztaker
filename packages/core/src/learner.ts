@@ -118,7 +118,7 @@ export function confirmShortcutAllowed(capabilityId: string): boolean {
 }
 
 export function learnerOfferedFor(detected: string | null | undefined, mode: LearnerMode = 'read'): boolean {
-  return ['unknown', 'document-wbt', 'none', 'csod-curriculum', 'csod-learning', 'scorm-player', 'container', 'slickquiz-exam', 'class-detail'].includes(detected ?? '') || (mode === 'quiz' && detected === 'server-assessment');
+  return ['unknown', 'document-wbt', 'none', 'csod-curriculum', 'csod-learning', 'scorm-player', 'container', 'slickquiz-exam', 'class-detail', 'cert-landing'].includes(detected ?? '') || (mode === 'quiz' && detected === 'server-assessment');
 }
 
 export function parseLearnerAction(

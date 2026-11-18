@@ -29,6 +29,7 @@ await writeFile(join(temp,'app.css'),css.css+'\n:root{--font-plex:Arial}body{mar
 
 function state(){return{last:null,paused:false,online:true,connected:true,updatePhase:null,refreshes:0,checks:0,statusFailed:false,statusStale:false,activityPosts:0,pausePosts:0,jobs:new Map(),latest:null,serial:0,selected:null,blocked:false,retries:0,task:null,finishPosts:0,questionOutput:'',pairPosts:0,holdCapability:null};}
 function reply(path,method,body,now,s){
+  if(path==='/api/operations/followup'){s.followupPosts=(s.followupPosts||0)+1;if(body.action==='cancel'){s.followup.state='cancelled';return{status:'kept-open'};}s.followup.state='closing';s.followup.closeJobId=makeJob('close-browser');return{status:'ending',closeJobId:s.followup.closeJobId};}
   if(path==='/api/operations/shared'){
     s.shared??={revision:1,draft:{},sessionId:'22222222-2222-4222-8222-222222222222',clientId:null,workflowId:null,workflowClientId:null,workflowUntil:null,manual:false};
     if(body.action==='edit'){
@@ -58,7 +59,7 @@ function reply(path,method,body,now,s){
     if(body.action==='refresh'){if(s.refreshError)return{__status:503,error:'Browser refresh unavailable.'};if(s.paused)return{status:'skipped'};s.refreshes++;return{status:'queued',jobId:makeJob('list-tabs')};}
     return activity();
   }
-  if(path==='/api/operations/context'){s.checks++;return{helper:s.unpaired?null:{id:helperId,device_name:'Test PC',version:s.helperVersion||'1.0.19',protocol_version:2,is_online:s.online},helperUpdate:s.updatePhase?{needed:true,protocolBlocked:false,currentVersion:'1.0.19',latestVersion:'1.0.21',installerAvailable:true,canSelfUpdate:true,mode:'queue',requestedVersion:'1.0.21',error:null,phase:s.updatePhase,phaseVersion:'1.0.21',phaseUpdatedAt:new Date(now).toISOString(),inProgress:true,progressLabel:'Installing · waiting for the helper to reconnect'}:undefined,courseCoverage:[{source:'https://example.invalid/course',title:'Paper theory',inventoryObserved:true,updatedAt:new Date(now).toISOString(),topics:[{title:'Paper production',visitedAt:new Date(now).toISOString(),collectedAt:new Date(now).toISOString(),collectedChars:400},{title:'Paper types',visitedAt:new Date(now).toISOString(),collectedChars:0},{title:'Paper storage',collectedChars:0}]}],operatorActivity:s.last===null?null:activity(),session:session(),activeJob:s.latest,latestTask:s.task,captures:[],recentUrls:[],learnerEnabled:true};}
+  if(path==='/api/operations/context'){s.checks++;return{followup:s.followup?{...s.followup,serverNow:new Date(now).toISOString()}:null,helper:s.unpaired?null:{id:helperId,device_name:'Test PC',version:s.helperVersion||'1.0.19',protocol_version:2,is_online:s.online},helperUpdate:s.updatePhase?{needed:true,protocolBlocked:false,currentVersion:'1.0.19',latestVersion:'1.0.21',installerAvailable:true,canSelfUpdate:true,mode:'queue',requestedVersion:'1.0.21',error:null,phase:s.updatePhase,phaseVersion:'1.0.21',phaseUpdatedAt:new Date(now).toISOString(),inProgress:true,progressLabel:'Installing · waiting for the helper to reconnect'}:undefined,courseCoverage:[{source:'https://example.invalid/course',title:'Paper theory',inventoryObserved:true,updatedAt:new Date(now).toISOString(),topics:[{title:'Paper production',visitedAt:new Date(now).toISOString(),collectedAt:new Date(now).toISOString(),collectedChars:400},{title:'Paper types',visitedAt:new Date(now).toISOString(),collectedChars:0},{title:'Paper storage',collectedChars:0}]}],operatorActivity:s.last===null?null:activity(),session:session(),activeJob:s.latest,latestTask:s.task,captures:[],recentUrls:[],learnerEnabled:true};}
   if(path==='/api/operations/tasks/finish'){
     s.finishPosts++;const task=s.jobs.get(body.jobId);task.status=body.result;task.outcome={status:`operator-${body.result}`,verified:false,operatorResolution:{result:body.result,requestedAt:new Date(now).toISOString(),resolvedAt:new Date(now).toISOString(),reportedBy:'operator'}};s.task=task;return{ok:true,status:body.result,jobId:task.id};
   }
@@ -99,7 +100,26 @@ const url=`http://127.0.0.1:${server.address().port}`;
 const browser=await chromium.launch({channel:'chrome',headless:true});
 let passed=false;
 try{
-  if(!process.argv.includes('--focus-running')){
+  for(const action of ['idle','click','wheel','key','motion']){
+    const page=await browser.newPage({viewport:{width:390,height:844}}),fixture=state();
+    await page.clock.install();
+    fixture.task={id:'followup-task',status:'completed',capability_id:'quiz-learn',outcome:{verified:true,status:'verified'}};
+    fixture.jobs.set(fixture.task.id,fixture.task);
+    fixture.followup={jobId:fixture.task.id,sessionId:'22222222-2222-4222-8222-222222222222',deadline:new Date(Date.now()+20000).toISOString(),state:'waiting',closeJobId:null};
+    await page.route('**/api/**',async route=>{const req=route.request();const {__status,...json}=reply(new URL(req.url()).pathname,req.method(),req.postDataJSON()||{},Date.now(),fixture);await route.fulfill({status:__status||200,json});});
+    await page.goto(url);await expect(page.getByTestId('task-followup')).toBeVisible();
+    if(action==='click')await page.getByRole('heading',{name:'Work on a course',exact:true}).click();
+    if(action==='wheel')await page.mouse.wheel(0,100);
+    if(action==='key')await page.keyboard.press('Escape');
+    if(action==='motion')await page.mouse.move(100,120);
+    if(['click','wheel','key'].includes(action))await expect.poll(()=>fixture.followup.state).toBe('cancelled');
+    await page.clock.fastForward(21000);
+    if(['idle','motion'].includes(action)){await expect.poll(()=>fixture.followup.state).toBe('closing');expect(fixture.followupPosts).toBe(1);}
+    else expect(fixture.followup.state).toBe('cancelled');
+    await page.close();
+  }
+  console.log('PASS completion countdown: idle and mouse motion expire once; clicks, scrolling and typing cancel.');
+  if(!process.argv.includes('--focus-running')&&!process.argv.includes('--focus-followup')){
   // Stage matrix uses isolated offline fixtures, including delayed requests and remounts.
   for(const viewport of [{width:1365,height:1000},{width:390,height:844}]) {
     // The selected action itself authorizes the same signed plan flow.
@@ -158,13 +178,13 @@ try{
       await page.goto(url);
       await expect(page.getByRole('heading',{name:'Task complete',exact:true})).toBeVisible();
       await expect(page.getByRole('button',{name:'Pause session',exact:true})).toBeHidden();
-      await expect(page.getByRole('button',{name:'Start a new task',exact:true})).toBeEnabled();
+      await expect(page.getByRole('button',{name:'New task',exact:true})).toBeEnabled();
       expect(fixture.connected).toBe(true);
       await page.screenshot({path:join(artifacts,`${viewport.width}-${completion}-task-complete.png`),fullPage:true});
       holdNext=true;await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
       await expect.poll(()=>heldContext).toBe(true);
       if(completion!=='verified-direct') {
-        await page.getByRole('button',{name:'Start a new task',exact:true}).click();
+        await page.getByRole('button',{name:'New task',exact:true}).click();
         await expect(page.getByRole('heading',{name:'Task complete',exact:true})).toBeHidden();
         await expect(page.getByRole('button',{name:'Pause session',exact:true})).toBeVisible();
       }
@@ -173,10 +193,10 @@ try{
       await page.getByLabel(/What would you like to achieve/).fill(goal);
       release();
       await expect(page.getByLabel(/What would you like to achieve/)).toHaveValue(goal);
-      await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
+      await page.getByRole('button',{name:'Start',exact:true}).click();
       await expect.poll(()=>learnerInput?.objective,{timeout:20_000}).toBe(goal);
       expect(learnerInput.mode).toBe('quiz');
-      await expect(page.getByText('Ready',{exact:true})).toBeVisible();
+      await expect(page.getByRole('button',{name:'Start',exact:true})).toBeVisible();
       await expect(page.getByRole('heading',{name:'Vitriol has a question',exact:true})).toBeHidden();
       await page.close();
     }
@@ -213,7 +233,7 @@ try{
         await route.fulfill({status:__status||200,json});
       });
       await page.goto(url);
-      if(['loading','unpaired','offline','offline-new','absent','disconnected','stale'].includes(scenario)) {
+      if(['loading','unpaired','offline','offline-new','absent','disconnected'].includes(scenario)) {
         await expect(page.getByRole('heading',{name:'Work on a course',exact:true})).toBeHidden();
         await expect(page.getByText('Course material checklist',{exact:true})).toBeHidden();
       }
@@ -228,9 +248,9 @@ try{
         fixture.online=true;await page.clock.fastForward(16_000);await expect(page.getByRole('heading',{name:'Work on a course',exact:true})).toBeVisible();
       }
       if(scenario==='absent'||scenario==='disconnected')await expect(page.getByRole('button',{name:'Start browser',exact:true})).toBeEnabled();
-      if(scenario==='stale'){await expect(page.getByRole('heading',{name:'Browser check needed',exact:true})).toBeVisible();expect(fixture.refreshes).toBe(0);}
+      if(scenario==='stale'){await expect(page.getByRole('heading',{name:'Browser check needed',exact:true})).toBeHidden();expect(fixture.refreshes).toBe(0);}
       if(scenario==='no-course'){await expect(page.getByText('No course page is open yet.',{exact:false})).toBeVisible();await expect(page.getByLabel(/What would you like to achieve/)).toBeHidden();}
-      if(scenario==='blank-goal'){await page.getByRole('group',{name:'Course tab',exact:true}).getByRole('button').click();await page.getByLabel(/What would you like to achieve/).fill('');await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeDisabled();}
+      if(scenario==='blank-goal'){await page.getByRole('group',{name:'Course tab',exact:true}).getByRole('button').click();await page.getByLabel(/What would you like to achieve/).fill('');await expect(page.getByRole('button',{name:'Start',exact:true})).toBeDisabled();}
       if(scenario==='old-finished'){await expect(page.getByRole('heading',{name:'Work on a course',exact:true})).toBeVisible();await expect(page.getByRole('heading',{name:'Current task',exact:true})).toBeHidden();await expect(page.getByText(/Marked completed by you/)).toBeHidden();await expect(page.getByText('Task recorded',{exact:true})).toBeHidden();}
       if(scenario==='old-finished-start'){await page.getByRole('button',{name:'Start browser',exact:true}).click();await expect.poll(()=>fixture.starts).toBe(1);await page.clock.fastForward(31_000);await expect(page.getByText(/Marked completed by you/)).toBeHidden();await expect(page.getByRole('heading',{name:'Current task',exact:true})).toBeHidden();}
       if(scenario.startsWith('start-')) {
@@ -282,7 +302,7 @@ try{
       await route.fulfill({ status: __status || 200, json });
     });
     await page.goto(url);
-    if (existingTask) await expect(page.getByText('Course activity: Working', { exact: true })).toBeVisible();
+    if (existingTask) {await page.getByRole('button',{name:'Task options',exact:true}).click();await expect(page.getByText('Course activity: Working', { exact: true })).toBeVisible();await page.getByRole('button',{name:'Close Task options',exact:true}).click();}
     else await expect(page.getByRole('textbox', { name: 'Website URL' })).toBeVisible();
     await page.getByRole('button', { name: 'New task', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Start a new task', exact: true })).toBeFocused();
@@ -297,7 +317,7 @@ try{
       await course.click();
       const goal = page.getByRole('textbox', { name: /What would you like to achieve/ });
       await goal.fill('Read a different module');
-      const start = page.getByRole('button', { name: 'Inspect and start', exact: true });
+      const start = page.getByRole('button', { name: 'Start', exact: true });
       await expect(start).toBeDisabled();
       fixture.task.status = 'cancelled';
       await expect(start).toBeEnabled();
@@ -378,7 +398,7 @@ try{
     await page.getByRole('button',{name:'Resume from current page',exact:true}).click();
     await expect.poll(()=>learnerInput?.objective,{timeout:20_000}).toBe(goal);
     expect(learnerInput.mode).toBe('quiz');expect(learnerInput.guidance).toBeUndefined();
-    await expect(page.getByText('Ready',{exact:true})).toBeVisible();
+    await expect(page.getByRole('button',{name:'Start',exact:true})).toBeVisible();
     await expect(page.getByRole('heading',{name:'Vitriol has a question',exact:true})).toBeHidden();
     await page.screenshot({path:join(artifacts,'interrupted-current-page-resume.png'),fullPage:true});
     await page.close();
@@ -418,7 +438,7 @@ try{
     const objective = page.getByRole('textbox', { name: /What would you like to achieve/ });
     if (typeof goal === 'string') await objective.fill(goal);
     await expect(objective).toHaveValue(goal);
-    await page.getByRole('button', { name: 'Inspect and start', exact: true }).click();
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
     await expect.poll(() => learnerInput).toMatchObject({ mode: 'quiz', intent });
     if (independent) {
       await expect(page.getByRole('heading',{name:'Vitriol has a question',exact:true})).toBeVisible();
@@ -429,8 +449,9 @@ try{
       expect(learnerInput).toMatchObject({mode:'quiz',intent,guidance:'Previous question: Which lesson should I open?\nUser answer: Paper types'});
       expect([...fixture.jobs.values()].filter(job => job.capability_id === 'learn-capture')).toHaveLength(captureCount);
     }
-    await expect(page.getByText('Quiz passed · 91%', { exact: true })).toBeVisible();
-    await expect(page.getByText(/Pass mark 80%.*course progress in the learning portal/)).toBeVisible();
+    await expect(page.getByRole('heading',{name:'Task complete',exact:true})).toBeVisible();
+    await expect(page.getByText('Quiz passed · 91%', { exact: true })).toBeHidden();
+    await expect(page.getByText(/Pass mark 80%.*course progress in the learning portal/)).toBeHidden();
     await page.close();
   }
   console.log('PASS combined and coordinated modes pass explicit assessment intent to the learner.');
@@ -447,13 +468,13 @@ try{
     await page.goto(url);await page.getByRole('button',{name:'Resume session',exact:true}).click();
     await page.getByRole('group',{name:'Course tab',exact:true}).getByRole('button').click();
     await page.getByLabel(/What would you like to achieve/).fill('Read this course');
-    await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
+    await page.getByRole('button',{name:'Start',exact:true}).click();
     await expect.poll(()=>queued).toBe(1);
     if (transition === 'new-task') {
       await page.getByRole('button', { name: 'New task', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Start a new task', exact: true })).toBeVisible();
       await page.getByRole('group', { name: 'Course tab', exact: true }).getByRole('button').click();
-      await expect(page.getByRole('button', { name: 'Inspect and start', exact: true })).toBeDisabled();
+      await expect(page.getByRole('button', { name: 'Start', exact: true })).toBeDisabled();
     } else {
       if (transition === 'stop') await page.getByRole('button', { name: 'Stop', exact: true }).click();
       await page.getByRole('button', { name: 'Navigate fixture away', exact: true }).click();
@@ -462,7 +483,7 @@ try{
     await expect.poll(()=>fixture.jobs.size).toBeGreaterThan(0);
     if(transition !== 'navigate')await expect.poll(()=>deletes).toBe(1);
     else {await page.waitForTimeout(100);expect(deletes).toBe(0);}
-    if (transition === 'new-task') await expect(page.getByRole('button', { name: 'Inspect and start', exact: true })).toBeEnabled();
+    if (transition === 'new-task') await expect(page.getByRole('button', { name: 'Start', exact: true })).toBeEnabled();
     await page.close();
   }
   console.log('PASS navigation preserves acknowledged jobs; Stop and New task cancel a late queued job.');
@@ -504,20 +525,25 @@ try{
     await select.click();
     await expect(mode.getByRole('button')).toHaveText(['Work independently','Co-ordinate with ChatGPT','Scrape info with the user']);
     await goal.fill('Complete the course');
-    await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeDisabled();
+    await expect(page.getByRole('button',{name:'Start',exact:true})).toBeDisabled();
     await page.getByRole('button',{name:'Read and take the quiz',exact:true}).click();
-    await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
+    await expect(page.getByRole('button',{name:'Start',exact:true})).toBeEnabled();
     await page.reload();
     await select.click();
     await mode.getByRole('button',{name:'Co-ordinate with ChatGPT',exact:true}).click();
     await expect(goal).toHaveValue(/lesson checklist.*Xerox course overview/);
     await mode.getByRole('button',{name:'Work independently',exact:true}).click();
     await expect(goal).toHaveValue(/Read the course material/);
+    await goal.fill(Array(12).fill('A separate direction.').join('\n'));
+    const size=await goal.evaluate(el=>({height:el.clientHeight,line:parseFloat(getComputedStyle(el).lineHeight),padding:parseFloat(getComputedStyle(el).paddingTop)+parseFloat(getComputedStyle(el).paddingBottom),overflow:getComputedStyle(el).overflowY}));
+    expect(size.height).toBeLessThanOrEqual(size.line*8+size.padding+2);expect(size.overflow).toBe('auto');
+    await goal.fill('Direction '.repeat(90));await expect(page.getByText(/Keep one clear goal/)).toBeVisible();
     await goal.fill('Read this course overview and ask me before continuing.');
     await page.getByText('Course material checklist',{exact:true}).click();
     await expect(page.getByText('3 topics found · 1 with collected material · 1 unchecked',{exact:true})).toBeVisible();
     await expect(page.getByText('Visited · not collected',{exact:true})).toBeVisible();
     await page.screenshot({path:join(artifacts,viewport.width>500?'desktop-coverage.png':'mobile-coverage.png'),fullPage:true});
+    await page.getByRole('button',{name:'Close Course material checklist',exact:true}).click();
     fixture.updatePhase='installing';fixture.online=false;
     await page.clock.fastForward(16_000);
     await expect(page.getByText('Installing · waiting for the helper to reconnect · v1.0.21',{exact:true})).toBeVisible();
@@ -526,13 +552,13 @@ try{
     await page.clock.fastForward(46_000);
     expect(fixture.refreshes).toBe(probesDuringUpdate);
     await advanced.click();
-    await expect(page.getByRole('button',{name:'End browser session',exact:true})).toBeDisabled();
+    await expect(page.getByRole('button',{name:'End browser session',exact:true})).toBeHidden();
     await page.screenshot({path:join(artifacts,viewport.width>500?'desktop-update.png':'mobile-update.png'),fullPage:true});
     await normal.click();
     await expect(goal).toBeHidden();
     fixture.updatePhase=null;fixture.online=true;
     await page.clock.fastForward(16_000);
-    await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
+    await expect(page.getByRole('button',{name:'Start',exact:true})).toBeEnabled();
     const jobsBeforeSwitch=[...fixture.jobs.values()].filter(job=>job.capability_id!=='list-tabs').length;
     await advanced.click();
     await expect(advanced).toHaveAttribute('aria-selected','true');
@@ -546,21 +572,21 @@ try{
     await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
     expect([...fixture.jobs.values()].filter(job=>job.capability_id!=='list-tabs').length).toBe(jobsBeforeSwitch);
     await goal.focus();
-    await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
+    await expect(page.getByRole('button',{name:'Start',exact:true})).toBeEnabled();
     const before=fixture.refreshes;
     await page.clock.fastForward(46_000);
-    await expect.poll(()=>fixture.refreshes).toBeGreaterThan(before);
+    expect(fixture.refreshes).toBe(before);
     await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
     await mode.getByRole('button',{name:'Co-ordinate with ChatGPT',exact:true}).click();
     await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
     await mode.getByRole('button',{name:'Work independently',exact:true}).click();
     await expect(mode.getByRole('button',{name:'Work independently',exact:true})).toBeFocused();
     await expect(select).toHaveAttribute('aria-pressed','true');
-    await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
+    await expect(page.getByRole('button',{name:'Start',exact:true})).toBeEnabled();
     await page.evaluate(()=>window.scrollTo(0,0));
     await page.screenshot({path:join(artifacts,viewport.width>500?'desktop.png':'mobile.png'),fullPage:true});
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-    await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
+    await page.getByRole('button',{name:'Start',exact:true}).click();
     await expect(page.getByText('This page is a quiz.',{exact:false})).toBeVisible();
     await page.getByText('Course and goal',{exact:true}).click();
     await mode.getByRole('button',{name:'Co-ordinate with ChatGPT',exact:true}).click();
@@ -603,7 +629,9 @@ try{
     await page.clock.fastForward(46_000);
     expect(fixture.refreshes).toBeGreaterThanOrEqual(refreshesWithQuestion);
     await expect(page.getByText('Which module should I read next?',{exact:true})).toBeVisible();
+    await page.getByRole('button',{name:'Course and goal',exact:true}).click();
     await expect(goal).toHaveValue('Read this course overview and ask me before continuing.');
+    await page.getByRole('button',{name:'Close Course and goal',exact:true}).click();
     await page.getByRole('button',{name:'Pause session',exact:true}).click();
     fixture.online=false;
     await page.clock.fastForward(61_000);
@@ -645,13 +673,14 @@ try{
     await expect(page.getByText('Recording saved',{exact:true})).toBeVisible();
     await page.getByText('Recording folder',{exact:true}).click();
     await expect(page.getByText('C:/Fixtures/recording',{exact:true})).toBeVisible();
+    await page.getByRole('button',{name:'Close Recording folder',exact:true}).click();
     await activityPicker.getByRole('button',{name:'Work independently',exact:true}).click();
     // Finishing during a guided wait stops the local orchestrator before another step can queue.
     fixture.online=true;fixture.paused=false;fixture.holdCapability='detect';
     await page.clock.fastForward(61_000);
     await goal.fill('Read the selected course page.');
-    await expect(page.getByRole('button',{name:'Inspect and start',exact:true})).toBeEnabled();
-    await page.getByRole('button',{name:'Inspect and start',exact:true}).click();
+    await expect(page.getByRole('button',{name:'Start',exact:true})).toBeEnabled();
+    await page.getByRole('button',{name:'Start',exact:true}).click();
     await expect.poll(()=>fixture.latest?.capability_id).toBe('detect');
     await page.getByText('Task options',{exact:true}).click();
     await expect(page.getByText('Inspect course page: Working',{exact:true})).toBeVisible();
@@ -662,6 +691,7 @@ try{
     await page.clock.fastForward(8000);
     expect(fixture.serial).toBe(jobsAtFinish);
     expect(fixture.finishPosts).toBe(2);
+    await page.getByRole('button',{name:'Close Task options',exact:true}).click();
     await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();
     await page.goto(url+'/setup-test');
     await expect(page.getByRole('button',{name:'Generate code',exact:true})).toBeEnabled();
@@ -704,13 +734,15 @@ try{
     await page.close();
   }
   console.log('PASS healthy context clears a transient session warning; Retry checks without resuming.');
-  for(const viewport of [{width:390,height:844},{width:844,height:390},{width:1365,height:1000}]){
+  if(!process.argv.includes('--focus-followup'))for(const viewport of [{width:390,height:844},{width:844,height:390},{width:1365,height:1000}]){
     const page=await browser.newPage({viewport}),fixture=state();
     fixture.memory={id:'fixture-memory',objective:null,history:[]};
     await page.route('**/api/**',async route=>{const req=route.request();const {__status,...json}=reply(new URL(req.url()).pathname,req.method(),req.postDataJSON()||{},Date.now(),fixture);await route.fulfill({status:__status||200,json});});
     await page.goto(url);
     await page.getByRole('group',{name:'Course tab',exact:true}).getByRole('button').click();
+    await page.getByRole('button',{name:'Give a hint or steer',exact:true}).click();
     await expect(page.getByLabel('Hint or change of direction',{exact:true})).toBeVisible();
+    await page.getByRole('button',{name:'Close Give a hint or steer',exact:true}).click();
     fixture.holdCapability='quiz-learn';fixture.task={id:'mobile-running',status:'running',capability_id:'quiz-learn'};fixture.latest=fixture.task;fixture.jobs.set(fixture.task.id,fixture.task);
     fixture.progressOutput='LEARNER_PROGRESS {"message":"Reading the current question."}\nLEARNER_PROGRESS {"message":"Set and verified five answers."}\n';
     await expect(page.getByText('Set and verified five answers.',{exact:true})).toBeVisible({timeout:10000});
@@ -724,7 +756,8 @@ try{
     await page.screenshot({path:join(artifacts,`running-${viewport.width}.png`),fullPage:true});
     await page.getByText('Give a hint or steer',{exact:true}).click();
     await expect(page.getByLabel('Hint or change of direction',{exact:true})).toBeVisible();
-    await page.getByText('Recent activity and helper output',{exact:true}).click();
+    await page.getByRole('button',{name:'Close Give a hint or steer',exact:true}).click();
+    await page.getByRole('button',{name:'Recent activity and helper output',exact:true}).click();
     await expect(page.getByText('Reading the current question.',{exact:true})).toBeVisible();
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     await page.close();

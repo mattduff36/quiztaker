@@ -1,5 +1,31 @@
 # Hosted deployment and helper operations
 
+## Operations follow-up and genuine learning 1.0.50
+
+Apply additive `0014_operations_followup.sql` before this web release. It adds
+account-owned follow-up deadlines and passive browser inventory tokens. Existing
+completed jobs are never backfilled. New successful tasks offer 20 seconds for
+follow-up; trusted clicks, scrolling, touches and typing cancel on either device.
+Mouse motion does not. Expiry rechecks ownership, exact live browser session,
+pause, manual control, worker shutdown, newer work and the shared workflow under
+locks before queueing the normal close. A suspended/offline page cannot close
+on its own. Unknown close outcomes retain an explicit recovery message.
+
+Normal setup uses selectable course/mode buttons, a full-width three-to-eight
+line goal, a single Start and New task, and modal supporting details. Paused
+sessions do not queue tab checks. Helper target events supply an inventory token;
+one fresh comparison after returning to Operations refreshes changed tabs only.
+The Start workflow still refreshes and revalidates its exact target before work.
+Old open browser bundles need one reload for this release; later build changes
+reload only a visible idle Task page outside text editing.
+
+Publish/install Helper 1.0.50 with quiz-learn capability 7 for certification
+sequencing, scoped Storyline narration collection, slide-identity panel memory,
+bounded animation waits, one-question grouped-answer fallback and normal end
+screen finalization. Captions are source-labelled evidence, never proof of
+completion. Assessment manifests and out-of-publication references are excluded.
+Verify the actual portal result after normal exits; never write invented scores.
+
 ## Operations question and selection fixes 1.0.49
 
 Course tabs and work modes use selectable buttons; background tab checks no

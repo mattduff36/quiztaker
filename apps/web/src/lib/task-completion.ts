@@ -1,3 +1,4 @@
+import {armTaskFollowup} from './task-followup';
 import { queryRows, withTransaction, type SqlQuery } from '@/lib/db';
 
 /** Connection housekeeping is not the user's course task. */
@@ -58,6 +59,7 @@ export async function finishOperatorTask(input:{userId:string;helperId:string;jo
       await sql(`update learner_sessions set history=(select coalesce(jsonb_agg(value order by ord),'[]'::jsonb) from jsonb_array_elements(history||$5::jsonb) with ordinality e(value,ord) where ord>greatest(jsonb_array_length(history)+1-40,0)),updated_at=now()
         where id=$1 and user_id=$2 and helper_id=$3 and browser_session_id=$4`,[conversationId,input.userId,input.helperId,job.browser_session_id,turn]);
     }
+    if(input.result==='completed')await armTaskFollowup(sql,{...job,status:'completed',outcome});
     return {ok:true,status:taskStillStopping({...job,outcome},helper,deps.now().getTime())?'stopping':input.result,jobId:job.id};
   });
 }

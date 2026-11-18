@@ -10,6 +10,7 @@ import { reportedUpdatePhase } from '@/lib/helper-update';
 
 const schema = z.object({
   status: z.enum(['online', 'busy']),
+  browserChangeToken:z.string().regex(/^(?:[a-f0-9]{64}|offline)$/).optional(),
   activeJobId: z.string().uuid().optional(),
   attentionJobId: z.string().uuid().optional(),
   version: z.string().min(1).max(50),
@@ -68,6 +69,7 @@ async function handleHeartbeat(request: Request) {
     ],
   ));
   // Commit heartbeat first; recovery must acquire jobs before helpers, never the reverse.
+  if(parsed.data.browserChangeToken)await queryRows('update helpers set browser_change_token=$2 where id=$1',[helper.helperId,parsed.data.browserChangeToken]);
   await recoverHelperJobs(helper.userId, helper.helperId);
   await enforceOperatorIdle(helper.userId,helper.helperId);
 
@@ -114,7 +116,7 @@ async function pendingUpdate(
   installerSha256: string | null;
 } | null> {
   if (!requestedVersion || !requestedAt) return null;
-  const release = await getLatestHelperRelease().catch(() => null);
+  const release = await getLatestHelperRelease({minimumVersion:requestedVersion,notBefore:Date.parse(isoTimestamp(requestedAt))}).catch(() => null);
   if (!release || !RELEASE_VERSION.test(release.version) || !SHA256.test(release.sha256)) return null;
   if (compareVersions(release.version, currentVersion) <= 0) return null;
   if (compareVersions(release.version, requestedVersion) < 0) return null;

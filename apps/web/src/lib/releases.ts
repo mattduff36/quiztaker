@@ -17,11 +17,12 @@ const GITHUB_ORIGIN = 'https://github.com';
 const FRESH_RELEASE_REQUEST: RequestInit = { cache: 'no-store' };
 const releaseCache = new Map<string, { at: number; value: HelperRelease | null }>();
 
-export async function getLatestHelperRelease(options?: { fresh?: boolean }): Promise<HelperRelease | null> {
+export async function getLatestHelperRelease(options?: { fresh?: boolean;minimumVersion?:string;notBefore?:number }): Promise<HelperRelease | null> {
   const repository = getServerEnv().GITHUB_REPOSITORY;
   const cached = releaseCache.get(repository);
-  const maxAge = cached?.value ? 5 * 60_000 : 30_000;
-  if (!options?.fresh && cached && Date.now() - cached.at < maxAge) return cached.value;
+  const satisfies=cached?.value&&(!options?.minimumVersion||compareVersions(cached.value.version,options.minimumVersion)>=0);
+  const maxAge = satisfies ? 5 * 60_000 : 30_000;
+  if (!options?.fresh && cached && cached.at>=(options?.notBefore??0) && Date.now() - cached.at < maxAge) return cached.value;
   const value = await loadLatestHelperRelease(repository);
   releaseCache.set(repository, { at: Date.now(), value });
   return value;

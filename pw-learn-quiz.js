@@ -48,7 +48,9 @@ const { observePlayerEvidence } = require('./lib/player-evidence');
 const { recognizeQuizResult, quizResultPayload } = require('./lib/quiz-result');
 const { readBrainshark, listeningQuestion, playbackApproved, playbackControl, setPlaybackSpeed, closeBrainsharkReaders, CONTINUE_LISTENING_QUESTION } = require('./lib/brainshark-player');
 const { launchSelectedCourse, originatingSabaPage, finishSabaCourse, protectSabaPopups, sabaAddress, currentCourseSuccessful } = require('./lib/course-launch');
+const {certificationAddress,runCertificationLearning}=require('./lib/certification-learning');
 const { COURSE_EXIT_LABEL, createStorylineFinalizer } = require('./lib/storyline-finalization');
+const {storylineRoot,collectStorylineMaterial}=require('./lib/storyline-material');
 const { publicationRoot, collectAuthoredMaterial } = require('./lib/authored-material');
 const { watchCoursePopup } = require('./lib/course-popup');
 const { captureStableViewport } = require('./lib/stable-viewport-capture');
@@ -609,12 +611,16 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
   // keeping offscreen course controls as an auto-scroll fallback.
   candidates.sort((a,b) => Number(a.outline)-Number(b.outline) || Number(b.inViewport)-Number(a.inViewport));
   const allListed = [];
-  for (const {locator,index,stableId} of candidates.slice(0,400)) {
+  for (const {locator,index,stableId,inViewport} of candidates.slice(0,400)) {
     const handle = locator.nth(index);
     if (!await handle.isVisible().catch(() => false) || !await handle.isEnabled().catch(() => false)) continue;
     const name = role === 'answer' ? await answerName(handle) : await controlName(handle);
     if (!name || (navigationOnly && !COURSE_PLAYER_LABEL.test(name) && (UNSAFE_LABEL.test(name) || COURSE_EXIT_LABEL.test(name)))) continue;
     if (navigationOnly && /^[<>]$/.test(name) && await handle.evaluate(storylineGraphic, true).catch(() => false)) continue;
+    // Storyline exports decorative icon labels beside the real hotspots.
+    if(navigationOnly&&inViewport&&/\boutline$/i.test(name)
+      &&await handle.evaluate(el=>el.matches('.acc-shadow-el[data-represents]')).catch(()=>false)
+      &&!await handle.evaluate(storylineGraphic).catch(()=>null))continue;
     let kind;
     if (navigationOnly) {
       const link = await handle.evaluate(el => {
@@ -777,6 +783,7 @@ async function readSnapshot(page, mode = 'read') {
   const resultViews = [];
   const navigationFrames = [];
   let hasStoryline = false;
+  let storylineKey=null,storylineTimeline=null;
   let riseResultVisible = false;
   for (const frame of await visibleFrames(page)) {
     try {
@@ -863,7 +870,9 @@ async function readSnapshot(page, mode = 'read') {
             [el.getAttribute('data-represents'), el.textContent.replace(/\s+/g, ' ').trim()]),
           dialogs: [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].map(el => el.innerText),
         } : null;
+        const audio=[...document.querySelectorAll('audio,video')].find(a=>!a.paused&&Number.isFinite(a.duration)&&a.duration>1&&a.currentTime<a.duration-.2);
         return { heading: heading?.textContent?.trim() || document.title, text: lines.join('\n'), riseResult, position: Math.round(position), end,
+          timeline:storyline&&audio?{remaining:(audio.duration-audio.currentTime)/Math.max(.1,audio.playbackRate)}:null,
           storyline,
           storylineResult: /^slide:\s*Results Slide$/i.test(slideLabel || '') && Boolean(document.querySelector('.slide-layer.base-layer.shown')) };
       });
@@ -872,6 +881,7 @@ async function readSnapshot(page, mode = 'read') {
       resultViews.push(observed.riseResult || (observed.storylineResult ? `Quiz Results\n${observed.text}` : observed.text));
       const source = canonicalCourseSource(await frame.evaluate(() => location.href).catch(() => frame.url()));
       hasStoryline ||= Boolean(observed.storyline);
+      if(observed.storyline){storylineKey=`${source}:${observed.storyline.layer}`;storylineTimeline=observed.timeline;}
       navigationFrames.push({ source, heading: observed.heading, content: observed.storyline || observed.text, position: observed.position });
       sections.push(`[Source: ${source} | ${observed.heading || ''} | scroll ${observed.position}${observed.end ? ' | end of page' : ''}]\n${observed.text}`);
     } catch {
@@ -951,6 +961,10 @@ async function readSnapshot(page, mode = 'read') {
   // Raw live text is local verification evidence, not additional provider
   // context. Exclude it from JSON and never populate it from course memory.
   Object.defineProperty(snapshot, 'resultViews', {value: resultViews});
+  Object.defineProperty(snapshot,'storylineKey',{value:storylineKey});
+  Object.defineProperty(snapshot,'storylineTimeline',{value:storylineTimeline});
+  const visited=storylineKey&&observationFor(page).visitedPanels?.get(storylineKey);
+  if(visited?.size)snapshot.text+=`\nTool feedback: Panels already opened on this exact slide: ${[...visited].join(', ')}. Prefer remaining required panels, then an enabled Next; a different slide can reuse the same heading.`;
   Object.defineProperty(snapshot, 'answerControls', {value:[...(answers.allListed || answers.listed),...fields]});
   if (hasStoryline) {
     const targets = {};
@@ -1012,6 +1026,15 @@ function sameLearnerView(before, after) {
   return JSON.stringify(comparable(before)) === JSON.stringify(comparable(after));
 }
 
+function storylineTimelineWait(snapshot){
+  if(!snapshot.storylineKey||snapshot.question||snapshot.choices?.length||snapshot.sourceMaterials?.length)return 0;
+  const remaining=snapshot.storylineTimeline?.remaining;
+  if(!Number.isFinite(remaining)||remaining<=.2||remaining>120)return 0;
+  const player=/^(?:play|pause|replay|previous|prev|menu|settings|sidebar toggle|back to top|playback speed|enter full-screen mode|mute(?:\s*\([^)]*\))?|unmute|show captions(?:\s*\([^)]*\))?)$/i;
+  if(snapshot.buttons?.some(button=>!player.test(button.name)))return 0;
+  return Math.min(2000,Math.ceil(remaining*1000));
+}
+
 function createActionReader() {
   const rl = readline.createInterface({ input: process.stdin });
   const pending = [];
@@ -1063,6 +1086,13 @@ function createActionReader() {
 
 async function applyAction(page, action, snapshot, handles, mode = 'read') {
   if (!localActionAllowed(action, snapshot, mode)) throw new Error('Learner action is not allowed');
+  if(action.action==='answer-group'&&action.answers.length===1){
+    const only=action.answers[0],choice=snapshot.choices?.find(c=>c.id===only.targetId);
+    if(only.checked===true&&choice?.answerKind==='radio'){
+      if((await readSnapshot(page,mode)).snapshot.answerPageId!==action.pageId)throw new GroupedAnswerChanged('Single answer page changed');
+      return applyAction(page,{action:'answer-select',targetId:only.targetId},snapshot,handles,mode);
+    }
+  }
   if (action.action === 'answer-group') return applyAnswerGroup(page, action, snapshot, mode);
   if(snapshot.question && (await readSnapshot(page,mode)).snapshot.question?.id!==snapshot.question.id)throw new Error('Learner question target changed');
   const state=observationFor(page);delete state.feedback;delete state.blockedControl;delete state.screenshotBlocked;
@@ -1194,6 +1224,10 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
   const point = await handle.evaluate(storylineGraphic);
   if (point) {
     await clickStorylineControl(page, handle, point, action.action === 'answer-select');
+    if(action.action==='click'&&snapshot.storylineKey&&/hotspot|outline|panel/i.test(target.name)){
+      state.visitedPanels??=new Map();if(!state.visitedPanels.has(snapshot.storylineKey))state.visitedPanels.set(snapshot.storylineKey,new Set());
+      state.visitedPanels.get(snapshot.storylineKey).add(target.name);
+    }
     return;
   }
 
@@ -1292,6 +1326,12 @@ async function main() {
       console.log(`Dry run: quiz-learn observed "${snapshot.title || 'untitled'}"`);
       return;
     }
+    if(certificationAddress(page.url())){
+      const outcome=await runCertificationLearning(page,mode);
+      console.log(`AUTOMATION_RESULT ${JSON.stringify(outcome)}`);
+      if(!outcome.total||outcome.completed!==outcome.total)process.exitCode=1;
+      return;
+    }
     const selected = page;
     const startedAtCourse=/\/learningeventdetail[;/]/i.test(selected.url());
     page = await launchSelectedCourse(page);
@@ -1347,6 +1387,7 @@ async function main() {
     if(landing===page && await currentCourseSuccessful(landing) && await verifyCourse())return;
     let coordinatedStalls=0;
     const collectedPublications = new Set();
+    const timelineWaits=new Map();
     for (let step = 1; step <= MAX_STEPS; step += 1) {
       if (page.isClosed()) {
         if (await verifyCourse()) return;
@@ -1410,10 +1451,10 @@ async function main() {
       let { snapshot, handles } = await readSnapshot(page, mode);
       if ((mode === 'read' || process.env.VITRIOL_LEARNER_INTENT) && !snapshot.choices.length) {
         for (const frame of await visibleFrames(page)) {
-          const root = publicationRoot(frame.url());
+          const root = publicationRoot(frame.url()) || storylineRoot(frame.url());
           if (!root || collectedPublications.has(root)) continue;
           console.log(`LEARNER_PROGRESS ${JSON.stringify({message:'Collecting referenced lesson text within this publication; images and missing sources remain explicit gaps.'})}`);
-          const material = await collectAuthoredMaterial(frame, {title:snapshot.title});
+          const material = storylineRoot(frame.url()) ? await collectStorylineMaterial(frame,{title:snapshot.title}) : await collectAuthoredMaterial(frame, {title:snapshot.title});
           if (!material) continue;
           collectedPublications.add(root);
           snapshot.sourceMaterials = material.materials;
@@ -1442,6 +1483,13 @@ async function main() {
       console.log(`LEARNER_PROGRESS ${JSON.stringify({ message: `Reading ${snapshot.title || 'the current course page'}.` })}`);
       const result = mode === 'quiz' ? recognizeQuizResult(snapshot) : null;
       if (result) { await terminalResult(result); return; }
+      const timelineDelay=storylineTimelineWait(snapshot),timelineKey=snapshot.storylineKey;
+      const waited=timelineWaits.get(timelineKey)||0;
+      if(timelineDelay&&waited<120000){
+        if(!waited)console.log(`LEARNER_PROGRESS ${JSON.stringify({message:'Waiting for the current narration and animation to finish.'})}`);
+        timelineWaits.set(timelineKey,waited+timelineDelay);
+        await new Promise(resolve=>setTimeout(resolve,timelineDelay));step-=1;continue;
+      }
       let action;
       try {
         action = await reader.request(snapshot);
@@ -1586,6 +1634,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  storylineTimelineWait,
   parseLearnQuizArgs,
   localActionAllowed,
   pageShowsPass,

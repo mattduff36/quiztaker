@@ -52,8 +52,10 @@ export async function reserveBrowserRefresh(userId: string, helperId: string, fo
     const [row] = await sql(`update operator_activity set last_browser_probe_at=now()
       where user_id=$1 and helper_id=$2 and paused_at is null
       and (last_browser_probe_at is null or last_browser_probe_at < now()-($3::int * interval '1 millisecond'))
+      and ($4::boolean or exists(select 1 from helpers h left join browser_sessions s on s.helper_id=h.id and s.closed_at is null
+        where h.id=$2 and h.user_id=$1 and (h.browser_change_token is null or h.browser_change_token is distinct from s.browser_change_token)))
       and exists(select 1 from helper_presence where id=$2 and user_id=$1 and is_online)
-      and not exists(select 1 from jobs where user_id=$1 and helper_id=$2 and status in ('queued','dispatched','running')) returning helper_id`, [userId,helperId,force ? 2_000 : BROWSER_REFRESH_MS]);
+      and not exists(select 1 from jobs where user_id=$1 and helper_id=$2 and status in ('queued','dispatched','running')) returning helper_id`, [userId,helperId,force ? 2_000 : BROWSER_REFRESH_MS,force]);
     return Boolean(row);
   });
 }

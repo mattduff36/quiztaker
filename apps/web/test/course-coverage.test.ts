@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { CourseCoverage as Checklist } from '../src/components/course-coverage.js';
+import { CourseCoverageContent as Checklist } from '../src/components/course-coverage.js';
 import { coverageSource, mergeCourseCoverage, readCourseCoverage, recordCourseCoverage, type CourseCoverage, type CoverageDeps } from '../src/lib/course-coverage.js';
 import type { SqlQuery } from '../src/lib/db.js';
 

@@ -31,6 +31,7 @@ export class ControlPlaneClient {
 
   async heartbeat(state: {
     status: 'online' | 'busy';
+    browserChangeToken?:string;
     activeJobId?: string;
     attentionJobId?: string;
     updateError?: string;
@@ -41,6 +42,7 @@ export class ControlPlaneClient {
       method: 'POST',
       body: JSON.stringify({
         status: state.status,
+        ...(state.browserChangeToken?{browserChangeToken:state.browserChangeToken}:{}),
         ...(state.activeJobId ? { activeJobId: state.activeJobId } : {}),
         ...(state.attentionJobId ? { attentionJobId: state.attentionJobId } : {}),
         ...(state.updateError ? { updateError: state.updateError } : {}),

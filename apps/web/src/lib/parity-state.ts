@@ -1,4 +1,5 @@
 import { sanitizeRecentUrl } from '@quiztaker/core';
+import {createHash} from 'node:crypto';
 import { queryRows } from '@/lib/db';
 
 type SqlQuery = (text: string, values?: unknown[]) => Promise<unknown[]>;
@@ -30,12 +31,13 @@ export async function applyStructuredResult(input: {
       );
       await query(
         `insert into browser_sessions (
-           id, user_id, helper_id, revision, cdp_connected, tabs, roster, detection, updated_at
-         ) values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, now())
+           id, user_id, helper_id, revision, cdp_connected, tabs, roster, detection, updated_at,browser_change_token
+         ) values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, now(),$9)
          on conflict (id) do update set
            revision = excluded.revision,
            cdp_connected = excluded.cdp_connected,
            tabs = excluded.tabs,
+           browser_change_token=excluded.browser_change_token,
            roster = coalesce(excluded.roster, browser_sessions.roster),
            detection = coalesce(excluded.detection, browser_sessions.detection),
            updated_at = now()`,
@@ -48,6 +50,7 @@ export async function applyStructuredResult(input: {
           JSON.stringify(value.tabs ?? []),
           body.roster ? JSON.stringify(body.roster) : null,
           body.detection ? JSON.stringify(body.detection) : null,
+          value.cdpConnected===false?'offline':createHash('sha256').update(JSON.stringify((value.tabs??[]).filter((t:any)=>/^https?:\/\//.test(t.url)).map((t:any)=>[t.cdpTargetId,t.url,t.title]).sort((a:any,b:any)=>String(a[0]).localeCompare(String(b[0]))))).digest('hex'),
         ],
       );
     }

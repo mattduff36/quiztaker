@@ -24,19 +24,16 @@ if the fast path fails.
   "% Path Completed" bar and a list of "Recommended courses (Required N of M)"
   rows, each with a LAUNCH / VIEW / PRINT CERTIFICATE split-button.
 - **Strategy** — this is the entry point for `pw-cert-batch.js`.
-- **Genuine-learning Operations gap (18 November 2026)** - Do not enable
-  `cert-landing` by adding it only to the guided-flow learnable set. The core
-  `learnerOfferedFor` admission also excludes it. `launchSelectedCourse` in
-  `lib/course-launch.js` launches one course detail page, not a certification
-  row; `pw-learn-quiz.js` retains one course landing and terminates on its
-  verified course/quiz result. Same-window popup protection and observed
-  same-origin tab selection already exist, but there is no certification
-  parent/checklist state, lesson-before-exam sequencing, or return-to-overview
-  required-count verifier. A safe follow-up needs all of those plus offline
-  two-module fixtures (including prerequisites, failed assessment and stale
-  rows). Until then, explicitly open each intended module and verify the
-  actual required count on the overview afterward. Do not substitute
-  `cert-batch` or synthetic SCORM status/score writes for genuine learning.
+- **Genuine learning in Helper 1.0.50** - Operations admits `cert-landing`
+  through quiz-learn capability 7. `lib/certification-learning.js` keeps the
+  selected certification, opens unfinished learning before assessments, runs
+  the ordinary learner, returns and verifies each exact Successful row.
+  Whole-course success requires both 100% and every required row Successful.
+  Failed children, prerequisite locks, changed overview and ambiguous launches
+  stop the run. Read-only/quiz-only goals retain their limited scope. Offline
+  fixtures cover learning-before-assessment and stopping after a failed child;
+  production acceptance on another certification is still required. Never
+  substitute synthetic SCORM status or score writes for genuine learning.
 - **Note** — the roster is rendered by Angular; lazy-loads rows below the
   fold, so scroll first (the batch script handles this). Returning from a
   course can also collapse requirement cards and remove their course rows from
@@ -760,9 +757,10 @@ use the wrapper's Close player, Exit and finish, and its normal return, then
 verify the overview. A successful learning item first showed 50% and 1/2;
 only the separately passed and exited quiz produced acquired 100% and 2/2.
 
-Follow-ups from this assisted run: integrate scoped Storyline captions and
-terminal-wrapper verification; avoid repeated panel visits and decisions during
-timeline changes; use single answer-select for native one-radio questions when
-group preflight keeps falling back; handle the current congratulations modal's
-labelled close button. Certification-wide genuine-learning orchestration remains
-the earlier documented gap. None of these new follow-ups is claimed released.
+Helper 1.0.50 implements these follow-ups: observed learning manifest caption
+collection with static parsing and publication bounds; normal goodbye-wrapper
+finalization; slide-identity visited panels; bounded waits during finite narration;
+single-radio answer-select fallback; and the current labelled evaluation close.
+The certification driver above coordinates ordinary child runs and verifies the
+overview. The offline fixtures establish these contracts; they do not establish
+an unobserved production course completion.

@@ -1,3 +1,4 @@
+import {armTaskFollowup,cancelTaskFollowup} from '@/lib/task-followup';
 import { saveQuickScrapeMaterial } from '@/lib/learner-memory';
 import { createHash, randomUUID } from 'node:crypto';
 import { put } from '@vercel/blob';
@@ -92,6 +93,11 @@ export async function createJob(userId: string, planId: string,workflowOwner:Wor
       from helpers where id = $1 and user_id = $2 and revoked_at is null for update`, [plan.helperId, userId]);
     if (!helper) throw new Error('Helper is unavailable');
     if(plan.capabilityId!=='close-browser')await assertPlanWorkflow(sql,userId,plan.helperId,planId,workflowOwner);
+    if(plan.capabilityId!=='close-browser'&&plan.capabilityId!=='list-tabs'){
+      const [closing]=await sql("select job_id from operations_followups where helper_id=$1 and user_id=$2 and state='closing' limit 1",[plan.helperId,userId]);
+      if(closing)throw new Error('The completed task is closing its browser. Wait for it to finish before starting another task.');
+      await cancelTaskFollowup(userId,plan.helperId,undefined,sql);
+    }
     if (helper.remote_control) throw new Error('Manual browser control is reserved. Release control before starting automation.');
     assertHelperUpdateAllowsJob(plan.capabilityId, helper);
     if(helper.active_job_id && plan.capabilityId!=='close-browser') {
@@ -337,7 +343,9 @@ export async function recordJobEvent(
       result: input.data.result as Record<string, unknown>,
     }, sql);
   }
+  await armTaskFollowup(sql,{id:jobId,user_id:userId,helper_id:helperId,capability_id:job.capability_id,status,outcome});
   if (job.capability_id === 'close-browser') {
+    await sql("update operations_followups set state=$2,updated_at=now() where close_job_id=$1 and state='closing'",[jobId,status==='completed'?'closed':'failed']);
     await sql(
       `update operator_sessions
        set status = $2, ended_at = $3

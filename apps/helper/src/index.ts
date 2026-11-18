@@ -27,6 +27,7 @@ import { minimizeHelperWindow, shouldAutoMinimize } from './windows.js';
 import { HelperTerminal } from './terminal-ui.js';
 import { askCoordinator, coordinateDecision } from './coordination.js';
 import { restoreHelperWindowPlacement } from './window-placement.js';
+import {BrowserChanges} from './browser-changes.js';
 import { RemoteBroker } from './remote.js';
 
 let isStopping = false;
@@ -72,6 +73,7 @@ async function main(): Promise<void> {
   const remote=new RemoteBroker(config.helperId,input=>client.remoteExchange(input),
     ()=>!runningJob&&!isStopping,message=>terminal?.activity(message));
   remote.start();
+  const browserChanges=new BrowserChanges(Number(process.env.PLAYWRIGHT_CDP_PORT||9222));
   const historySync = new LocalHistorySync(
     payload => client.syncHistory(payload),
     error => console.error('Local history sync deferred; heartbeat and job polling remain available:', error instanceof Error ? error.message : error),
@@ -83,7 +85,9 @@ async function main(): Promise<void> {
   while (!isStopping) {
     try {
       await replayBeforeHeartbeat((jobId, event) => client.sendEvent(jobId, event));
+      void browserChanges.connect();
       const heartbeat = await client.heartbeat({
+        browserChangeToken:browserChanges.token,
         ...(attentionJobId ? {attentionJobId} : {}),
         ...(runningJob
           ? { status: 'busy' as const, activeJobId: runningJob.jobId }
@@ -253,6 +257,7 @@ async function main(): Promise<void> {
     }
   }
   remote.stop();
+  browserChanges.close();
   releaseInstance?.();
 }
 

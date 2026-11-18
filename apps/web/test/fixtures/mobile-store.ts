@@ -26,7 +26,8 @@ export class MobileStore {
     const own=v[0]===this.helperId&&v[1]===this.userId;
     let result:unknown[]=[];
     const live=()=>Boolean(this.helper.remote_lease_until&&Date.parse(this.helper.remote_lease_until)>this.now());
-    if(q.startsWith('select remote_session_id'))result=own?[{...this.helper}]:[];
+    if(q.startsWith('update operations_followups set state=')){}
+    else if(q.startsWith('select remote_session_id'))result=own?[{...this.helper}]:[];
     else if(q.startsWith('select (remote_lease_until'))result=own?[{manual:live()}]:[];
     else if(q.startsWith('select id from browser_sessions'))result=own?[{id:this.sessionId}]:[];
     else if(q.startsWith('delete from remote_sessions')&&q.includes('expires_at')){for(const [id,row] of this.remote)if(row.helper_id===v[0]&&row.user_id===v[1]&&Date.parse(String(row.expires_at))<=this.now())this.remote.delete(id);}

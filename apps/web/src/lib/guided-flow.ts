@@ -44,7 +44,7 @@ export type GuidedDecision =
   | { kind: 'question'; question: string; next: string };
 
 const known = new Set(['scorm-complete', 'container-batch', 'slickquiz-solve']);
-const learnable = new Set(['unknown', 'none', 'document-wbt', 'csod-curriculum', 'csod-learning', 'class-detail']);
+const learnable = new Set(['unknown', 'none', 'document-wbt', 'csod-curriculum', 'csod-learning', 'class-detail', 'cert-landing']);
 
 export function decideGuidedFlow(detection: GuidedDetection, mode: GuidedLearningMode = 'read'): GuidedDecision {
   if (detection.detected === 'session-dead') return {

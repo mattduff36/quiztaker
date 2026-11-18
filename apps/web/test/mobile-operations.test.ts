@@ -11,7 +11,7 @@ import {MobileStore} from './fixtures/mobile-store';
 import type {SqlQuery} from '../src/lib/db';
 
 test('shared questions accept current and legacy decisions, strip kind and reject unexpected fields',()=>{
-  for(const detected of ['session-dead','server-assessment','cert-landing']) {
+  for(const detected of ['session-dead','server-assessment','certification']) {
     const decision=decideGuidedFlow({detected},'read');
     assert.equal(decision.kind,'question');
     if(decision.kind!=='question')throw new Error('Expected a question');

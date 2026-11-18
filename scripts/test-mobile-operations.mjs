@@ -124,8 +124,7 @@ try{
     expect(await button.evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
   }
   holdTabRefresh=true;queueTabRefresh=true;
-  await mobile.getByRole('button',{name:'Refresh tabs',exact:true}).click();
-  await expect(mobile.getByRole('button',{name:'Refreshing tabs…',exact:true})).toBeVisible();
+  await expect(mobile.getByRole('button',{name:'Refresh tabs',exact:true})).toHaveCount(0);
   await expect(courseButton(mobile,1)).toBeEnabled();
   await courseButton(mobile,1).tap();
   await modeButton(mobile,'coordinate').tap();
@@ -140,13 +139,13 @@ try{
   await expect(modeButton(desktop,'coordinate')).toHaveAttribute('aria-pressed','true');
   await expect(mobile.getByLabel(/What would you like to achieve/)).toHaveValue(goal+' Mobile edit.');
   holdTabRefresh=false;queueTabRefresh=false;tabOrder=[0,1];
-  await expect(mobile.getByRole('button',{name:'Refresh tabs',exact:true})).toBeEnabled({timeout:12000});
+  await expect(mobile.getByRole('button',{name:'Refresh tabs',exact:true})).toHaveCount(0);
   await modeButton(mobile,'independent').click();
   await courseButton(mobile,0).click();
   await expect(courseButton(desktop,0)).toHaveAttribute('aria-pressed','true');
   await expect(modeButton(desktop,'independent')).toHaveAttribute('aria-pressed','true');
   detectionType='session-dead';
-  await desktop.getByRole('button',{name:'Inspect and start',exact:true}).click();
+  await desktop.getByRole('button',{name:'Start',exact:true}).click();
   await expect(mobile.getByRole('heading',{name:'Action needed in the helper browser',exact:true})).toBeVisible({timeout:25000});
   expect(store.draft.draft.question.question).toContain('sign in');
   expect(store.draft.draft.question).not.toHaveProperty('kind');
@@ -158,6 +157,7 @@ try{
   await courseButton(desktop,0).click();
   detectionType='unknown';
   await expect(mobile.getByRole('heading',{name:'Action needed in the helper browser',exact:true})).toHaveCount(0);
+  if(await desktop.getByRole('button',{name:'Close Course and goal',exact:true}).isVisible())await desktop.getByRole('button',{name:'Close Course and goal',exact:true}).click();
   starts.length=0;
   store.paused=true;
   await expect(desktop.getByRole('button',{name:'Resume session',exact:true})).toBeVisible({timeout:6000});
@@ -167,7 +167,7 @@ try{
   await noOverflow(mobile);await noOverflow(desktop);
   await mobile.screenshot({path:'test-results/mobile-operations/task-390.png',fullPage:true});
   await desktop.screenshot({path:'test-results/mobile-operations/task-desktop.png',fullPage:true});
-  await Promise.allSettled([desktop.getByRole('button',{name:'Inspect and start',exact:true}).click({timeout:3000}),mobile.getByRole('button',{name:'Inspect and start',exact:true}).click({timeout:3000})]);
+  await Promise.allSettled([desktop.getByRole('button',{name:'Start',exact:true}).click({timeout:3000}),mobile.getByRole('button',{name:'Start',exact:true}).click({timeout:3000})]);
   await expect(desktop.getByRole('heading',{name:'Vitriol has a question',exact:true})).toBeVisible({timeout:25000});
   await expect(mobile.getByRole('heading',{name:'Vitriol has a question',exact:true})).toBeVisible();
   expect(starts).toEqual(['list-tabs','detect','learn-capture','quiz-learn']);
@@ -213,7 +213,9 @@ try{
   await mobile.screenshot({path:'test-results/mobile-operations/browser-390.png',fullPage:true});
   for(const viewport of [{width:844,height:390},{width:1365,height:1000}]){
     const page=await client(viewport);
+    await page.getByRole('button',{name:'Course and goal',exact:true}).click();
     await expect(page.getByLabel(/What would you like to achieve/)).toHaveValue(goal+' Mobile edit.');
+    if(await page.getByRole('button',{name:'Close Course and goal',exact:true}).isVisible())await page.getByRole('button',{name:'Close Course and goal',exact:true}).click();
     await page.getByRole('button',{name:'View Browser',exact:true}).click();
     await expect(page.getByRole('img',{name:/Live view/})).toBeVisible({timeout:12000});
     await noOverflow(page);
@@ -259,12 +261,16 @@ try{
   await expect(mobile.getByRole('img',{name:/Live view/})).toBeVisible({timeout:12000});
   await expect(mobile.getByText('View only',{exact:true})).toBeVisible();
   await mobile.getByRole('button',{name:'Task',exact:true}).click();
+  await mobile.getByRole('button',{name:'Course and goal',exact:true}).click();
   await expect(mobile.getByLabel(/What would you like to achieve/)).toHaveValue(goal+' Mobile edit.');
+  await mobile.getByRole('button',{name:'Close Course and goal',exact:true}).click();
   await mobile.getByRole('button',{name:'Close browser preview',exact:true}).click();
   await expect.poll(()=>store.remote.size,{timeout:6000}).toBe(0);
   const atClose=captures;await new Promise(done=>setTimeout(done,2500));expect(captures-atClose).toBeLessThanOrEqual(1);
   const observer=await client({width:1365,height:1000});
+  await observer.getByRole('button',{name:'Course and goal',exact:true}).click();
   await expect(observer.getByLabel(/What would you like to achieve/)).toHaveValue(goal+' Mobile edit.');
+  await observer.getByRole('button',{name:'Close Course and goal',exact:true}).click();
   await mobile.getByRole('button',{name:'New task',exact:true}).click();
   await expect(observer.getByRole('heading',{name:'Vitriol has a question',exact:true})).toHaveCount(0,{timeout:6000});
   await expect(observer.getByLabel(/What would you like to achieve/)).toHaveValue('Read the course material, follow its topics and panels, and retain it for later questions.');

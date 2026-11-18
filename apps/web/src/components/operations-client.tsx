@@ -4,8 +4,10 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import { AlertTriangle, Check, Download, LoaderCircle, Play, Plus } from 'lucide-react';
 import { Panel } from '@/components/page-frame';
 import { GuidedRunner } from '@/components/guided-runner';
+import {TaskFollowupBar} from '@/components/task-followup-bar';
 import { connectionState, isWebUrl, operationNeedsBrowser, readJsonResponse } from '@/lib/operations-readiness';
 import { useOperatorActivity } from '@/components/use-operator-activity';
+import {BrowserRefreshGate} from '@/lib/browser-refresh-policy';
 import { BROWSER_REFRESH_MS, operationsPollDelay, SNAPSHOT_STALE_MS } from '@/lib/operations-policy';
 import { describeTaskJob, isRunningJob, isTaskJob, retainTaskJob, retainNewerBrowserSession } from '@/lib/operations-client-state';
 import type { OperatorActivity } from '@/lib/operator-activity';
@@ -46,6 +48,8 @@ interface DetectionSnapshot {
 }
 
 interface ContextResponse {
+  appBuild?:string|null;
+  followup?:import('@/lib/task-followup-policy').TaskFollowup|null;
   courseCoverage?: import('@/lib/course-coverage').CourseCoverage[];
   operatorActivity?: OperatorActivity | null;
   helper: {
@@ -55,12 +59,14 @@ interface ContextResponse {
     is_online: boolean;
     protocol_version?: number;
     status?: string;
+    browser_change_token?:string;last_seen_at?:string;
   } | null;
   session?: {
     id: string;
     revision: number;
     cdp_connected: boolean;
     updated_at?: string;
+    browser_change_token?:string|null;
     tabs: TabRow[];
     roster: { certTitle?: string; courses?: CourseRow[]; activities?: CourseRow[] } | null;
     detection: DetectionSnapshot | null;
@@ -173,12 +179,23 @@ function OperationsSession(props:{helperId:string}) {
   const contextRequest = useRef(0);
   const loadingContext = useRef(false);
   const browserProbe = useRef(0);
+  const browserRefreshGate=useRef(new BrowserRefreshGate());
+  const [windowFocused,setWindowFocused]=useState(true);
+  const contextRef=useRef(context);contextRef.current=context;
+  const loadedBuild=useRef<string|null>(null);
   const refreshAfterOpen = useRef(false);
   const observedJob = context?.activeJob;
   const active = Boolean(closingJobId || finishedTask?.stopping || context?.latestTask?.stopping) || isRunningJob(observedJob) || (!finishedTask && isRunningJob(job));
   const backgroundRefresh = Boolean(isRunningJob(observedJob) && observedJob?.capability_id === 'list-tabs' && (!isRunningJob(job) || job?.capability_id === 'list-tabs') && !finishedTask?.stopping && !guidedBusy && !operationBusy);
   const foregroundActive = Boolean(active && !backgroundRefresh);
   const onGuidedBusy = useCallback((value: boolean) => { guidedLock.current = value; setGuidedBusy(value); }, []);
+  useEffect(()=>{
+    if(!context?.appBuild)return;
+    if(!loadedBuild.current){loadedBuild.current=context.appBuild;return;}
+    if(loadedBuild.current===context.appBuild||active||busy||surface!=='task'||document.visibilityState!=='visible')return;
+    if(document.activeElement?.matches('input,textarea,[contenteditable=true]'))return;
+    window.location.reload();
+  },[context?.appBuild,active,busy,surface]);
 
   const load = useCallback(async () => {
     if (loadingContext.current) return;
@@ -241,11 +258,16 @@ function OperationsSession(props:{helperId:string}) {
   }, [load,active,guidedBusy,visible,activity.paused,Boolean(contextError)]);
 
   useEffect(()=>{
-    const changed=()=>{setVisible(document.visibilityState==='visible');if(document.visibilityState==='visible') void load();};
-    changed();document.addEventListener('visibilitychange',changed);window.addEventListener('focus',changed);
-    return()=>{document.removeEventListener('visibilitychange',changed);window.removeEventListener('focus',changed);};
+    const changed=()=>{const shown=document.visibilityState==='visible';setVisible(shown);setWindowFocused(document.hasFocus());if(shown){browserRefreshGate.current.activate(contextRef.current?.helper?.last_seen_at);void load();}};
+    const blur=()=>setWindowFocused(false);
+    changed();document.addEventListener('visibilitychange',changed);window.addEventListener('focus',changed);window.addEventListener('blur',blur);
+    return()=>{document.removeEventListener('visibilitychange',changed);window.removeEventListener('focus',changed);window.removeEventListener('blur',blur);};
   },[load]);
 
+  const wasPaused=useRef(false);
+  useEffect(()=>{if(wasPaused.current&&!activity.paused)browserRefreshGate.current.activate(contextRef.current?.helper?.last_seen_at);wasPaused.current=activity.paused;},[activity.paused]);
+  const previousSurface=useRef(surface);
+  useEffect(()=>{if(previousSurface.current==='browser'&&surface==='task')browserRefreshGate.current.activate(contextRef.current?.helper?.last_seen_at);previousSurface.current=surface;},[surface]);
   const refreshBrowser = useCallback(async(force=false)=>{
     if ((!force && !context?.session?.cdp_connected) || refreshLock.current || refreshPending || actionLock.current || guidedLock.current || updateBusy || !activity.ready || activity.paused || !visible || operationBusy || guidedBusy || active || replacingHelper || !context?.helper?.is_online) return;
     const afterOpen = refreshAfterOpen.current;
@@ -265,10 +287,10 @@ function OperationsSession(props:{helperId:string}) {
   },[refreshPending,awaitingQuestion,activity.ready,activity.paused,visible,operationBusy,guidedBusy,active,replacingHelper,updateBusy,finishedTask,context?.helper?.is_online,context?.session?.cdp_connected,props.helperId,load]);
 
   useEffect(()=>{
-    void refreshBrowser();
-    const timer=window.setInterval(()=>void refreshBrowser(),refreshAfterOpen.current ? 2_000 : BROWSER_REFRESH_MS);
-    return()=>window.clearInterval(timer);
-  },[refreshBrowser]);
+    if(activity.paused)return;
+    if(refreshAfterOpen.current){void refreshBrowser(true);return;}
+    if(browserRefreshGate.current.check({paused:activity.paused,busy:Boolean(active)||guidedBusy||operationBusy||refreshPending||busy||surface!=='task',visible,focused:windowFocused,heartbeat:context?.helper?.last_seen_at,helperToken:context?.helper?.browser_change_token,snapshotToken:context?.session?.browser_change_token}))void refreshBrowser(true);
+  },[refreshBrowser,activity.paused,active,guidedBusy,operationBusy,refreshPending,busy,surface,visible,windowFocused,context?.helper?.last_seen_at,context?.helper?.browser_change_token,context?.session?.browser_change_token]);
 
   useEffect(() => {
     if (!refreshJobId) return;
@@ -352,8 +374,8 @@ function OperationsSession(props:{helperId:string}) {
   const readiness = connectionState(context, Boolean(contextError));
   useEffect(()=>{if(context?.helper?.is_online)rememberHelperConnection();},[context?.helper?.is_online]);
   const helperReady = !contextError && context?.helper?.is_online === true;
-  const snapshotStale = readiness === 'connected' && (!context?.session?.updated_at || !Number.isFinite(Date.parse(context.session.updated_at)) || Date.now()-Date.parse(context.session.updated_at)>SNAPSHOT_STALE_MS) && !foregroundActive && !guidedBusy;
-  const normalCourseVisible = readiness === 'connected' && (!snapshotStale || awaitingQuestion) && !replacingHelper;
+  const snapshotStale = readiness==='connected'&&!foregroundActive&&!guidedBusy&&(context?.helper?.browser_change_token ? context.helper.browser_change_token!==context.session?.browser_change_token : (!context?.session?.updated_at||Date.now()-Date.parse(context.session.updated_at)>SNAPSHOT_STALE_MS));
+  const normalCourseVisible = readiness === 'connected' && !replacingHelper;
   const hasCourseTab = Boolean(context?.session?.tabs?.some(tab=>/^https?:\/\//.test(tab.url)));
   const canEndBrowser = helperReady && readiness === 'connected' && !replacingHelper && !closingJobId;
   const browserReady = readiness === 'connected' && !snapshotStale;
@@ -544,6 +566,7 @@ function OperationsSession(props:{helperId:string}) {
 
   async function startNewTask() {
     if (actionLock.current) return;
+    browserRefreshGate.current.activate();
     const ownedJobId = guidedLock.current ? stopGuided.current?.() : null;
     const currentTask = isRunningJob(observedJob) && isTaskJob(observedJob) ? observedJob : job;
     const cancelId = ownedJobId ?? (isTaskJob(currentTask) && isRunningJob(currentTask) && !finishedTask?.stopping ? currentTask?.id : null);
@@ -631,12 +654,12 @@ function OperationsSession(props:{helperId:string}) {
     && ((foregroundActive && isTaskJob(displayedJob) && (!finishedTask || finishedTask.stopping)) || awaitingQuestion
       || (normalCourseVisible && ((isTaskJob(displayedJob) && !finishedTask) || taskRecordedHere))));
   const sessionActions = showTaskSummary ? <section aria-labelledby="current-task-title" className="space-y-3 border-t border-slate-200 pt-4">
-        <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 id="current-task-title" className="font-semibold text-slate-950">Current task</h2><p role="status" className="mt-1 text-sm leading-6 text-slate-600">{finishedTask ? `Marked ${finishedTask.result} by you.${finishedTask.stopping ? ' Waiting for the current helper job to stop.' : ' You can choose a page and set a new goal.'}` : isTaskJob(job) ? describeTaskJob(job) : 'Choose a course and goal to begin.'}</p></div><button type="button" disabled={operationBusy || !canEndBrowser} onClick={()=>void endSession(false)} className="min-h-11 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 disabled:opacity-40">End browser session</button>{forceCloseOffer ? <button type="button" disabled={operationBusy} onClick={()=>void endSession(true)} className="min-h-11 rounded-md bg-rose-700 px-4 text-sm font-semibold text-white disabled:opacity-40">Force close browser</button> : null}</div>
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 id="current-task-title" className="font-semibold text-slate-950">Current task</h2><p role="status" className="mt-1 text-sm leading-6 text-slate-600">{finishedTask ? `Marked ${finishedTask.result} by you.${finishedTask.stopping ? ' Waiting for the current helper job to stop.' : ' You can choose a page and set a new goal.'}` : isTaskJob(job) ? describeTaskJob(job) : 'Choose a course and goal to begin.'}</p></div>{forceCloseOffer ? <button type="button" disabled={operationBusy} onClick={()=>void endSession(true)} className="min-h-11 rounded-md bg-rose-700 px-4 text-sm font-semibold text-white disabled:opacity-40">Force close browser</button> : null}</div>
         {isTaskJob(job) && job?.capability_id !== 'quick-scrape' && !finishedTask && !verifiedTaskComplete ? <><p className="text-xs leading-5 text-slate-600">Record your assessment of this task. This does not change or verify the course result in the learning portal.</p><div className="flex flex-wrap gap-3"><button type="button" disabled={operationBusy} onClick={()=>void finishTask('completed')} className="min-h-11 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-800 disabled:opacity-40">Mark complete</button><button type="button" disabled={operationBusy} onClick={()=>void finishTask('failed')} className="min-h-11 rounded-md border border-rose-300 px-4 text-sm font-semibold text-rose-800 disabled:opacity-40">Mark failed</button></div></> : null}
-      </section> : canEndBrowser ? <div className="flex justify-end"><button type="button" disabled={operationBusy} onClick={()=>void endSession(false)} className="min-h-11 rounded-md px-3 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40">End browser session</button></div> : null;
+      </section> : null;
   const awaitingUpdate = queuedUpdateVersion && update?.needed && update.phaseVersion !== queuedUpdateVersion;
   const updateMessage = awaitingUpdate ? `Update v${queuedUpdateVersion} is queued. Waiting for the helper to report progress.` : updateNote;
-  const showConnectionCard = view === 'advanced' || !normalCourseVisible || Boolean(contextError);
+  const showConnectionCard = !activity.paused && (view === 'advanced' || readiness!=='connected' || Boolean(contextError));
 
   return (
     <div className="operations-surface min-w-0 space-y-6">
@@ -661,12 +684,14 @@ function OperationsSession(props:{helperId:string}) {
         }}>
           {(['normal', 'advanced'] as const).map(mode => <button key={mode} type="button" role="tab" id={`${viewId}-${mode}-tab`} aria-controls={`${viewId}-${mode}-panel`} aria-selected={view === mode} tabIndex={view === mode ? 0 : -1} onClick={() => setView(mode)} className={`min-h-11 border-b-2 px-1 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 ${view === mode ? 'border-cyan-700 text-cyan-900' : 'border-transparent text-slate-600 hover:text-slate-950'}`}>{mode === 'normal' ? 'Normal' : 'Advanced'}</button>)}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {canEndBrowser ? <button type="button" disabled={operationBusy} onClick={()=>void endSession(false)} className="min-h-11 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 hover:border-cyan-700 disabled:opacity-40">End browser session</button> : null}
           {activity.ready && !activity.paused && !taskComplete && !foregroundActive && !guidedBusy ? <button type="button" disabled={activity.pending} aria-busy={activity.pending} onClick={() => void activity.pause()} className="min-h-11 rounded-md px-2 text-sm font-medium text-slate-700 hover:bg-white focus-visible:outline-2 focus-visible:outline-cyan-700">{activity.pending ? 'Pausing…' : 'Pause session'}</button> : null}
           <button type="button" disabled={operationBusy} onClick={() => void startNewTask()} className="inline-flex min-h-11 items-center gap-1.5 rounded-md bg-slate-950 px-3 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-50"><Plus className="size-4" aria-hidden="true"/>New task</button>
         </div>
       </div>
-      {taskComplete ? <section role="status" aria-live="polite" className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-emerald-300 bg-emerald-50 px-5 py-4 text-emerald-950"><div><h2 className="flex items-center gap-2 text-lg font-semibold"><Check className="size-5" aria-hidden="true"/>Task complete</h2><p className="mt-1 text-sm">{verifiedTaskComplete ? 'The task result has been verified. You can start your next task.' : 'You marked this task complete. You can start your next task.'}</p></div><button type="button" disabled={operationBusy} onClick={()=>void startNewTask()} className="min-h-11 rounded-md bg-emerald-900 px-4 text-sm font-semibold text-white disabled:opacity-40">Start a new task</button></section> : null}
+      {!freshDraft&&context?.followup&&context.followup.jobId===(displayedJob?.id??context.latestTask?.id) ? <TaskFollowupBar helperId={props.helperId} value={context.followup} paused={activity.paused} onClosing={jobId=>{setClosingJobId(jobId);void load();}}/> : null}
+      {taskComplete ? <section role="status" aria-live="polite" className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-emerald-300 bg-emerald-50 px-5 py-4 text-emerald-950"><div><h2 className="flex items-center gap-2 text-lg font-semibold"><Check className="size-5" aria-hidden="true"/>Task complete</h2><p className="mt-1 text-sm">{verifiedTaskComplete ? 'The task result has been verified. You can start your next task.' : 'You marked this task complete. You can start your next task.'}</p></div></section> : null}
       {showConnectionCard ? <section className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-slate-200 bg-white p-5" aria-labelledby="connection-title">
         <div className="min-w-0 flex-1" aria-live="polite">
           <h2 id="connection-title" className="text-lg font-semibold text-slate-950">{replacingHelper ? 'Helper update in progress' : snapshotStale ? (refreshPending || backgroundRefresh ? 'Checking the browser again' : 'Browser check needed') : connectionCopy[readiness].title}</h2>

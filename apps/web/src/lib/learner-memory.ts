@@ -399,10 +399,18 @@ export async function recordLearnerTurn(
 
 /** Keep authored excerpts inside the same owner/helper/browser memory bounds. */
 export function withAuthoredMaterials(materials: LearnerMaterial[], snapshot: LearnerSnapshot): LearnerMaterial[] {
-  let root: string;
+  let root: string;let storyline=false;
   try {
     const selected = new URL(snapshot.url || '');
     const url = new URL(snapshot.sourcePublication || snapshot.url || '');
+    const storyPath=url.origin==='https://content-na2prd0004-na2hp.sabacloud.com'&&url.pathname.startsWith('/content/learning/')&&/\/(?:index_lms|story)\.html$/i.test(url.pathname)?url.pathname.replace(/[^/]+$/,''):null;
+    if(storyPath){
+      const sco=selected.searchParams.get('sco_url');const source=sco?new URL(sco,selected):null;
+      const direct=selected.origin===url.origin&&(selected.pathname.startsWith(storyPath)||selected.pathname==='/content/rcs/remote_frameset_modern.html'&&source?.origin===url.origin&&source.pathname.startsWith(storyPath));
+      const wrapper=selected.origin==='https://hpi-external.sabacloud.com'&&/\/app\/content-player$/.test(selected.pathname)&&Boolean(selected.searchParams.get('contextid'));
+      if(!direct&&!wrapper||url.username||url.password||url.search||url.hash)throw Error('Narration publication is outside the selected course');
+      root=url.origin+storyPath;storyline=true;
+    } else {
     const path = /^\/content\/canon-europe\/publications\/\d+\//.exec(url.pathname)?.[0];
     const selectedPath = /^\/content\/canon-europe\/publications\/\d+\//.exec(selected.pathname)?.[0];
     if (url.origin !== 'https://canon-europe.csod.com' || selected.origin !== url.origin || !path
@@ -411,6 +419,7 @@ export function withAuthoredMaterials(materials: LearnerMaterial[], snapshot: Le
       return materials;
     }
     root = url.origin + path;
+    }
   } catch {
     if (snapshot.sourceMaterials?.length) throw new Error('Invalid authored publication scope; no material retained');
     return materials;
@@ -419,7 +428,7 @@ export function withAuthoredMaterials(materials: LearnerMaterial[], snapshot: Le
   for (const source of (snapshot.sourceMaterials ?? []).slice(0,32)) {
     try {
       const url = new URL(source.url);
-      if (!url.href.startsWith(root) || url.username || url.password || url.search || url.hash || /%|\\/.test(url.pathname) || !/\.xml$/i.test(url.pathname)) throw new Error('Authored material source is outside its publication');
+      if (!url.href.startsWith(root) || url.username || url.password || url.search || url.hash || /%|\\/.test(url.href.slice(root.length)) || !(storyline ? url.href.startsWith(root+'story_content/')&&/_captions\.js$/i.test(url.pathname) : /\.xml$/i.test(url.pathname))) throw new Error('Authored material source is outside its publication');
       next = addLearnerMaterial(next, source);
     } catch { throw new Error('Invalid authored material source; no material retained'); }
   }

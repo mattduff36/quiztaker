@@ -1,3 +1,4 @@
+import {readTaskFollowup} from '@/lib/task-followup';
 import { NextResponse } from 'next/server';
 import { capabilityManifest } from '@quiztaker/core';
 import { getAuthenticatedUser } from '@/lib/auth';
@@ -31,7 +32,7 @@ export async function GET() {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const helper = await queryOne<Record<string, unknown>>(
     `select presence.id, presence.device_name, presence.version, presence.is_online, presence.status,
-            helpers.protocol_version, helpers.supported_capabilities,
+            helpers.protocol_version, helpers.supported_capabilities,helpers.browser_change_token,helpers.last_seen_at,
             helpers.supports_self_update, helpers.update_requested_version, helpers.update_error,
             helpers.update_phase, helpers.update_phase_version, helpers.update_phase_updated_at
      from helper_presence presence
@@ -55,7 +56,7 @@ export async function GET() {
   await recoverHelperJobs(user.id, helperId);
   const [session, recentUrls, activeJob, captures, activity, latestTask] = await Promise.all([
     queryOne(
-      `select id, revision, cdp_connected, tabs, roster, detection, updated_at
+      `select id, revision, cdp_connected, tabs, roster, detection, updated_at,browser_change_token
        from browser_sessions
        where user_id = $1 and helper_id = $2 and closed_at is null
        order by updated_at desc limit 1`,
@@ -93,6 +94,8 @@ export async function GET() {
   });
   return NextResponse.json({
     helper,
+    appBuild:process.env.VERCEL_GIT_COMMIT_SHA??null,
+    followup:await readTaskFollowup(user.id,helperId),
     operatorActivity: activity,
     helperUpdate,
     courseCoverage: await readCourseCoverage(user.id).catch(() => []),

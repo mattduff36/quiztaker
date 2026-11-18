@@ -1,3 +1,4 @@
+import {cancelTaskFollowup} from './task-followup';
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { queryRows,withTransaction, type SqlQuery } from '@/lib/db';
@@ -41,6 +42,7 @@ export async function sharedOperations(userId:string,input:{
       if(!conflict) [row]=await sql<DraftRow>(`update operations_drafts set draft=draft||$3::jsonb,revision=revision+1,client_id=$4,updated_at=now()
         where helper_id=$1 and user_id=$2 returning *`,[input.helperId,userId,JSON.stringify(input.patch??{}),input.clientId]);
     } else if(input.action==='begin'||input.action==='renew') {
+      if(input.action==='begin')await cancelTaskFollowup(userId,input.helperId,undefined,sql);
       if(helper.manual)throw new Error('Release manual browser control before starting automation.');
       if(!input.workflowId)throw new Error('Task request identity required');
       if(live&&(row!.workflow_id!==input.workflowId||row!.workflow_client_id!==input.clientId))throw new Error('Another device is preparing this task. Follow its current run here.');

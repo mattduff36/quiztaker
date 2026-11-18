@@ -46,6 +46,7 @@ try {
     'remote_sessions',
     'operations_drafts',
     'operations_requests',
+    'operations_followups',
   ];
   const tables = await sql`
     select tablename from pg_tables
