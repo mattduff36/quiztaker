@@ -24,6 +24,11 @@ export class ControlPlaneClient {
     return this.secret;
   }
 
+  async remoteExchange(input: import('./remote.js').RemoteExchangeInput): Promise<import('./remote.js').RemoteExchange> {
+    const response=await this.request('/api/helper/remote',{method:'POST',body:JSON.stringify(input)},10_000);
+    return response.json();
+  }
+
   async heartbeat(state: {
     status: 'online' | 'busy';
     activeJobId?: string;
@@ -131,7 +136,8 @@ export class ControlPlaneClient {
   private async request(path: string, init: RequestInit, timeoutMs = 30_000): Promise<Response> {
     const started = Date.now();
     const method = init.method || 'GET';
-    try { this.terminal?.sent(method, path, init.body); } catch { /* Observability must not stop a request. */ }
+    const privateRemote=path==='/api/helper/remote';
+    try { if(!privateRemote)this.terminal?.sent(method, path, init.body); } catch { /* Observability must not stop a request. */ }
     try {
     const response = await fetch(`${this.config.controlPlaneUrl}${path}`, {
       ...init,
@@ -142,14 +148,15 @@ export class ControlPlaneClient {
       },
       signal: AbortSignal.timeout(timeoutMs),
     });
-    await this.terminal?.received(method, path, response, Date.now() - started).catch(() => undefined);
+    if(!privateRemote)await this.terminal?.received(method, path, response, Date.now() - started).catch(() => undefined);
     if (!response.ok) {
+      if(privateRemote)throw new Error('Private browser relay unavailable');
       const detail = await response.text().catch(() => '');
       throw new Error(`Control plane returned ${response.status}: ${sanitizeLogText(detail.slice(0, 4000))}`);
     }
     return response;
     } catch (error) {
-      this.terminal?.log('HTTP ERROR', error);
+      if(!privateRemote)this.terminal?.log('HTTP ERROR', error);
       throw error;
     }
   }

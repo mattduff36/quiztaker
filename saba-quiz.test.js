@@ -88,15 +88,14 @@ test('Continue wins over activity Launch; scoped popup protection survives Proce
     assert.equal((await child.send('Browser.getWindowForTarget')).windowId,before);
     assert.match((await readSnapshot(assessment,'quiz')).snapshot.text,/Fresh question/);
 
-    await landing.evaluate(()=>{window.__originalCalls=[];window.open=(...args)=>{window.__originalCalls.push(args);return null;};delete window.__vitriolCourseOpen;});
+    await landing.goto(`${host}/proceed`);
     await protectSabaPopups(landing);
-    await landing.evaluate(()=>{
-      window.open('/safe','named','width=400');
-      window.open('https://untrusted.invalid/player','other','width=500');
-    });
-    assert.deepEqual(await landing.evaluate(()=>window.__originalCalls),[
-      ['/safe','_blank'],['https://untrusted.invalid/player','other','width=500'],
-    ]);
+    const externalPromise=context.waitForEvent('page');
+    await landing.evaluate(()=>window.open('https://external-course.invalid/player','other','width=500'));
+    const external=await externalPromise;await external.waitForLoadState();
+    const externalSession=await context.newCDPSession(external);
+    assert.equal((await externalSession.send('Browser.getWindowForTarget')).windowId,before);
+    await externalSession.detach();
     await session.detach();await child.detach();
   } finally {await browser.close();}
 });

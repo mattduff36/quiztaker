@@ -66,7 +66,7 @@ export function decideGuidedFlow(detection: GuidedDetection, mode: GuidedLearnin
   };
 }
 
-export function learnerQuestion(output: string): { question: string; options: string[]; url?: string } | null {
+export function learnerQuestion(output: string): { question: string; options: string[]; url?: string; cdpTargetId?: string } | null {
   if (/Learner input (?:timed out|closed)|(?:decision|coordination).{0,30}timed out/i.test(output)) return null;
   const terminal = output.split('\n').findLast(line => line.startsWith('AUTOMATION_RESULT '));
   if (terminal) {
@@ -81,7 +81,8 @@ export function learnerQuestion(output: string): { question: string; options: st
     if (!value || typeof value.question !== 'string' || !value.question.trim() || value.question.length > 500) return null;
     const options = Array.isArray(value.options) ? value.options.filter((option: unknown) => typeof option === 'string' && option.length <= 120).slice(0, 3) : [];
     if (value.url != null && (typeof value.url !== 'string' || !value.url || value.url.length > 2000 || !/^https?:\/\//i.test(value.url))) return null;
-    return { question: value.question, options, ...(value.url ? { url: value.url } : {}) };
+    if (value.cdpTargetId != null && (typeof value.cdpTargetId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(value.cdpTargetId))) return null;
+    return { question: value.question, options, ...(value.url ? { url: value.url } : {}), ...(value.cdpTargetId ? {cdpTargetId:value.cdpTargetId} : {}) };
   } catch { return null; }
 }
 
@@ -117,6 +118,16 @@ export function uniqueQuestionTab<T extends { targetId: string; url: string }>(u
   if (!url) return null;
   const matches = tabs.filter((tab) => tab.url === url);
   return matches.length === 1 ? matches[0] : null;
+}
+
+export function questionTargetTab<T extends {targetId:string;cdpTargetId?:string;url:string}>(
+  question: {url?:string;targetId?:string;cdpTargetId?:string} | null | undefined, tabs: T[], fallbackTargetId?: string,
+): T | null {
+  if (!question?.url) return null;
+  const targetId=question.targetId || fallbackTargetId;
+  if (!question.cdpTargetId && !targetId) return null;
+  const matches=tabs.filter(tab=>tab.url===question.url && (question.cdpTargetId ? tab.cdpTargetId===question.cdpTargetId : tab.targetId===targetId));
+  return matches.length===1 ? matches[0] : null;
 }
 
 export function sameDetectedTarget(detection: GuidedDetection, tab: { index: number; url: string }): boolean {

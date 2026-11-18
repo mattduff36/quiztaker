@@ -112,8 +112,10 @@ export function startJob(
     };
   }
 
-  const selectedCapture = ['quick-scrape','quiz-learn'].includes(capability.id)
-    ? readBrowserSession()?.tabs.find(tab => tab.index === Number(scriptArgs[0])) : undefined;
+  const targetArgument = envelope.payload.args.indexOf('--target');
+  const selectedTab = targetArgument >= 0
+    ? readBrowserSession()?.tabs.find(tab => tab.targetId === envelope.payload.args[targetArgument + 1]) : undefined;
+  const selectedCapture = ['quick-scrape','quiz-learn'].includes(capability.id) ? selectedTab : undefined;
   if (capability.id === 'quick-scrape' && !selectedCapture?.url) throw new Error('The selected course tab is no longer available.');
   const child = spawn(process.env.QUIZTAKER_NODE_PATH || process.execPath, [
     scriptPath,
@@ -123,7 +125,8 @@ export function startJob(
     windowsHide: false,
     env: {
       ...process.env,
-      ...(selectedCapture ? { VITRIOL_CAPTURE_TARGET: selectedCapture.url } : {}),
+      VITRIOL_CDP_TARGET_ID: selectedTab?.cdpTargetId || '',
+      VITRIOL_CAPTURE_TARGET: selectedCapture?.url || '',
       VITRIOL_LEARNER_MODE: capability.id === 'quiz-learn' ? parseLearnerMode(envelope.payload.input?.mode) : 'read',
       VITRIOL_COORDINATE: capability.id === 'quiz-learn' && envelope.payload.input?.mode === 'quiz' && envelope.payload.input.intent === 'coordinate' ? '1' : '',
       VITRIOL_LEARNER_INTENT: capability.id === 'quiz-learn' ? String(envelope.payload.input?.intent || '') : '',

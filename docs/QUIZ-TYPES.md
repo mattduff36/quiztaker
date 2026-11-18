@@ -625,7 +625,7 @@ page. Radio buttons and checkboxes share the hosted 40-choice limit. Collect
 them together in document order, put viewport intersections first, and retain
 their distinct radio/checkbox IDs and checked states. Canon fieldsets expose
 their displayed question number, which distinguishes repeated answer labels.
-The visible “Time remaining” line ticks between observations. Ignore only the
+The visible ï¿½Time remainingï¿½ line ticks between observations. Ignore only the
 numeric value on that labelled line when rechecking a decision; changes to
 questions, selections, navigation or expiry still invalidate it.
 
@@ -694,3 +694,15 @@ Batch candidates: automatic safe authored-material extraction with nested panels
 - Native no-clip viewport capture plus offline scaling avoids changing Chrome zoom/device metrics during recording and learner capture. The isolated headed fixture measures actual 80% zoom, repeated captures and privacy-mask alignment. It is not proof of the historical flicker's exact cause or of a new live course pass.
 - After a coordination/input timeout, keep the course open and use Resume from current page. Do not restore an answered historical question, replay old guidance or restart a finished assessment. Read-only/no-submit remains binding; excluding a named Device Features retake does not negate an explicit Firmware assessment request in another clause.
 - After verified or operator-recorded task completion, a new start invalidates delayed old context and retains the new goal/tab. Ready indicates an idle interface, not an unverified LMS completion. Offline fixtures are the evidence for this implementation; no live completion is claimed.
+
+### Post-Foundation local batch safeguards (18 November 2026, not deployed)
+
+- Helper history sync sends lossless batches of at most 500 history events, 200 reviews and 100 captures. Only acknowledged batches advance; failures retry the same batch with bounded backoff while heartbeat and job polling continue. Restart safely replays through server deduplication; newly imported reviews have stable owner/helper/source identities, including after resolution. No ledger rows or capture files are archived, truncated or deleted by this fix.
+- Long Canon forms retain document-order answer IDs even when viewport-first presentation changes during trial/selection scrolling. The grouped-answer token binds the full rendered question/option/navigation surface and document instance, not the current viewport question. Radio groups follow their actual form owner and name. Preflight covers every requested control, then each actual state and the final group are checked; real question, option, document or navigation changes stop the group. Re-inspect the preserved partial attempt rather than restarting; Next and Submit remain separate. Forms exceeding the bounded observation budget do not offer grouped answers.
+- Waveform 1.6.2 `lib_en/html/course.htm` (observed publication 1609) may omit the older loader chain. Use the unique same-language, same-publication `xml/master.xml` actually observed in that frame's performance resources; never guess it. Resolve referenced page XML against `course.htm`, then follow recursive dialogue references only. Authenticated same-origin reads reject redirects, publication escapes and assessment sources and retain existing budgets. Missing/unobserved manifests, image-only lessons and failed reads remain explicit gaps.
+- Graphical topic buttons, Exit and exit confirmation use the actual hit-tested empty `button.invisibutton`, with visible sibling topic/Yes/No labels. Canon publication-scoped exit names are distinct from arbitrary portal exits; this does not authorize script execution or establish LMS completion.
+- Operations tracks live Chromium target identity through navigation, duplicate titles/redacted URLs and numeric tab reorder. It never rebinds a closed target by title/URL. Paused questions carry the exact live target, stale roster revisions cannot overwrite newer observations, and an old question cannot automatically replace a nonempty manual course selection. Older executors without live identity require a fresh selection/inspection rather than inferred rebinding.
+
+These are offline/headless regression safeguards, not evidence of another live
+course pass. The final Foundation assessment remains outside this local-only
+engineering task; no course, helper installation or browser profile was operated.

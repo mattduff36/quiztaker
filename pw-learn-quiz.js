@@ -35,7 +35,8 @@
 // Animation-only navigation rechecks use local semantic slide/target identity;
 // question, choice, selection and genuine content changes remain significant.
 // Brightwave authored text uses bounded same-publication reads and normal scoped
-// memory. Grouped same-page answers preflight all targets and verify DOM states.
+// memory, including observed Waveform html/course.htm manifests. Grouped answers
+// use scroll-independent semantic/control identity, preflight and DOM verification.
 //
 // Usage:
 //   node pw-learn-quiz.js <tabIdx> [--dry]
@@ -51,6 +52,7 @@ const { COURSE_EXIT_LABEL, createStorylineFinalizer } = require('./lib/storyline
 const { publicationRoot, collectAuthoredMaterial } = require('./lib/authored-material');
 const { watchCoursePopup } = require('./lib/course-popup');
 const { captureStableViewport } = require('./lib/stable-viewport-capture');
+const { browserTargetId, listBrowserTabs, selectBrowserPage } = require('./lib/browser-tabs');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 const MAX_STEPS = 80;
@@ -60,6 +62,7 @@ const ASSESSMENT_START_LABEL = /\b(?:(?:start|begin|launch|take)(?:\s+the)?\s+(?
 const NAVIGATION_LABEL = /^(next(?: page| slide)?|continue|back|previous(?: page| slide)?|ok|close|start(?: course| module)?|begin|launch|resume|menu|home|contents)$/i;
 const OPEN_TOPIC_LABEL = /^Open topic: .{1,140}$/;
 const COURSE_INTERACTION_LABEL = /^Course interaction: \d+_\d+_click_?\d+$/;
+const COURSE_PLAYER_LABEL = /^Course player: (?:Exit|Confirm exit|Cancel exit)$/;
 const REPEATED_VIEW_LIMIT = 3;
 const REPEATED_VIEW_OPTION = 'Done, resume now';
 const ALLOWED = new Set(['click', 'answer-select', 'answer-text', 'answer-group', 'select-tab', 'scroll', 'find-text', 'wait', 'capture', 'verify', 'ask-user']);
@@ -117,7 +120,7 @@ function learnerQuestionLine(payload) {
 
 function clickLabelAllowed(name) {
   const trimmed = String(name || '').trim();
-  return NAVIGATION_LABEL.test(trimmed) || OPEN_TOPIC_LABEL.test(trimmed) || COURSE_INTERACTION_LABEL.test(trimmed);
+  return NAVIGATION_LABEL.test(trimmed) || OPEN_TOPIC_LABEL.test(trimmed) || COURSE_INTERACTION_LABEL.test(trimmed) || COURSE_PLAYER_LABEL.test(trimmed);
 }
 
 function screenElementControlName(id, className) {
@@ -197,7 +200,7 @@ function localActionAllowed(action, snapshot, mode = 'read') {
     if (action.action === 'click') {
       if (mode === 'quiz' && recognizeQuizResult(snapshot)) return false;
       if (/^m\d+$/.test(target.id) && target.kind === 'quiz-navigation') return mode === 'quiz';
-      if (UNSAFE_LABEL.test(target.name) || COURSE_EXIT_LABEL.test(target.name)) return false;
+      if (!COURSE_PLAYER_LABEL.test(target.name) && (UNSAFE_LABEL.test(target.name) || COURSE_EXIT_LABEL.test(target.name))) return false;
       const radios = (snapshot.choices || []).filter(choice => /^c\d+$/.test(choice.id));
       if (mode === 'quiz' && /^(?:(?:go to )?next(?: question| page| slide)?[ »›→]*|submit|finish|end test)$/i.test(target.name.trim())
         && snapshot.buttons?.some(control => control.selection?.answered === false)) return false;
@@ -255,16 +258,23 @@ async function accessibleName(locator) {
     }
     if (el.matches('button.invisibutton')) {
       const parent = el.parentElement;
+      const publication = typeof location !== 'undefined' && location.origin === 'https://canon-europe.csod.com'
+        && /^\/content\/canon-europe\/publications\/\d+\/lib_[a-z-]+\/(?:html|templates)\//i.test(location.pathname);
+      if (publication) {
+        if (parent?.id === 'navBtn_exit') return 'Course player: Exit';
+        if (parent?.id === 'exit_yesBtn' && /^Yes$/i.test(parent.querySelector('.btn p')?.textContent.trim() || '')) return 'Course player: Confirm exit';
+        if (parent?.id === 'exit_noBtn' && /^No$/i.test(parent.querySelector('.btn p')?.textContent.trim() || '')) return 'Course player: Cancel exit';
+      }
       const navigation = { navBtn_next: 'Next', navBtn_back: 'Previous', navBtn_menu: 'Home', navBtn_exit: 'Exit', navBtn_help: 'Help' };
       if (navigation[parent?.id]) return navigation[parent.id];
       if (/^menuscreen_panel_\d+$/.test(parent?.id || '')) {
-        const title = parent.querySelector('[class^=menuTopicButtonClosed]')?.textContent?.trim();
+        const title = parent.querySelector('[class*=menuTopicButton]')?.textContent?.trim();
         const status = parent.querySelector('.topicStatus')?.className?.replace('topicStatus', '').trim();
         if (title) return `Open topic: ${title}${status ? ` (${status})` : ''}`;
       }
       if (parent?.matches('.menuStartBtn')) {
         const panel = parent.closest?.('[id^=menuscreen_panel_]');
-        const title = panel?.querySelector('[class^=menuTopicButtonClosed]')?.textContent?.trim();
+        const title = panel?.querySelector('[class*=menuTopicButton]')?.textContent?.trim();
         return title ? `Open topic: ${title} - Start` : 'Start';
       }
       if (parent?.classList?.contains('screenElement')) {
@@ -380,6 +390,7 @@ function storylineGraphic(el, findDuplicate = false) {
 }
 
 class CourseControlBlocked extends Error {}
+class GroupedAnswerChanged extends CourseControlBlocked {}
 
 async function clickStorylineControl(page, handle, point, answer) {
   const element = await handle.elementHandle({ timeout: 800 });
@@ -589,16 +600,20 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
       }
       return indices;
     }, {left:-box.x,top:-box.y,right:viewport.width-box.x,bottom:viewport.height-box.y}).catch(() => []);
-    for (const candidate of indices) candidates.push({locator,...candidate});
+    for (const candidate of indices) {
+      const answerPrefix = candidate.checkbox ? 'k' : 'c';
+      candidates.push({locator,...candidate, stableId:`${answerPrefix}${++counts[answerPrefix]}`});
+    }
   }
   // Stable viewport-first order makes a scroll reveal later modules, while
   // keeping offscreen course controls as an auto-scroll fallback.
   candidates.sort((a,b) => Number(a.outline)-Number(b.outline) || Number(b.inViewport)-Number(a.inViewport));
-  for (const {locator,index,checkbox} of candidates.slice(0,120)) {
+  const allListed = [];
+  for (const {locator,index,stableId} of candidates.slice(0,400)) {
     const handle = locator.nth(index);
     if (!await handle.isVisible().catch(() => false) || !await handle.isEnabled().catch(() => false)) continue;
     const name = role === 'answer' ? await answerName(handle) : await controlName(handle);
-    if (!name || (navigationOnly && (UNSAFE_LABEL.test(name) || COURSE_EXIT_LABEL.test(name)))) continue;
+    if (!name || (navigationOnly && !COURSE_PLAYER_LABEL.test(name) && (UNSAFE_LABEL.test(name) || COURSE_EXIT_LABEL.test(name)))) continue;
     if (navigationOnly && /^[<>]$/.test(name) && await handle.evaluate(storylineGraphic, true).catch(() => false)) continue;
     let kind;
     if (navigationOnly) {
@@ -623,8 +638,7 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
       kind = SUBMIT_LABEL.test(name) ? 'submission' : submits || link.postback || ASSESSMENT_START_LABEL.test(name) || /^(save|return later|summary)\b/i.test(name) ? 'quiz-navigation' : 'content';
       if (mode !== 'quiz' && (kind === 'submission' || kind === 'quiz-navigation')) continue;
     }
-    const answerPrefix = checkbox ? 'k' : 'c';
-    const id = role === 'answer' ? `${answerPrefix}${++counts[answerPrefix]}` : `${prefix}${listed.length + 1}`;
+    const id = role === 'answer' ? stableId : `${prefix}${allListed.length + 1}`;
     handles.set(id, handle);
     const checked = await handle.evaluate(el => {
       const state = node => {
@@ -642,17 +656,42 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
     const answerMeta = role === 'answer' ? await handle.evaluate(el => {
       const group = el.closest('fieldset,[role=radiogroup],[role=group],.quiz-card');
       const scope = group || el.form || el.ownerDocument.body;
+      const native = el.matches('input[type=radio],input[type=checkbox]');
+      const owner = native ? el.form : group;
       return { kind: el.matches('input[type=checkbox],[role=checkbox]') ? 'checkbox' : 'radio',
-        group: [location.href, [...document.querySelectorAll('fieldset,[role=radiogroup],[role=group],.quiz-card,form')].indexOf(scope), el.getAttribute('name') || ''],
-        prompt: scope.innerText, document: performance.timeOrigin, value: el.getAttribute('value'), domId: el.id };
+        group: [location.href, performance.timeOrigin, native ? 'native' : 'aria',
+          owner ? [...document.querySelectorAll('*')].indexOf(owner) : -1,
+          el.getAttribute('name') || (native ? [...document.querySelectorAll('input')].indexOf(el) : '')],
+        prompt: scope.innerText.replace(/(^|\n)(Time remaining[ \t]*(?:\n[ \t]*){0,2})\d{1,3}:\d{2}(?::\d{2})?(?=\n|$)/gi,'$1$2[countdown]'),
+        document: performance.timeOrigin, value: el.getAttribute('value'), domId: el.id,
+        control: [...document.querySelectorAll('input,[role=radio],[role=checkbox]')].indexOf(el) };
     }) : null;
     const groupId = answerMeta ? createHash('sha256').update(JSON.stringify(answerMeta.group)).digest('hex') : undefined;
-    listed.push({ id, name, ...(kind ? { kind } : {}), ...(typeof checked === 'boolean' ? {checked} : {}),
+    allListed.push({ id, name, ...(kind ? { kind } : {}), ...(typeof checked === 'boolean' ? {checked} : {}),
       ...(answerMeta ? {answerKind:answerMeta.kind,groupId} : {}) });
-    if (answerMeta) Object.defineProperty(listed[listed.length-1], 'answerIdentity', {value:answerMeta});
-    if (listed.length >= 40) return { listed, handles };
+    if (answerMeta) Object.defineProperty(allListed.at(-1), 'answerIdentity', {value:answerMeta});
+    if (navigationOnly && allListed.length >= 40) break;
   }
-  return { listed, handles };
+  listed.push(...allListed.slice(0,40));
+  return { listed, handles, allListed, complete:candidates.length<=400 };
+}
+
+async function answerPageIdentity(page) {
+  const frames = [];
+  for (const frame of await visibleFrames(page)) {
+    const identity = await frame.evaluate(() => {
+      const controls = [...document.querySelectorAll('input,textarea,select,button,a,[role=radio],[role=checkbox],[role=button],[role=radiogroup]')];
+      if (controls.length > 1000 || (document.body?.innerText.length || 0) > 200_000) return null;
+      return {url:location.href,document:performance.timeOrigin,
+        text:(document.body?.innerText || '').replace(/(^|\n)(Time remaining[ \t]*(?:\n[ \t]*){0,2})\d{1,3}:\d{2}(?::\d{2})?(?=\n|$)/gi,'$1$2[countdown]'),
+        forms:Array.from(document.forms,el=>[el.action,el.method,el.target]),
+        controls:controls.map(el=>[el.tagName,el.id,...['type','name','role','value','href','onclick','formaction','formmethod','formtarget','aria-label','aria-labelledby','disabled'].map(attr=>
+          attr==='value' && el.matches('textarea,input:not([type]),input[type=text]') ? null : el.getAttribute(attr))])};
+    });
+    if (!identity) return undefined;
+    frames.push(identity);
+  }
+  return createHash('sha256').update(JSON.stringify([page.url(),frames])).digest('hex');
 }
 
 async function matchingDisplay(combo) {
@@ -899,11 +938,7 @@ async function readSnapshot(page, mode = 'read') {
       text: `${await observePlayerEvidence(page)}\n${state.feedback?`Tool feedback: ${state.feedback}\n`:''}${sections.map(section => section.slice(0, Math.floor(7400 / Math.max(1, sections.length)))).join('\n')}`.slice(0, 8000),
       buttons: buttons.listed,
       choices: answers.listed,
-      ...(answers.listed.length || fields.length ? {answerPageId:createHash('sha256').update(JSON.stringify([
-        page.url(), question, answers.listed.map(({id,name,answerIdentity}) => ({id,name,...answerIdentity,
-          prompt:answerIdentity?.prompt?.replace(/Time remaining\s*\n?\s*\d{1,3}:\d{2}(?::\d{2})?/gi,'Time remaining [countdown]')})),
-        fields.map(({id,name,answerIdentity})=>({id,name,...answerIdentity})),
-      ])).digest('hex')} : {}),
+      ...(answers.listed.length || fields.length ? {answerPageId:answers.complete === false ? undefined : await answerPageIdentity(page)} : {}),
       ...(fields.length ? {fields} : {}),
       tabs,
       ...(image?{image}:{}),
@@ -916,6 +951,7 @@ async function readSnapshot(page, mode = 'read') {
   // Raw live text is local verification evidence, not additional provider
   // context. Exclude it from JSON and never populate it from course memory.
   Object.defineProperty(snapshot, 'resultViews', {value: resultViews});
+  Object.defineProperty(snapshot, 'answerControls', {value:[...(answers.allListed || answers.listed),...fields]});
   if (hasStoryline) {
     const targets = {};
     for (const button of buttons.listed) {
@@ -931,6 +967,13 @@ async function readSnapshot(page, mode = 'read') {
 }
 
 function revalidateLearnerDecision(before, after, action) {
+  if (action?.action === 'answer-group') {
+    const controls = snapshot => snapshot.answerControls && [...snapshot.answerControls].sort((a,b)=>a.id.localeCompare(b.id));
+    const originalControls = controls(before), currentControls = controls(after);
+    const stable = before.answerPageId && before.answerPageId === after.answerPageId
+      && originalControls && currentControls && JSON.stringify(originalControls) === JSON.stringify(currentControls);
+    return stable ? {ok:true,action,snapshot:before} : {ok:false};
+  }
   const original = before?.navigationView, current = after?.navigationView;
   const target = original?.targets[action?.targetId];
   let remapped = action;
@@ -1034,13 +1077,15 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
 
   async function applyAnswerGroup(page, action, snapshot, mode) {
     const fresh = await readSnapshot(page, mode);
-    if (!validAnswerGroup(action, fresh.snapshot, mode) || !sameLearnerView(snapshot, fresh.snapshot)) throw new Error('Grouped answer page changed before preflight');
+    if (!validAnswerGroup(action, snapshot, mode) || fresh.snapshot.answerPageId !== action.pageId) throw new GroupedAnswerChanged('Grouped answer page changed before preflight');
     const expected = new Map();
     for (const answer of action.answers) {
       const handle = fresh.handles.get(answer.targetId);
-      const target = [...fresh.snapshot.choices, ...(fresh.snapshot.fields || [])].find(control => control.id === answer.targetId);
-      if (!handle || !target || !await handle.isVisible() || !await handle.isEnabled()) throw new Error('Grouped answer target unavailable');
-      if ('text' in answer && !await handle.isEditable()) throw new Error('Grouped response is not editable');
+      const target = fresh.snapshot.answerControls.find(control => control.id === answer.targetId);
+      const original = snapshot.answerControls.find(control => control.id === answer.targetId);
+      if (!handle || !target || target.name !== original?.name || JSON.stringify(target.answerIdentity)!==JSON.stringify(original.answerIdentity)
+        || !await handle.isVisible() || !await handle.isEnabled()) throw new GroupedAnswerChanged('Grouped answer target changed or unavailable');
+      if ('text' in answer && !await handle.isEditable()) throw new GroupedAnswerChanged('Grouped response is not editable');
       if ('checked' in answer && await handle.evaluate(el => el.matches('input[type=radio],input[type=checkbox]'))) {
         await handle.setChecked(answer.checked, {trial:true,timeout:2500});
       } else await handle.click({trial:true,timeout:2500});
@@ -1048,29 +1093,32 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
     }
     for (const answer of action.answers) {
       const current = await readSnapshot(page, mode);
-      if (current.snapshot.answerPageId !== action.pageId) throw new Error('Grouped answers stopped: navigation, question or options changed; inspect current state');
+      if (current.snapshot.answerPageId !== action.pageId) throw new GroupedAnswerChanged('Grouped answers stopped: navigation, question or options changed; inspect current state');
       const {handle, target} = expected.get(answer.targetId);
-      const now = [...current.snapshot.choices, ...(current.snapshot.fields || [])].find(control => control.id === answer.targetId);
-      if (!now || now.name !== target.name || now.groupId !== target.groupId || !await handle.isVisible() || !await handle.isEnabled()) throw new Error('Grouped answers stopped: target changed');
+      const now = current.snapshot.answerControls.find(control => control.id === answer.targetId);
+      if (!now || now.name !== target.name || now.groupId !== target.groupId || !await handle.isVisible() || !await handle.isEnabled()) throw new GroupedAnswerChanged('Grouped answers stopped: target changed');
       if ('text' in answer) {
         await handle.fill(answer.text, {timeout:5000});
-        if (await handle.inputValue() !== answer.text) throw new Error('Grouped written response was not confirmed');
+        if (await handle.inputValue() !== answer.text) throw new GroupedAnswerChanged('Grouped written response was not confirmed');
       } else {
         const native = await handle.evaluate(el => el.matches('input[type=radio],input[type=checkbox]'));
         if (native) await handle.setChecked(answer.checked, {timeout:5000});
         else if (now.checked !== answer.checked) {
-          if (answer.checked) await applyAction(page, {action:'answer-select',targetId:answer.targetId}, current.snapshot, current.handles, mode);
-          else await handle.press('Space', {timeout:5000});
+          const riseControl = await handle.evaluate(el => Boolean(el.closest('.quiz-card--active')));
+          const point = await handle.evaluate(storylineGraphic);
+          if (riseControl) await handle.press('Space', {timeout:5000});
+          else if (point) await clickStorylineControl(page,handle,point,true);
+          else await handle.click({timeout:5000});
         }
         const checked = await handle.evaluate(el => el.matches('input') ? el.checked : el.getAttribute('aria-checked') === 'true');
-        if (checked !== answer.checked) throw new Error('Grouped answer selection was not confirmed');
+        if (checked !== answer.checked) throw new GroupedAnswerChanged('Grouped answer selection was not confirmed');
       }
     }
     const post = await readSnapshot(page, mode);
-    if (post.snapshot.answerPageId !== action.pageId) throw new Error('Grouped answers stopped: page changed after selection');
+    if (post.snapshot.answerPageId !== action.pageId) throw new GroupedAnswerChanged('Grouped answers stopped: page changed after selection');
     for (const answer of action.answers) {
-      const target = [...post.snapshot.choices, ...(post.snapshot.fields || [])].find(control => control.id === answer.targetId);
-      if (!target || ('text' in answer ? target.value !== answer.text : target.checked !== answer.checked)) throw new Error('Grouped answer post-state mismatch');
+      const target = post.snapshot.answerControls.find(control => control.id === answer.targetId);
+      if (!target || ('text' in answer ? target.value !== answer.text : target.checked !== answer.checked)) throw new GroupedAnswerChanged('Grouped answer post-state mismatch');
     }
     observationFor(page).feedback = `Set and verified ${action.answers.length} answers on the current page. No navigation or submission was performed.`;
   }
@@ -1208,9 +1256,9 @@ async function selectNativeSabaAnswer(handle) {
   if(!await handle.isChecked())throw new CourseControlBlocked('The native answer selection could not be confirmed');
 }
 async function emitQuestion(payload, page, browser, courseResult, quizResult) {
-  const tabs = await Promise.all(browser.contexts()[0].pages().map(async (page, idx) => ({ idx, url: page.url(), title: await page.title().catch(() => "") })));
+  const tabs = await listBrowserTabs(browser);
   console.log(`LEARNER_TABS ${JSON.stringify(tabs)}`);
-  console.log(learnerQuestionLine({ ...payload, url: page.url() }));
+  console.log(learnerQuestionLine({ ...payload, url: page.url(), cdpTargetId:await browserTargetId(page) }));
   finish(false, LEARNER_NEEDS_INPUT, quizResult, courseResult);
 }
 
@@ -1233,10 +1281,11 @@ async function main() {
   let landing = null;
   let brainsharkCompleted = false;
   try {
-    const pages=browser.contexts()[0]?.pages() || [];
+    const pages=browser.contexts().flatMap(context=>context.pages());
     const selectedAddress=process.env.VITRIOL_CAPTURE_TARGET;
     const matching=selectedAddress ? pages.filter(tab=>tab.url()===selectedAddress) : [];
-    let page = selectedAddress ? matching.length===1 ? matching[0] : null : pages[options.tabIdx];
+    let page = process.env.VITRIOL_CDP_TARGET_ID ? await selectBrowserPage(pages,options.tabIdx)
+      : selectedAddress ? matching.length===1 ? matching[0] : null : pages[options.tabIdx];
     if (!page) throw new Error('Tab index is not open');
     if (options.dryRun) {
       const { snapshot } = await readSnapshot(page, mode);
@@ -1282,7 +1331,7 @@ async function main() {
     async function verifyCourse(quizResult) {
       const verified = await finishSabaCourse(landing, brainsharkCompleted || quizResult?.status==='passed', page,Boolean(quizResult));
       if (!verified) return false;
-      const tabs = await Promise.all(browser.contexts()[0].pages().map(async (tab, idx) => ({idx,url:tab.url(),title:await tab.title().catch(()=> '')})));
+      const tabs = await listBrowserTabs(browser);
       console.log(`LEARNER_TABS ${JSON.stringify(tabs)}`);
       console.log(`AUTOMATION_RESULT ${JSON.stringify({completed:1,total:1,...(quizResult?{quizResult}:{}),courseResult:{status:'completed',title:verified.title,evidence:verified.evidence}})}`);
       return true;
@@ -1408,7 +1457,8 @@ async function main() {
       if (playback) current.snapshot.playback=await readBrainshark(page);
       const currentResult = mode === 'quiz' ? recognizeQuizResult(current.snapshot) : null;
       if (currentResult) { await terminalResult(currentResult); return; }
-      if(snapshot.question?.id!==current.snapshot.question?.id) {
+      if(snapshot.question?.id!==current.snapshot.question?.id
+        && !(action?.action==='answer-group' && snapshot.answerPageId && snapshot.answerPageId===current.snapshot.answerPageId)) {
         console.log(`Learner step ${step}: question changed while deciding; inspecting again`);
         continue;
       }
@@ -1434,7 +1484,7 @@ async function main() {
           continue;
         }
         action = revalidated.action;
-        view = current.snapshot;
+        view = revalidated.snapshot || current.snapshot;
         viewHandles = current.handles;
       }
       const repeated = noteRepeatedLearnerAction(repeatState, action, view);
@@ -1456,7 +1506,7 @@ async function main() {
           if (!revalidated.ok) continue;
           if(correction.action==='ask-user') {await emitQuestion(learnerQuestionPayload(current.snapshot,correction),page,browser);return;}
           action=revalidated.action;
-          view=fresh.snapshot;viewHandles=fresh.handles;
+          view=revalidated.snapshot || fresh.snapshot;viewHandles=fresh.handles;
         } else {
           await emitQuestion(repeated.question, page, browser);
           return;
@@ -1477,6 +1527,12 @@ async function main() {
         if (['click', 'answer-select', 'answer-group'].includes(action.action)) delete observationFor(page).lastBlockedControl;
       } catch (error) {
         popup?.close();
+        if (action.action === 'answer-group' && !page.isClosed()
+          && (error instanceof CourseControlBlocked || error?.name === 'TimeoutError' || /element is not attached/i.test(error?.message || ''))) {
+          observationFor(page).feedback = 'Grouped answers paused because the page or a control changed. Re-inspect the current answers and preserve this attempt; do not restart or submit automatically.';
+          console.log('Grouped answers interrupted; preserving the current attempt and inspecting again.');
+          continue;
+        }
         if (!['click', 'answer-select'].includes(action.action) || page.isClosed()
           || !(error instanceof CourseControlBlocked || error?.name === 'TimeoutError' || /element is not attached|target changed/i.test(error?.message || ''))) throw error;
         const state = observationFor(page);

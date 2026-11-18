@@ -43,6 +43,9 @@ try {
     'operator_sessions',
     'learning_captures',
     'sync_cursors',
+    'remote_sessions',
+    'operations_drafts',
+    'operations_requests',
   ];
   const tables = await sql`
     select tablename from pg_tables
@@ -121,6 +124,10 @@ try {
   const [{ count }] = await sql`select count(*)::int as count from job_events where job_id = ${jobId}`;
   assert(count === 1, 'Job event idempotency verification failed.');
 
+  await sql`update helpers set remote_lease_until=now()+interval '15 seconds' where id=${helper.id}`;
+  const blockedClaim=await sql`select id from claim_next_helper_job(${helper.id}, ${userId})`;
+  assert(blockedClaim.length===0,'Manual browser control did not block job claim.');
+  await sql`update helpers set remote_lease_until=now()-interval '1 second' where id=${helper.id}`;
   const [claimedJob] = await sql`select id from claim_next_helper_job(${helper.id}, ${userId})`;
   assert(claimedJob?.id === jobId, 'Queued job claim failed.');
   await sql`update jobs set status = 'running', started_at = now() where id = ${jobId}`;
@@ -145,7 +152,7 @@ try {
   const cancelledClaim = await sql`select id from claim_next_helper_job(${helper.id}, ${userId})`;
   assert(cancelledClaim.length === 0, 'A cancelled queued job was dispatched.');
 
-  console.log('Neon schema, pairing, confirmation, idempotency, recovery, and cancellation verified.');
+  console.log('Neon schema, mobile RLS, manual-control lease, pairing, confirmation, idempotency, recovery, and cancellation verified.');
 } finally {
   await sql`delete from profiles where id = ${userId}`.catch(() => undefined);
   await sql.end();

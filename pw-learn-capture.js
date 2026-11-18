@@ -3,7 +3,7 @@
 // summaries, visible text, and same-origin frame details go under data/learn/.
 //
 // Usage:
-//   node pw-learn-capture.js [tabIdx]
+//   node pw-learn-capture.js [tabIdx] (signed jobs bind the live CDP target)
 
 const fs = require('fs');
 const path = require('path');
@@ -25,9 +25,8 @@ async function main() {
   const detectedArg = args.find((arg) => arg.startsWith('--detected='));
   const browser = await chromium.connectOverCDP(CDP_URL);
   try {
-    const ctx = browser.contexts()[0];
-    const pages = ctx ? ctx.pages() : [];
-    const page = pages[tabIdx];
+    const pages = browser.contexts().flatMap(context=>context.pages());
+    const page = await require('./lib/browser-tabs').selectBrowserPage(pages,tabIdx);
     if (!page) throw new Error(`No tab at index ${tabIdx}`);
 
     const dir = dataPath('learn', stamp());

@@ -2,6 +2,78 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getAutomationRoot, getHelperHome } from './config.js';
+import { HISTORY_SYNC_LIMITS } from '@quiztaker/core';
+
+export interface LocalSyncPayload {
+  history: Array<Record<string, unknown>>;
+  reviews: Array<Record<string, unknown>>;
+  captures: Array<Record<string, unknown>>;
+}
+
+export function localSyncBatches(payload: LocalSyncPayload): LocalSyncPayload[] {
+  const streams = {
+    history: uniqueSources(payload.history),
+    reviews: uniqueSources(payload.reviews),
+    captures: uniqueSources(payload.captures),
+  };
+  const count = Math.max(...Object.keys(HISTORY_SYNC_LIMITS).map(key => {
+    const stream = key as keyof LocalSyncPayload;
+    return Math.ceil(streams[stream].length / HISTORY_SYNC_LIMITS[stream]);
+  }));
+  return Array.from({ length: count }, (_, index) => ({
+    history: streams.history.slice(index * HISTORY_SYNC_LIMITS.history, (index + 1) * HISTORY_SYNC_LIMITS.history),
+    reviews: streams.reviews.slice(index * HISTORY_SYNC_LIMITS.reviews, (index + 1) * HISTORY_SYNC_LIMITS.reviews),
+    captures: streams.captures.slice(index * HISTORY_SYNC_LIMITS.captures, (index + 1) * HISTORY_SYNC_LIMITS.captures),
+  }));
+}
+
+// Only acknowledged batches advance. A process restart safely replays the local
+// ledger against the server's idempotent inserts; no history is removed.
+export class LocalHistorySync {
+  private pending: LocalSyncPayload[] | null = null;
+  private nextAt = 0;
+  private failures = 0;
+  private inFlight: Promise<void> | null = null;
+
+  constructor(
+    private readonly send: (payload: LocalSyncPayload) => Promise<void>,
+    private readonly report: (error: unknown) => void,
+    private readonly read: () => LocalSyncPayload = () => ({
+      history: readLocalHistory(), reviews: readLocalReviews(), captures: readLocalCaptures(),
+    }),
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  tick(): Promise<void> {
+    if (this.inFlight) return this.inFlight;
+    if (this.now() < this.nextAt) return Promise.resolve();
+    this.inFlight = this.syncNext().finally(() => { this.inFlight = null; });
+    return this.inFlight;
+  }
+
+  private async syncNext(): Promise<void> {
+    try {
+      this.pending ??= localSyncBatches(this.read());
+      const batch = this.pending[0];
+      if (batch) {
+        await this.send(batch);
+        this.pending.shift();
+      }
+      this.failures = 0;
+      if (!this.pending.length) {
+        this.pending = null;
+        this.nextAt = this.now() + 5 * 60_000;
+      } else this.nextAt = 0;
+    } catch (error) {
+      this.nextAt = this.now() + Math.min(5 * 60_000, 30_000 * 2 ** Math.min(this.failures++, 4));
+      this.report(error);
+    }
+  }
+}
+
+function uniqueSources(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return [...new Map(rows.map(row => [String(row.sourceId), row])).values()];
+}
 
 interface HistorySyncEvent extends Record<string, unknown> {
   sourceId: string;
@@ -66,7 +138,7 @@ export function readLocalReviews(): Array<Record<string, unknown>> {
   return files.flatMap((file) => readJsonl(file))
     .filter((row) => row.status !== 'resolved' && row.title)
     .map((row) => ({
-      sourceId: String(row.id || row.ts || row.title),
+      sourceId: String(row.id || createHash('sha256').update(JSON.stringify(row)).digest('hex')),
       type: String(row.type || 'review'),
       title: String(row.title),
       detail: String(row.detail || row.summary || ''),
@@ -80,7 +152,7 @@ export function readLocalCaptures(): Array<Record<string, unknown>> {
     join(getAutomationRoot(), 'data', 'learn', 'index.jsonl'),
   ];
   return indexFiles.flatMap((file) => readJsonl(file)).map((row) => ({
-    sourceId: String(row.id || row.path || row.fingerprint || row.ts),
+    sourceId: String(row.id || row.path || row.ts || row.fingerprint || createHash('sha256').update(JSON.stringify(row)).digest('hex')),
     fingerprint: row.fingerprint ? String(row.fingerprint) : null,
     title: String(row.title || row.label || 'Learning capture'),
     detail: String(row.detail || ''),
@@ -98,7 +170,8 @@ function eventFor(
 ): HistorySyncEvent {
   const occurredAt = normalizeDate(payload.ts);
   const sourceId = createHash('sha256')
-    .update(JSON.stringify([kind, title, occurredAt, payload.event || '']))
+    .update(JSON.stringify(occurredAt === new Date(0).toISOString()
+      ? [kind,title,payload] : [kind, title, occurredAt, payload.event || '']))
     .digest('hex');
   return { sourceId, kind, title, result, detail, occurredAt, payload };
 }
@@ -117,5 +190,5 @@ function readJsonl(file: string): Array<Record<string, unknown>> {
 
 function normalizeDate(value: unknown): string {
   const date = new Date(String(value || ''));
-  return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+  return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
 }

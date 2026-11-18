@@ -9,6 +9,31 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { ControlPlaneClient, flushPendingEvents } from '../src/client.js';
 import { readOutbox } from '../src/outbox.js';
+import { replaceBrowserSession } from '../src/browser-session.js';
+
+test('signed selected-tab execution carries live identity, never rebinding identical curriculum URLs',async()=>{
+  const directory=mkdtempSync(join(tmpdir(),'vitriol-target-executor-'));
+  process.env.QUIZTAKER_HOME=join(directory,'home');process.env.QUIZTAKER_AUTOMATION_ROOT=directory;
+  for(const script of ['pw-detect.js','pw-slickquiz-solve.js']) {
+    writeFileSync(join(directory,script),'console.log("LIVE="+process.env.VITRIOL_CDP_TARGET_ID+" ARGS="+process.argv.slice(2).join(" "));');
+  }
+  const helperId=randomUUID(),secret=deriveHelperSecret('integration-master-key-32-characters',helperId);
+  try {
+    const session=replaceBrowserSession([
+      {idx:0,cdpTargetId:'live-a',title:'Curriculum',url:'https://example.com/curriculum'},
+      {idx:1,cdpTargetId:'live-b',title:'Curriculum',url:'https://example.com/curriculum'},
+    ]);
+    const tab=session.tabs[1];
+    for(const capability of [{id:'detect',version:2,script:'pw-detect.js',expected:'1'},
+      {id:'slickquiz-solve',version:1,script:'pw-slickquiz-solve.js',expected:'--tab 1'}]) {
+      const envelope=signJob({jobId:randomUUID(),planId:randomUUID(),attemptId:randomUUID(),helperId,capabilityId:capability.id,capabilityVersion:capability.version,
+        script:capability.script,args:['--target',tab.targetId,'--session',session.id,'--revision',String(session.revision),'--fingerprint',tab.fingerprint],
+        fingerprint:tab.fingerprint,nonce:randomUUID(),issuedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60_000).toISOString()},secret);
+      const result=await startJob(envelope,helperId,secret,async()=>{}).completion;
+      assert.equal(result.code,0);assert.ok(result.output.includes(`LIVE=live-b ARGS=${capability.expected}`));
+    }
+  } finally {rmSync(directory,{recursive:true,force:true});}
+});
 
 test('Windows crash status and failed event reporting preserve terminal intent without stopping the helper', {skip:process.platform!=='win32'}, async () => {
   const directory = mkdtempSync(join(tmpdir(),'vitriol-crash-report-'));

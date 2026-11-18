@@ -4,6 +4,7 @@
  * iframe frame so we can see slide content behind a Content Player wrapper.
  *
  *   node pw-tab-inspect.js <tabIdx> [outNameNoExt]
+ * Signed helper jobs bind the exact live CDP target before inspecting.
  *
  * Writes to data/prep/<outNameNoExt>.png + .txt (defaults to `tab<idx>`).
  */
@@ -18,10 +19,10 @@ async function pickPage(browser, idx) {
   const contexts = browser.contexts();
   const pages = [];
   for (const c of contexts) for (const p of c.pages()) pages.push(p);
-  if (idx < 0 || idx >= pages.length) {
+  if (!process.env.VITRIOL_CDP_TARGET_ID && (idx < 0 || idx >= pages.length)) {
     throw new Error(`tab ${idx} out of range (have ${pages.length})`);
   }
-  return pages[idx];
+  return require('./lib/browser-tabs').selectBrowserPage(pages,idx);
 }
 
 async function dumpFrames(page) {

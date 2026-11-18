@@ -48,6 +48,15 @@ test('ordinary course exits are reserved for the scoped terminal finalizer in ev
   }
 });
 
+test('only browser-derived named course-player overlay controls are allowed, not arbitrary exits',()=>{
+  for(const name of ['Course player: Exit','Course player: Confirm exit','Course player: Cancel exit']) {
+    assert.equal(parseLearnerAction({action:'click',targetId:'b1'},{buttons:[{id:'b1',name,kind:'content'}]},{mode:'read'}).ok,true);
+  }
+  for(const name of ['Exit','Exit course','Course player: Delete']) {
+    assert.equal(parseLearnerAction({action:'click',targetId:'b1'},{buttons:[{id:'b1',name,kind:'content'}]},{mode:'read'}).ok,false);
+  }
+});
+
 test('observed repair matching options stay quiz-only even when their label says Remove',()=>{
   const view={buttons:[{id:'m1',name:'Remove the base enclosure',kind:'quiz-navigation'}]};
   assert.equal(parseLearnerAction({action:'click',targetId:'m1'},view,{mode:'quiz'}).ok,true);

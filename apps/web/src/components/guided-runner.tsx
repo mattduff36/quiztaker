@@ -3,17 +3,19 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { LoaderCircle, Play, Square, RefreshCw, Pause } from 'lucide-react';
-import { decideGuidedFlow, independentIntent, independentPlans, learnerQuestion, learnerStopMessage, observedQuizResult, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab, type GuidedDetection, type GuidedLearningMode, type IndependentIntent } from '@/lib/guided-flow';
+import { decideGuidedFlow, independentIntent, independentPlans, learnerQuestion, learnerStopMessage, observedQuizResult, sameDetectedTarget, supportsGuidedLearning, questionTargetTab, type GuidedDetection, type GuidedLearningMode, type IndependentIntent } from '@/lib/guided-flow';
 import { learnerActivityUpdates } from '@/lib/learner-activity';
 import { OBJECTIVE_LIMIT } from '@/lib/operations-client-state';
 import { readJsonResponse } from '@/lib/operations-readiness';
 import type { ConnectionState } from '@/lib/operations-readiness';
+import type { useSharedOperations } from '@/components/use-shared-operations';
+import { defaultOperationsObjective } from '@/lib/operations-shared';
 
-type Tab = { targetId: string; index: number; title: string; url: string; fingerprint: string };
+type Tab = { targetId: string; cdpTargetId?: string; index: number; title: string; url: string; fingerprint: string };
 type Session = { id: string; revision: number; tabs: Tab[]; cdp_connected: boolean };
 type Context = { helper: { id: string; is_online: boolean; version: string } | null; session?: Session | null; learnerEnabled?: boolean; activeJob?: { id: string; status: string; capability_id?: string } | null };
 type Job = { id: string; status: string; outcome?: { verified?: boolean; status?: string }; result?: { ok?: boolean; result?: { detection?: GuidedDetection } } };
-type Question = { question: string; options?: string[]; next?: string; model?: boolean; targetId?: string; sessionId?: string; url?: string; intent?: GuidedLearningMode };
+type Question = { question: string; options?: string[]; next?: string; model?: boolean; targetId?: string; cdpTargetId?: string; sessionId?: string; url?: string; intent?: GuidedLearningMode };
 type CourseMode = 'independent' | 'coordinate' | 'quick';
 type RememberedTurn = { role: 'user' | 'assistant'; text: string; url?: string; guidance?: boolean };
 type CourseMemory = { browserSessionId?: string; id: string | null; objective: string | null; history: RememberedTurn[] };
@@ -24,6 +26,7 @@ function conversationText(turn: RememberedTurn): string | null {
 const running = (status: string) => ['queued', 'dispatched', 'running'].includes(status);
 
 export function GuidedRunner(props: {
+  shared?:ReturnType<typeof useSharedOperations>;
   helperId: string;
   session?: Session | null;
   selectedTarget: string;
@@ -64,23 +67,34 @@ export function GuidedRunner(props: {
   const stopLock=useRef(false);
   const [stage, setStage] = useState('Ready when you are');
   const [message, setMessage] = useState('Choose the course tab. Vitriol will inspect it and decide how to proceed.');
-  const [currentQuestion, setQuestion] = useState<Question | null>(null);
-  const [answer, setAnswer] = useState('');
+  const [localQuestion, setLocalQuestion] = useState<Question | null>(null);
+  const currentQuestion=props.shared?props.shared.draft.question??null:localQuestion;
+  function setQuestion(value:Question|null) {setLocalQuestion(value);setAnswer('');props.shared?.edit({question:value,answer:''});}
+  const [localAnswer, setAnswer] = useState('');
+  const answer=props.shared?props.shared.draft.answer??'':localAnswer;
   const [customReply, setCustomReply] = useState(false);
   const [settingsNeeded, setSettingsNeeded] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
-  const [mode, setMode] = useState<CourseMode>('independent');
-  const [chosenIntent, setChosenIntent] = useState<IndependentIntent | null>(null);
+  const [localMode, setMode] = useState<CourseMode>('independent');
+  const mode=props.shared?props.shared.draft.mode??'independent':localMode;
+  const [localIntent, setChosenIntent] = useState<IndependentIntent | null>(null);
+  const sharedIntent=props.shared?.draft.chosenIntent;
+  const chosenIntent=props.shared?sharedIntent??null:localIntent;
   const [suppressRestoredQuestion, setSuppressRestoredQuestion] = useState(Boolean(props.freshTask));
-  const [objective, setObjective] = useState('Read all relevant material in the selected course and retain it for later questions.');
+  const [localObjective, setObjective] = useState('Read all relevant material in the selected course and retain it for later questions.');
+  const [localObjectiveEdited,setObjectiveEdited]=useState(false);
+  const objectiveEdited=props.shared
+    ?props.shared.draft.objectiveEdited??(props.shared.draft.objective!==undefined):localObjectiveEdited;
+  const selected = props.session?.tabs.find((tab) => tab.targetId === props.selectedTarget);
+  const objective=objectiveEdited?(props.shared?props.shared.draft.objective??'':localObjective)
+    :props.finalized?'':defaultOperationsObjective(mode,selected?.title||'the selected course page');
   const [memory, setMemory] = useState<CourseMemory | null>(null);
   const [runOutput, setRunOutput] = useState('');
-  const [guidance, setGuidance] = useState('');
+  const [localGuidance, setGuidance] = useState('');
+  const guidance=props.shared?props.shared.draft.guidance??'':localGuidance;
   const [guidanceSending, setGuidanceSending] = useState(false);
   const [guidanceNotice, setGuidanceNotice] = useState<string | null>(null);
   const [guidanceError, setGuidanceError] = useState<string | null>(null);
-  const objectiveEdited = useRef(false);
-  const priorPage = useRef(props.selectedTarget);
   const locked = useRef(false);
   const stopped = useRef(false);
   const cancellationRequested = useRef(false);
@@ -101,7 +115,6 @@ export function GuidedRunner(props: {
   const activityOutput = (busy && runOutput) || (jobRunning ? props.lastOutput : '');
   const progress = learnerActivityUpdates(activityOutput);
   const currentProgress = progress.at(-1) ?? '';
-  const selected = session?.tabs.find((tab) => tab.targetId === props.selectedTarget);
   const savedTarget = props.lastJob?.input?.target;
   const rawSavedIntent = props.lastJob?.input?.intent ?? props.lastJob?.input?.mode;
   const savedIntent = rawSavedIntent === 'read' || rawSavedIntent === 'quiz' || rawSavedIntent === 'read-and-assess' || rawSavedIntent === 'coordinate' ? rawSavedIntent : undefined;
@@ -110,8 +123,8 @@ export function GuidedRunner(props: {
   // Only this job's fresh marker can ask for input. Conversation history can
   // contain an answered question from an earlier interrupted job.
   const restoredQuestion = props.finalized || suppressRestoredQuestion ? null : outputQuestion;
-  const currentPauseTab = uniqueQuestionTab(currentQuestion?.url, session?.tabs || []);
-  const restoredPauseTab = uniqueQuestionTab(restoredQuestion?.url, session?.tabs || []);
+  const currentPauseTab = questionTargetTab(currentQuestion, session?.tabs || []);
+  const restoredPauseTab = questionTargetTab(restoredQuestion, session?.tabs || [],savedTarget?.targetId);
   const question: Question | null = props.finalized || mode === 'quick' ? null : (currentQuestion && currentPauseTab && currentQuestion.sessionId === session?.id
     && (currentQuestion.targetId === props.selectedTarget || currentPauseTab.targetId === props.selectedTarget) ? currentQuestion : null)
     || (restoredQuestion && restoredPauseTab && (savedTarget?.targetId === props.selectedTarget || restoredPauseTab.targetId === props.selectedTarget)
@@ -120,12 +133,12 @@ export function GuidedRunner(props: {
   const openModuleRequest = question?.question === 'Open the intended question or module, then resume.';
   const detachedQuestion = !props.finalized && !question ? currentQuestion || restoredQuestion : null;
   const replies = openModuleRequest ? ['Done, resume now'] : [...new Set(question?.options || [])].filter((option) => option.trim());
-  const showReplyField = Boolean(question?.model && (customReply || replies.length === 0));
-  const pauseTab = uniqueQuestionTab(question?.url, session?.tabs || []);
+  const showReplyField = Boolean(question?.model && (customReply || answer.length>0 || replies.length === 0));
+  const pauseTab = questionTargetTab(question, session?.tabs || []);
   const pauseTargetId = pauseTab?.targetId || (!props.selectedTarget ? restoredPauseTab?.targetId : undefined);
   const { selectedTarget, onSelect } = props;
   useEffect(() => {
-    if (!busy && pauseTargetId && pauseTargetId !== selectedTarget) onSelect(pauseTargetId);
+    if (!busy && pauseTargetId && !selectedTarget) onSelect(pauseTargetId);
   }, [busy, pauseTargetId, selectedTarget, onSelect]);
 
   useEffect(() => {
@@ -187,27 +200,13 @@ export function GuidedRunner(props: {
     if (!props.finalized) return;
     cancellationRequested.current = true; stopped.current = true; runGeneration.current += 1; memoryRequest.current += 1;
     clearPageQuestion(); setGuidance(''); setRunOutput(''); setSettingsNeeded(false);
-    if (!objectiveEdited.current) setObjective('');
     setStage(props.taskReset ? 'Task recorded' : 'Ready'); setMessage('Choose your next page and set a goal when you are ready.');
   }, [props.taskReset, props.finalized]);
 
-  useEffect(() => {
-    const changedPage = priorPage.current !== props.selectedTarget;
-    priorPage.current = props.selectedTarget;
-    if (busy) return;
-    if (changedPage) setChosenIntent(null);
-    if (!objectiveEdited.current) {
-      const title = selected?.title || 'the selected course page';
-      const goals = {
-        independent: 'Read the course material, follow its topics and panels, and retain it for later questions.',
-        coordinate: `Use the progress and lesson checklist on ${title} to complete required unfinished lessons, then answer the assessment questions and verify the visible results. Ask the connected Codex chat for guidance if progress is blocked.`,
-      };
-      setObjective(goals[mode === 'quick' ? 'independent' : mode].slice(0, OBJECTIVE_LIMIT));
-    }
-  }, [mode, props.selectedTarget, selected?.url, selected?.title, busy]);
-
   async function api<T>(url: string, body?: unknown, method?: string): Promise<T> {
     const generation = runGeneration.current, scope = scopeRef.current;
+    if(url==='/api/operations/actions'&&body&&typeof body==='object')body={...body,requestId:crypto.randomUUID(),sharedClientId:props.shared?.clientId(),workflowId:props.shared?.workflowId()??undefined};
+    if(url==='/api/jobs'&&body&&typeof body==='object')body={...body,sharedClientId:props.shared?.clientId(),workflowId:props.shared?.workflowId()??undefined};
     const response = await fetch(url, { method: method || (body ? 'POST' : 'GET'), cache: 'no-store', signal: AbortSignal.timeout(20_000), ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
     const value = await readJsonResponse<T>(response, 'The request did not complete. Check the connection and try again.');
     if (!mounted.current || generation !== runGeneration.current || scope !== scopeRef.current) {
@@ -220,7 +219,7 @@ export function GuidedRunner(props: {
     return value;
   }
 
-  function checkStopped() { if (stopped.current || !mounted.current || finalized.current) throw new Error('Stopped. Inspect again when you are ready.'); }
+  function checkStopped() { if (stopped.current || !mounted.current || finalized.current || (props.shared&&locked.current&&!props.shared.workflowId())) throw new Error('Task control stopped or expired. Inspect again when you are ready.'); }
 
   async function freshContext(targetId: string): Promise<{ context: Context; tab: Tab; target: Record<string, unknown> }> {
     checkStopped();
@@ -311,9 +310,11 @@ export function GuidedRunner(props: {
     setBusy(true); props.onBusy(true); setSettingsNeeded(false); setReplyError(null); setRunOutput('');
     const reply = quickReply ?? answer.trim();
     const guidance = question?.model && reply ? `Previous question: ${question.question}\nUser answer: ${reply}`.slice(0, 2000) : undefined;
-    clearPageQuestion();
     let targetId = (pauseTab || selected)!.targetId;
     try {
+      props.shared?.edit({objective,mode,answer:''});
+      await props.shared?.begin();
+      clearPageQuestion();
       setStage('Inspecting the page'); setMessage(`Reading ${(pauseTab || selected)!.title || 'the selected course tab'}…`);
       const tabsRun = await waitForJob(await queue('list-tabs'));
       if (tabsRun.job.status !== 'completed') throw new Error('Could not refresh the browser tabs. Check the helper connection.');
@@ -323,13 +324,13 @@ export function GuidedRunner(props: {
       if (guidance) {
         const refreshed = await api<Context>('/api/operations/context');
         checkStopped();
-        const resumedTab = uniqueQuestionTab(question?.url, refreshed.session?.tabs || []);
+        const resumedTab = questionTargetTab(question, refreshed.session?.tabs || []);
         if (question?.sessionId !== refreshed.session?.id || !resumedTab) throw new Error('The paused page changed or is ambiguous. Inspect the intended page without the old answer.');
         targetId = resumedTab.targetId;
         props.onSelect(targetId);
       }
       const before = await freshContext(targetId);
-      if (guidance && (question?.sessionId !== before.context.session?.id || question?.url !== before.tab.url || !uniqueQuestionTab(question?.url, before.context.session?.tabs || []))) throw new Error('The paused page changed or is ambiguous. Inspect the intended page without the old answer.');
+      if (guidance && (question?.sessionId !== before.context.session?.id || question?.url !== before.tab.url || !questionTargetTab(question, before.context.session?.tabs || []))) throw new Error('The paused page changed or is ambiguous. Inspect the intended page without the old answer.');
       if (mode === 'quick') {
         setStage('Starting Quick scrape');
         setMessage('Wait for Recording before clicking through the course.');
@@ -367,7 +368,7 @@ export function GuidedRunner(props: {
         setAnswer(''); setCustomReply(false);
         const paused = await api<Context>('/api/operations/context');
         checkStopped();
-        const pausedTab = uniqueQuestionTab(asked.url, paused.session?.tabs || []);
+        const pausedTab = questionTargetTab(asked, paused.session?.tabs || [],launch.tab.targetId);
         if (paused.helper?.id !== props.helperId || paused.session?.id !== launch.context.session!.id || !pausedTab) throw new Error('The paused page is missing or ambiguous. Refresh the tab list and inspect the intended page.');
         await props.onRefresh();
         checkStopped();
@@ -389,6 +390,7 @@ export function GuidedRunner(props: {
     } catch (error) {
       if (mounted.current && generation === runGeneration.current && scope === scopeRef.current) { clearPageQuestion(); setStage(stopped.current ? 'Stopped' : 'Run interrupted'); setMessage(error instanceof Error ? error.message : 'The run could not continue. Resume from the current page.'); }
     } finally {
+      await props.shared?.end();
       if (generation === runGeneration.current || cancellationRequested.current) {
         locked.current = false;
         if (mounted.current) setBusy(false);
@@ -421,14 +423,9 @@ export function GuidedRunner(props: {
       if (!mounted.current || requestScope !== scopeRef.current) return;
       memoryRequest.current += 1;
       setMemory({ ...saved, browserSessionId: session.id });
-      setGuidance((current) => {
-        if (current.trim() === text) {
-          guidanceAttempt.current = null;
-          return '';
-        }
-        guidanceAttempt.current = null;
-        return current;
-      });
+      if(props.shared)await props.shared.clearGuidance(text,session.id);
+      else setGuidance(current=>current.trim()===text?'':current);
+      guidanceAttempt.current=null;
       setGuidanceNotice(question ? 'Saved — applies at the next step. Resume when you are ready.' : 'Saved — applies at the next step.');
     } catch (error) {
       if (mounted.current) setGuidanceError(error instanceof Error ? error.message : 'The hint could not be saved. Your text is still here.');
@@ -490,21 +487,21 @@ export function GuidedRunner(props: {
     {props.courseLauncher}
     <div className="grid grid-cols-1 gap-5 border-t border-slate-200 pt-4 lg:grid-cols-2">
     <div className="space-y-2"><div className="flex items-center justify-between gap-3"><label htmlFor="guided-course-tab" className="text-sm font-semibold text-slate-800">Choose your course tab</label><button type="button" onClick={props.onRefreshTabs} disabled={!connected||busy||props.active||props.paused||props.suspended||props.refreshing} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-semibold text-cyan-800 hover:bg-cyan-50 disabled:opacity-40"><RefreshCw className={`size-3.5 ${props.refreshing ? 'animate-spin' : ''}`}/>{props.refreshing ? 'Refreshing tabs…' : 'Refresh tabs'}</button></div>
-      <select id="guided-course-tab" aria-label="Course tab" value={props.selectedTarget} disabled={!connected || draftDisabled} onChange={(event) => { props.onSelect(event.target.value); clearPageQuestion(); setStage('Ready when you are'); setMessage('Your course is selected. Check the goal, then start.'); }} className="min-h-12 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm font-normal focus-visible:outline-2 focus-visible:outline-cyan-700">
+      <select id="guided-course-tab" aria-label="Course tab" value={props.selectedTarget} disabled={!connected || draftDisabled} onChange={(event) => { props.onSelect(event.target.value); setChosenIntent(null); clearPageQuestion(); setStage('Ready when you are'); setMessage('Your course is selected. Check the goal, then start.'); }} className="min-h-12 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-base font-normal focus-visible:outline-2 focus-visible:outline-cyan-700">
         <option value="">Choose the course you opened</option>{courseTabs.map((tab) => <option key={tab.targetId} value={tab.targetId}>{tab.title || 'Untitled page'} · tab {tab.index+1}</option>)}
       </select>
       {selected?<p className="break-all text-xs leading-5 text-slate-500">{new URL(selected.url).origin}</p>:<p className="text-xs leading-5 text-slate-600">{connected&&courseTabs.length===0?'No course page is open yet. Enter its URL above.':'Only website tabs are shown. If your course is missing, open it in the Vitriol browser and refresh.'}</p>}
       {props.refreshError?<p role="alert" className="text-sm text-rose-800">{props.refreshError}</p>:null}
     </div>
-    <div hidden={!selected || courseTabs.length===0} className="min-w-0 space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={draftDisabled} onChange={event => { setMode(event.target.value as CourseMode); setChosenIntent(null); clearPageQuestion(); }} className="min-h-12 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 font-normal"><option value="independent">Work independently</option><option value="coordinate">Co-ordinate with ChatGPT</option><option value="quick">Scrape info with the user</option></select></label>
+    <div hidden={!selected || courseTabs.length===0} className="min-w-0 space-y-3"><label className="grid gap-2 text-sm font-semibold text-slate-800">What should Vitriol do?<select aria-label="Course activity" value={mode} disabled={draftDisabled} onChange={event => { setMode(event.target.value as CourseMode); props.shared?.edit({mode:event.target.value as CourseMode,chosenIntent:null}); setChosenIntent(null); clearPageQuestion(); }} className="min-h-12 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-base font-normal"><option value="independent">Work independently</option><option value="coordinate">Co-ordinate with ChatGPT</option><option value="quick">Scrape info with the user</option></select></label>
       {mode === 'coordinate' ? <p className="text-sm text-slate-600">Reads material and can submit assessment answers. Vitriol asks the Codex chat connected to your Windows helper when it needs guidance.</p> : null}
       {mode === 'quick' && !recordingId ? <p className="text-sm text-slate-600">Record the course while you click through it. Vitriol saves a replay and transcript on this PC.</p> : null}
-    <label hidden={mode === 'quick'} className={mode === 'quick' ? 'hidden' : 'grid gap-2 text-sm font-semibold text-slate-800'}>What would you like to achieve?<textarea value={objective} onChange={(event) => { objectiveEdited.current = true; setChosenIntent(null); if (question) clearPageQuestion(); setObjective(event.target.value.slice(0, OBJECTIVE_LIMIT)); }} disabled={draftDisabled} maxLength={OBJECTIVE_LIMIT} rows={3} placeholder="For example, read the lessons, then take the quiz." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6 focus-visible:outline-2 focus-visible:outline-cyan-700" /><span className="text-xs font-normal text-slate-600">Collected course material stays available across pages. Check your goal when changing pages.</span></label>
+    <label hidden={mode === 'quick'} className={mode === 'quick' ? 'hidden' : 'grid gap-2 text-sm font-semibold text-slate-800'}>What would you like to achieve?<textarea value={objective} onChange={(event) => { setObjectiveEdited(true); setChosenIntent(null); if (question) clearPageQuestion(); setObjective(event.target.value.slice(0, OBJECTIVE_LIMIT)); props.shared?.edit({objective:event.target.value.slice(0,OBJECTIVE_LIMIT),objectiveEdited:true,chosenIntent:null}); }} disabled={draftDisabled} maxLength={OBJECTIVE_LIMIT} rows={3} placeholder="For example, read the lessons, then take the quiz." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-base font-normal leading-6 focus-visible:outline-2 focus-visible:outline-cyan-700" /><span className="text-xs font-normal text-slate-600">Collected course material stays available across pages. Check your goal when changing pages.</span></label>
       {mode === 'independent' && !question && !busy && objective.trim() ? (resolvedIntent && resolvedIntent !== 'coordinate'
         ? <p role="status" className="text-sm font-medium text-slate-700">{independentPlans[resolvedIntent]}</p>
         : <fieldset className="space-y-2 text-sm text-slate-700"><legend className="font-semibold">What should I do with the assessment?</legend>
           {([['read', 'Read the material'], ['quiz', 'Take the quiz'], ['read-and-assess', 'Read and take the quiz']] as const).map(([value, label]) =>
-            <button key={value} type="button" disabled={draftDisabled} onClick={() => setChosenIntent(value)} className="mr-2 min-h-10 rounded-md border border-slate-300 px-3 hover:bg-slate-50 disabled:opacity-50">{label}</button>)}
+            <button key={value} type="button" disabled={draftDisabled} onClick={() => {setChosenIntent(value);props.shared?.edit({chosenIntent:value});}} className="mr-2 min-h-11 rounded-md border border-slate-300 px-3 hover:bg-slate-50 disabled:opacity-50">{label}</button>)}
         </fieldset>) : null}
     </div>
     </div>
@@ -519,7 +516,7 @@ export function GuidedRunner(props: {
           {replies.map((option) => <button key={option} type="button" disabled={!props.ready || busy || props.active || props.paused || props.suspended} onClick={() => void start(option)} className="min-h-11 rounded-md bg-slate-950 px-4 py-3 text-left text-sm font-semibold text-white hover:bg-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:opacity-40">{option}</button>)}
           {!showReplyField ? <button type="button" onClick={() => setCustomReply(true)} className="min-h-11 rounded-md px-1 text-sm font-medium text-slate-600 underline decoration-slate-300 underline-offset-4 transition-colors hover:text-cyan-800 hover:decoration-cyan-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700">Write a different reply</button> : null}
         </div>
-        {showReplyField ? <><label className="grid gap-2 text-sm font-medium text-slate-950">Your reply<textarea autoFocus={customReply} value={answer} maxLength={1400} onChange={(event) => setAnswer(event.target.value)} className="min-h-24 rounded-md border border-slate-400 bg-white p-3" /></label><p className="text-xs text-cyan-900">Replies may be shared with your AI provider. Do not include passwords or API keys.</p></> : null}
+        {showReplyField ? <><label className="grid gap-2 text-sm font-medium text-slate-950">Your reply<textarea autoFocus={customReply} value={answer} maxLength={1400} onChange={(event) => {setAnswer(event.target.value);props.shared?.edit({answer:event.target.value});}} className="min-h-24 rounded-md border border-slate-400 bg-white p-3" /></label><p className="text-xs text-cyan-900">Replies may be shared with your AI provider. Do not include passwords or API keys.</p></> : null}
       </> : null}
     </section> : null}
     {!question || !question.model || showReplyField || busy || settingsNeeded ? <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:p-5">
@@ -541,7 +538,7 @@ export function GuidedRunner(props: {
     {props.sessionActions}
     {currentMemory?.id && mode !== 'quick' && !recordingId ? <div className="space-y-3 border-t border-slate-200 pt-5">
       <label className="grid gap-2 text-sm font-semibold text-slate-800">Hint or change of direction
-        <textarea value={guidance} onChange={(event) => { setGuidance(event.target.value); setGuidanceNotice(null); setGuidanceError(null); }} disabled={guidanceSending} maxLength={2000} rows={2} placeholder="Give the assistant a hint or change direction." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6" />
+        <textarea value={guidance} onChange={(event) => { setGuidance(event.target.value);props.shared?.edit({guidance:event.target.value}); setGuidanceNotice(null); setGuidanceError(null); }} disabled={guidanceSending} maxLength={2000} rows={2} placeholder="Give the assistant a hint or change direction." className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal leading-6" />
       </label>
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" onClick={() => void sendGuidance()} disabled={guidanceSending || !guidance.trim()} className="inline-flex min-h-11 items-center rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-900 hover:border-cyan-700 hover:text-cyan-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-not-allowed disabled:opacity-40">{guidanceSending ? 'Saving…' : 'Send guidance'}</button>

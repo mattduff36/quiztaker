@@ -73,6 +73,37 @@ test('long lessons retain late pages and nested panels within the chunk budget',
   assert.match(retained,/final-panel\.xml\]\nFinal nested panel: JDF job intent/);
 });
 
+test('Waveform 1.6.2 uses only the observed same-publication master and course-relative pages/dialogues',async()=>{
+  const course=ROOT+'lib_en/html/course.htm',manifest=ROOT+'lib_en/xml/master.xml';
+  const files=new Map([
+    [course,'<html><h1>Waveform 1.6.2</h1></html>'],
+    [manifest,`<course><page xml="../xml/can444_02_01_100.xml"/><page xml="../xml/quiz.xml"/>
+      <page xml="https://evil.invalid/lesson.xml"/><page xml="${ROOT.replace('/123/','/124/')}lib_en/xml/other.xml"/></course>`],
+    [ROOT+'lib_en/xml/can444_02_01_100.xml','<data><text>Communication standards</text><dialogue xml="../xml/panel.xml"/><hidden xml="../xml/unreferenced-key.xml"/></data>'],
+    [ROOT+'lib_en/xml/panel.xml','<data><text>Nested protocols</text><dialogue xml="../xml/can444_02_01_100.xml"/></data>'],
+    [ROOT+'lib_en/xml/quiz.xml','<questions><answer correct="true"><text>SECRET KEY</text></answer></questions>'],
+  ]);
+  const requested=[];
+  const frame={url:()=>course,evaluate:async()=>[manifest,'https://evil.invalid/master.xml',
+    ROOT+'lib_fr/xml/master.xml',ROOT.replace('/123/','/124/')+'lib_en/xml/master.xml']};
+  const read=async(_,url)=>{requested.push(url);return files.has(url)?{text:files.get(url)}:{error:'HTTP 404'};};
+  const report=await collectAuthoredMaterial(frame,{read});
+  assert.match(report.materials.map(item=>item.text).join('\n'),/Communication standards[\s\S]*Nested protocols/);
+  assert.doesNotMatch(JSON.stringify(report.materials),/SECRET KEY/);
+  assert.ok(requested.every(url=>url.startsWith(ROOT)));
+  assert.ok(!requested.some(url=>/unreferenced-key/.test(url)));
+  assert.equal(new Set(requested).size,requested.length);
+  assert.ok(!requested.some(url=>url.includes('/lib_fr/')));
+  assert.ok(report.gaps.some(gap=>/assessment source/.test(gap.reason)));
+  const unobserved=await collectAuthoredMaterial({...frame,evaluate:async()=>[]},{read});
+  assert.equal(unobserved.materials.length,0);
+  assert.ok(unobserved.gaps.some(gap=>/no observed/.test(gap.reason)));
+  const wrongLanguage=await collectAuthoredMaterial({url:()=>course.replace('/html/','/HTML/'),
+    evaluate:async()=>[ROOT+'lib_fr/xml/master.xml']},{read});
+  assert.equal(wrongLanguage.materials.length,0);
+  assert.ok(wrongLanguage.gaps.some(gap=>/no observed/.test(gap.reason)));
+});
+
 test('authenticated browser source transport blocks redirects before following them',async()=>{
   const browser=await chromium.launch({channel:'chrome',headless:true});
   try {

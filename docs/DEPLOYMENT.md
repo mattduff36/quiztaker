@@ -1,5 +1,73 @@
 # Hosted deployment and helper operations
 
+## Mobile Operations and private browser relay
+
+Apply additive `0013_mobile_operations.sql` **before** deploying this web
+candidate. It adds account-owned RLS tables for shared Operations drafts,
+request identities and ephemeral encrypted remote sessions; helper manual-lease
+columns; and an atomic lease gate around the existing job-claim function.
+It preserves existing job data and the prior claim implementation. Run the
+normal parent-owned migration verification and release/dependency-audit gates;
+the implementation fixtures do not validate a live database or grant release
+approval.
+
+Publish a matching helper containing `remote.ts` and `remote-browser.ts`, then
+update the Windows helper before remote acceptance. Earlier helpers continue
+ordinary jobs but cannot answer the new private-browser endpoint; the viewer
+reports missing helper support rather than pretending to be connected.
+The bundled automation root must still contain `lib/browser-tabs.js`,
+`lib/stable-viewport-capture.js`, `lib/course-launch.js`, Playwright and sharp.
+No new port, public CDP exposure, credentials, environment secret or inbound
+Windows connection is required. Do not restart/install over a live course for
+fixture verification.
+
+Operations drafts use per-helper/browser-session revisions and client identity;
+pending local edits survive delayed responses and revision conflicts.
+Only one client may orchestrate a task at once. Request reservations are
+persisted before side effects; a crashed/uncertain request fails closed instead
+of creating another job. Existing jobs/results remain authoritative. Site
+routes and scrolling are deliberately independent on each device.
+Read-only capture-tab selection is available while automation runs. A newly
+opened browser tab may not yet have a signed task-target identity: the interface
+reports this explicitly. Release manual control, return to Task, resume and
+refresh tabs before automating that tab.
+
+View Browser uses outbound authenticated HTTPS polling even with desktop
+Operations closed. Viewer/helper hold nonextractable ephemeral P-256 private
+keys and derive AES-GCM keys; authenticated context binds helper, viewer,
+client, direction, sequence and expiry. The relay sees only public keys,
+ciphertext and control metadata. Login images/input never enter helper terminal
+logging or Operations drafts. Retain the remote-endpoint logging exclusion in
+future diagnostics/middleware. Only one latest image and one pending command
+exist per viewer (maximum four); expired material is pruned on exchanges.
+Expiry prevents retrieval immediately, but disconnected expired rows are
+physically removed on the next helper/viewer exchange, not by a database TTL.
+Database backups may contain ciphertext, never endpoint private keys.
+
+Take control first uses normal operator pause/cancellation, then an atomic
+helper lease. Input waits for both database job state and helper-local idle.
+Automation admission/claim and manual input cannot share a lease. Manual
+control is visible on both devices; release keeps the admission barrier until
+the helper acknowledges idle, or the 15-second lease expires. Returning to Task
+does not automatically resume automation. Viewer hide/close releases control;
+disconnect expires it. Input is limited to tap, bounded scroll/text, common
+keys, existing-tab selection and validated HTTPS navigation; no arbitrary JS
+or CDP passthrough exists. The UI intentionally has no address-navigation field.
+The optional protocol navigation guard is lexical (HTTPS, no credentials/custom
+port or local/IP-literal hostname); it is not a DNS/redirect network sandbox.
+Commands are consumed before delivery, so uncertain/lost inputs are never
+automatically retried. Reconnect, inspect the latest image, then deliberately
+retry if necessary. Captures use stable existing viewport metrics and offline
+bounded JPEG scaling, not viewport/window/zoom changes.
+
+Task preparation is still client-orchestrated: keep its initiating Operations
+page open until a job is acknowledged. The current helper job then runs without
+that page. Closing every viewer stops capture; it never closes the user's browser.
+Remote control cannot approve browser security chrome, unlock Windows or operate
+a disconnected helper. Parent acceptance must include two real signed-in clients
+and the matching packaged helper after migration, without resuming the owner's
+paused assessment until the owner explicitly chooses to test it.
+
 ## Course coverage and update progress
 
 The helper stays visible by default and shows one line when work starts or ends,
@@ -52,8 +120,13 @@ promotion metrics.
 ## Saba native assessments in helper 1.0.43
 
 Quiz capability 6 prioritizes course Continue over activity Launch and retains
-popup protection through later Proceed documents, only between the two supported
-Saba HTTPS hosts. Native radios use ordinary associated-label or keyboard
+popup protection through later Proceed documents. The mobile release generalizes
+placement to selected HTTPS course pages/frames and their actual descendants,
+including external course players and SSO. It retains named-window reuse,
+WindowProxy/opener and legitimate named iframe navigation; `_self`, `_parent`
+and `_top` are not redirected. Unrelated tabs are not patched and no user
+windows are moved or merged. Placement does not expand automation/follow
+authorization. Native radios use ordinary associated-label or keyboard
 selection with checked-state verification. Matching dropdowns expose observed
 description labels and selected values through existing quiz-only click actions;
 Next and submission stay blocked while a matching field is unanswered.
@@ -382,5 +455,6 @@ Interrupted runs discard stale questions and offer explicit current-page resume,
 without replaying old guidance or restarting an assessment. Completed-task starts
 invalidate older context responses and preserve the new goal and selected tab.
 Assessment permission is clause-scoped; read-only and no-submit restrictions
-remain binding. No schema migration is needed for this release. Parent-owned
+remain binding. Those reliability-only changes need no schema migration; mobile
+Operations requires `0013` as described above. Parent-owned
 release gates and real Windows installation/heartbeat validation still apply.

@@ -19,7 +19,7 @@ import {
   resolveHelperLaunch,
 } from './pairing.js';
 import { isAllowedArtifact } from './artifacts.js';
-import { readLocalCaptures, readLocalHistory, readLocalReviews } from './sync.js';
+import { LocalHistorySync } from './sync.js';
 import { migrateLegacyLocalData } from './migrate.js';
 import { HELPER_VERSION } from './version.js';
 import { helperUpdateError, helperUpdateProgress, installHelperUpdate, isNewerVersion, reconcileHelperUpdate, type HelperUpdatePhase } from './updater.js';
@@ -27,13 +27,13 @@ import { minimizeHelperWindow, shouldAutoMinimize } from './windows.js';
 import { HelperTerminal } from './terminal-ui.js';
 import { askCoordinator, coordinateDecision } from './coordination.js';
 import { restoreHelperWindowPlacement } from './window-placement.js';
+import { RemoteBroker } from './remote.js';
 
 let isStopping = false;
 let hasAnnouncedOnline = false;
 let runningJob: { jobId: string; run: RunningJob; cancelRequested: boolean } | null = null;
 let attentionJobId: string | null = null;
 let windowPlacementRestored = false;
-let nextSyncAt = 0;
 let nextStrategyPullAt = 0;
 let nextReleaseCheckAt = 0;
 let hasReportedConnectionRemediation = false;
@@ -69,6 +69,13 @@ async function main(): Promise<void> {
   }
 
   const client = new ControlPlaneClient(config, terminal);
+  const remote=new RemoteBroker(config.helperId,input=>client.remoteExchange(input),
+    ()=>!runningJob&&!isStopping,message=>terminal?.activity(message));
+  remote.start();
+  const historySync = new LocalHistorySync(
+    payload => client.syncHistory(payload),
+    error => console.error('Local history sync deferred; heartbeat and job polling remain available:', error instanceof Error ? error.message : error),
+  );
   console.log(`Vitriol Helper ${HELPER_VERSION} (protocol ${PROTOCOL_VERSION})`);
   console.log(`Device: ${config.deviceName} (${config.helperId})`);
   console.log(`Control plane: ${config.controlPlaneUrl}`);
@@ -89,7 +96,7 @@ async function main(): Promise<void> {
         attentionJobId = null;
         terminal.activity('Ready · Task finished.', 'ready');
       }
-      if (heartbeat.update && !runningJob && !isStopping) {
+      if (heartbeat.update && !runningJob && !remote.blocksAutomation && !isStopping) {
         let phase: HelperUpdatePhase | null = null;
         const updateLines: Record<HelperUpdatePhase, string> = {
           preparing: 'Preparing the helper update…',
@@ -128,14 +135,7 @@ async function main(): Promise<void> {
         hasAnnouncedOnline = true;
         await minimizeAfterConnection();
       }
-      if (Date.now() >= nextSyncAt) {
-        await client.syncHistory({
-          history: readLocalHistory(),
-          reviews: readLocalReviews(),
-          captures: readLocalCaptures(),
-        });
-        nextSyncAt = Date.now() + 5 * 60_000;
-      }
+      void historySync.tick();
       if (Date.now() >= nextStrategyPullAt) {
         try {
           await writeStrategySnapshot(await client.getStrategies());
@@ -156,7 +156,7 @@ async function main(): Promise<void> {
         nextReleaseCheckAt = Date.now() + 6 * 60 * 60_000;
       }
 
-      if (!runningJob) {
+      if (!runningJob && !remote.blocksAutomation) {
         const envelope = await client.poll();
         if (envelope) {
           const jobId = envelope.payload.jobId;
@@ -252,6 +252,7 @@ async function main(): Promise<void> {
       await delay(10_000);
     }
   }
+  remote.stop();
   releaseInstance?.();
 }
 

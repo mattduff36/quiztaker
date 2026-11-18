@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { decideGuidedFlow, independentIntent, learnerQuestion, learnerStopMessage, observedQuizResult, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab } from '../src/lib/guided-flow';
+import { decideGuidedFlow, independentIntent, learnerQuestion, learnerStopMessage, observedQuizResult, sameDetectedTarget, supportsGuidedLearning, uniqueQuestionTab, questionTargetTab } from '../src/lib/guided-flow';
 
 test('named retake exclusions and optional review do not veto a separate explicit assessment',()=>{
   assert.equal(independentIntent('Do not retake Device Features. Read the Firmware course, then pass the Firmware assessment. Review if needed.'),'read-and-assess');
@@ -86,6 +86,20 @@ test('resume resolves a new target ID only for one exact matching pause URL', ()
   assert.equal(uniqueQuestionTab(undefined, tabs), null);
   assert.equal(uniqueQuestionTab('https://example.com/missing', tabs), null);
   assert.equal(uniqueQuestionTab('https://example.com/pause', [...tabs, { targetId: 'duplicate', url: 'https://example.com/pause' }]), null);
+});
+
+test('identical curriculum titles and redacted URLs never rebind a paused selection',()=>{
+  const url='https://canon-europe.csod.com/ui/lms-learning-details/app/curriculum';
+  const tabs=[{targetId:'a',cdpTargetId:'live-a',url,title:'Curriculum'},{targetId:'b',cdpTargetId:'live-b',url,title:'Curriculum'}];
+  const question={url,cdpTargetId:'live-b'};
+  assert.equal(questionTargetTab(question,tabs)?.targetId,'b');
+  assert.equal(questionTargetTab({url,targetId:'b'},tabs)?.targetId,'b');
+  assert.equal(questionTargetTab({url},tabs,'a')?.targetId,'a');
+  assert.equal(questionTargetTab({url},tabs),null);
+  assert.equal(questionTargetTab(question,[tabs[0],{...tabs[1],url:'https://canon-europe.csod.com/transition'}]),null,'actual URL change invalidates paused answers');
+  assert.equal(questionTargetTab(question,[tabs[0],{...tabs[1],targetId:'c',cdpTargetId:'live-c'}]),null,'closed/reopened tab is not rebound');
+  const marker=learnerQuestion(`LEARNER_QUESTION ${JSON.stringify({...question,question:'Which course?'})}`);
+  assert.equal(marker?.cdpTargetId,'live-b');
 });
 
 test('quiz intent permits a server assessment while read intent never fast completes', () => {

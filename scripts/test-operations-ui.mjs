@@ -29,6 +29,20 @@ await writeFile(join(temp,'app.css'),css.css+'\n:root{--font-plex:Arial}body{mar
 
 function state(){return{last:null,paused:false,online:true,connected:true,updatePhase:null,refreshes:0,checks:0,statusFailed:false,statusStale:false,activityPosts:0,pausePosts:0,jobs:new Map(),latest:null,serial:0,selected:null,blocked:false,retries:0,task:null,finishPosts:0,questionOutput:'',pairPosts:0,holdCapability:null};}
 function reply(path,method,body,now,s){
+  if(path==='/api/operations/shared'){
+    s.shared??={revision:1,draft:{},sessionId:'22222222-2222-4222-8222-222222222222',clientId:null,workflowId:null,workflowClientId:null,workflowUntil:null,manual:false};
+    if(body.action==='edit'){
+      if(body.revision!==s.shared.revision)return{...s.shared,conflict:true};
+      s.shared.draft={...s.shared.draft,...body.patch};s.shared.revision++;s.shared.clientId=body.clientId;
+    }
+    if(body.action==='begin'||body.action==='renew'){s.shared.workflowId=body.workflowId;s.shared.workflowClientId=body.clientId;s.shared.workflowUntil=new Date(now+30000).toISOString();}
+    if(body.action==='end'){s.shared.workflowId=null;s.shared.workflowClientId=null;s.shared.workflowUntil=null;}
+    if(body.action==='clear-guidance'){
+      if(s.shared.draft.guidance?.trim()===body.text)s.shared.draft.guidance='';
+      s.shared.revision++;
+    }
+    return{...s.shared};
+  }
   const activity=()=>({paused:s.paused,lastActivityAt:new Date(s.last??now).toISOString(),expiresAt:new Date((s.last??now)+1_800_000).toISOString(),serverNow:new Date(now).toISOString()});
   const session=()=>s.noSession?null:({id:'22222222-2222-4222-8222-222222222222',revision:1,cdp_connected:s.connected,updated_at:new Date(now-(s.stale?120_000:0)).toISOString(),tabs:[...(!s.noCourse?[{targetId:'course',index:0,title:'Xerox course overview',url:s.courseUrl||'https://example.invalid/course',fingerprint:'course-fingerprint'}]:[]),{targetId:'blank',index:1,title:'Blank tab',url:'about:blank',fingerprint:'blank'}],roster:null,detection:null});
   function makeJob(capability){const id=`job-${++s.serial}`;const job={id,status:capability==='list-tabs'||capability===s.holdCapability?'running':'completed',capability_id:capability,outcome:{verified:true,status:'verified'},result:{ok:true,result:capability==='detect'?{detection:{detected:'server-assessment',tabIdx:0,url:s.courseUrl||'https://example.invalid/course',fingerprint:'course-fingerprint',detail:'Open a course page before attempting a final assessment.'}}:{}}};s.jobs.set(id,job);s.latest=job;return id;}
@@ -457,7 +471,12 @@ try{
     const fixture=state();
     await page.clock.install({time:new Date()});
     await page.route('**/api/**',async route=>{
-      const req=route.request();const now=await page.evaluate(()=>Date.now());
+      const req=route.request();let now;
+      try{now=await page.evaluate(()=>Date.now());}
+      catch(error){
+        if(page.isClosed()||/Execution context was destroyed/.test(error.message)){await route.abort('aborted');return;}
+        throw error;
+      }
       const result=reply(new URL(req.url()).pathname+new URL(req.url()).search,req.method(),req.postDataJSON()||{},now,fixture);
       const {__status,...json}=result;await route.fulfill({status:__status||200,json});
     });

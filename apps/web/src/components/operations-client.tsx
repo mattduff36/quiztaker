@@ -7,14 +7,19 @@ import { GuidedRunner } from '@/components/guided-runner';
 import { connectionState, isWebUrl, operationNeedsBrowser, readJsonResponse } from '@/lib/operations-readiness';
 import { useOperatorActivity } from '@/components/use-operator-activity';
 import { BROWSER_REFRESH_MS, operationsPollDelay, SNAPSHOT_STALE_MS } from '@/lib/operations-policy';
-import { describeTaskJob, isRunningJob, isTaskJob, retainTaskJob } from '@/lib/operations-client-state';
+import { describeTaskJob, isRunningJob, isTaskJob, retainTaskJob, retainNewerBrowserSession } from '@/lib/operations-client-state';
 import type { OperatorActivity } from '@/lib/operator-activity';
 import { formatDisplayDate } from '@/lib/display-date';
 import { CourseCoverage } from '@/components/course-coverage';
 import {HelperWelcome,rememberHelperConnection} from '@/components/helper-welcome';
+import { useSharedOperations } from '@/components/use-shared-operations';
+import { RemoteBrowserView } from '@/components/remote-browser';
+import { supportsRemoteHelper, REMOTE_HELPER_MIN_VERSION } from '@quiztaker/core/remote';
+import { defaultOperationsObjective } from '@/lib/operations-shared';
 
 interface TabRow {
   targetId: string;
+  cdpTargetId?: string;
   index: number;
   title: string;
   url: string;
@@ -107,6 +112,11 @@ interface PlanResponse {
 }
 
 export function OperationsClient(props: { helperId: string }) {
+  return <OperationsSession key={props.helperId} helperId={props.helperId}/>;
+}
+function OperationsSession(props:{helperId:string}) {
+  const shared=useSharedOperations(props.helperId);
+  const [surface,setSurface]=useState<'task'|'browser'>('task');
   const [view, setView] = useState<'normal' | 'advanced'>('normal');
   const viewId = useId();
   const activity = useOperatorActivity(props.helperId);
@@ -116,7 +126,13 @@ export function OperationsClient(props: { helperId: string }) {
   const [contextError, setContextError] = useState('');
   const [pollError, setPollError] = useState('');
   const [context, setContext] = useState<ContextResponse | null>(null);
-  const [selectedTarget, setSelectedTarget] = useState<string>('');
+  const selectedTarget=(shared.draft.selectedCdpTarget?context?.session?.tabs.find(tab=>tab.cdpTargetId===shared.draft.selectedCdpTarget)?.targetId:undefined)
+    ??shared.draft.selectedTarget??'';
+  const editShared=shared.edit;
+  const setSelectedTarget=useCallback((value:string)=>{
+    const tab=context?.session?.tabs.find(tab=>tab.targetId===value);
+    editShared({selectedTarget:value,selectedCdpTarget:tab?.cdpTargetId??'',chosenIntent:null});
+  },[editShared,context?.session?.tabs]);
   const [selectedTitles, setSelectedTitles] = useState<string[]>([]);
   const [url, setUrl] = useState('');
   const [error, setError] = useState('');
@@ -147,7 +163,7 @@ export function OperationsClient(props: { helperId: string }) {
   const [awaitingQuestion, setAwaitingQuestion] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
   const replacingHelper = context?.helperUpdate?.inProgress === true;
-  const busy = operationBusy || guidedBusy || activity.paused || !activity.ready || replacingHelper || updateBusy;
+  const busy = operationBusy || guidedBusy || activity.paused || !activity.ready || replacingHelper || updateBusy || shared.snapshot.manual || shared.otherWorkflow || !shared.ready;
   const [forceCloseOffer, setForceCloseOffer] = useState(false);
   const [queuedUpdateVersion, setQueuedUpdateVersion] = useState<string | null>(null);
   const [updateNote, setUpdateNote] = useState('');
@@ -171,7 +187,7 @@ export function OperationsClient(props: { helperId: string }) {
       const value = await readJsonResponse<ContextResponse>(response, 'Could not check the connection.');
       if (!('helper' in value)) throw new Error('Connection status is unavailable. Retry in a moment.');
       if (requestId !== contextRequest.current) return;
-      setContext(value);
+      setContext(current => ({...value,session:retainNewerBrowserSession(current?.session,value.session)}));
       activity.sync(value.operatorActivity);
       setLastChecked(Date.now());
       setContextError('');
@@ -195,6 +211,11 @@ export function OperationsClient(props: { helperId: string }) {
   }, [activity.sync]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(()=>{
+    if(!shared.otherWorkflow||!visible)return;
+    const timer=setInterval(()=>void load(),2000);
+    return()=>clearInterval(timer);
+  },[shared.otherWorkflow,visible,load]);
   useEffect(() => {
     if (newTask) newTaskHeading.current?.focus();
   }, [newTask]);
@@ -323,7 +344,7 @@ export function OperationsClient(props: { helperId: string }) {
   const hasCourseTab = Boolean(context?.session?.tabs?.some(tab=>/^https?:\/\//.test(tab.url)));
   const canEndBrowser = helperReady && readiness === 'connected' && !replacingHelper && !closingJobId;
   const browserReady = readiness === 'connected' && !snapshotStale;
-  const session = context?.session;
+  const session = shared.snapshot.revision>0&&shared.snapshot.sessionId!==context?.session?.id?null:context?.session;
   const selected = session?.tabs?.find((tab) => tab.targetId === selectedTarget) ?? null;
   const update = context?.helperUpdate;
   const protocolReady = Number(context?.helper?.protocol_version ?? 1) >= 2;
@@ -352,6 +373,7 @@ export function OperationsClient(props: { helperId: string }) {
     setBusy(true); setActionLabel(capabilityId === 'start-browser' ? 'Starting browser…' : 'Sending request…');
     setError('');
     try {
+      await shared.begin();
       const response = await fetch('/api/operations/actions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -359,6 +381,9 @@ export function OperationsClient(props: { helperId: string }) {
           action: 'plan',
           helperId: props.helperId,
           capabilityId,
+          requestId:crypto.randomUUID(),
+          sharedClientId:shared.clientId(),
+          workflowId:shared.workflowId(),
           capabilityInput,
           confirm,
           fingerprint: session?.detection?.fingerprint ?? selected?.fingerprint ?? null,
@@ -388,6 +413,7 @@ export function OperationsClient(props: { helperId: string }) {
     } catch (cause) {
       setError(errorMessage(cause, 'The request failed. Check your network and retry.'));
     } finally {
+      await shared.end();
       actionLock.current = false;
       setBusy(false);
     }
@@ -401,7 +427,7 @@ export function OperationsClient(props: { helperId: string }) {
     const response = await fetch('/api/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ planId: plan.planId }),
+      body: JSON.stringify({ planId: plan.planId,sharedClientId:shared.clientId(),workflowId:shared.workflowId()??undefined }),
     });
     const value = await readJsonResponse<{jobId?:string;error?:string}>(response, 'The job could not be queued.');
     if (!value.jobId) throw new Error(value.error || 'The job could not be queued.');
@@ -533,6 +559,7 @@ export function OperationsClient(props: { helperId: string }) {
       setAwaitingQuestion(false);
       setForceCloseOffer(false);
       setSelectedTarget('');
+      shared.edit({objective:defaultOperationsObjective('independent'),objectiveEdited:false,mode:'independent',chosenIntent:null,answer:'',guidance:'',question:null});
       setSelectedTitles([]);
       setUrl('');
       setOutput('');
@@ -598,7 +625,18 @@ export function OperationsClient(props: { helperId: string }) {
   const showConnectionCard = view === 'advanced' || !normalCourseVisible || Boolean(contextError);
 
   return (
-    <div className="space-y-6">
+    <div className="operations-surface min-w-0 space-y-6">
+      <nav aria-label="Task and browser" className="flex gap-2">
+        {(['task','browser'] as const).map(item=><button key={item} type="button" aria-pressed={surface===item} onClick={()=>setSurface(item)} className={`min-h-12 flex-1 rounded-md px-4 text-base font-semibold focus-visible:outline-2 focus-visible:outline-cyan-700 sm:flex-none ${surface===item?'bg-slate-950 text-white':'border border-slate-300 bg-white text-slate-800'}`}>{item==='task'?'Task':'View Browser'}</button>)}
+      </nav>
+      {shared.error?<p role="alert" className="text-sm text-rose-800">{shared.error}</p>:null}
+      {shared.draft.selectedCdpTarget&&!session?.tabs.some(tab=>tab.cdpTargetId===shared.draft.selectedCdpTarget)?<p role="status" className="rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">A newly selected browser tab is waiting for the task list. Release manual control, return to Task, resume the session and refresh tabs before starting automation.</p>:null}
+      {shared.snapshot.manual?<p role="status" className="rounded-md border border-cyan-300 bg-cyan-50 p-4 text-sm font-semibold text-cyan-950">Manual browser control is reserved. Automation is paused on every device.</p>:shared.otherWorkflow?<p role="status" className="text-sm text-slate-700">Another device is preparing this task. Current jobs and questions update here automatically.</p>:null}
+      {surface==='browser'?(supportsRemoteHelper(context?.helper?.version)?<RemoteBrowserView helperId={props.helperId} selectedCdpTargetId={shared.draft.selectedCdpTarget||selected?.cdpTargetId} onManual={()=>void load()} onTab={id=>{
+        const tab=session?.tabs.find(tab=>tab.cdpTargetId===id);
+        shared.edit({selectedTarget:tab?.targetId??'',selectedCdpTarget:id,chosenIntent:null});
+      }}/>:<section className="rounded-xl border border-slate-300 bg-white p-5"><h2 className="text-xl font-semibold">Update your helper to view the browser</h2><p className="mt-2 text-sm leading-6 text-slate-700">The live browser connection needs Vitriol Helper {REMOTE_HELPER_MIN_VERSION} or later.</p><a href="/helper" className="mt-4 inline-flex min-h-11 items-center font-semibold text-cyan-800 underline">Open Local helper</a></section>):null}
+      <div hidden={surface!=='task'} className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-slate-300">
         <div role="tablist" aria-label="Operations mode" className="flex gap-5" onKeyDown={event => {
           if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
@@ -640,9 +678,9 @@ export function OperationsClient(props: { helperId: string }) {
       {view === 'advanced' || !normalCourseVisible ? sessionActions : null}
       {(operationBusy || closingJobId || refreshPending || backgroundRefresh || (active && !guidedBusy) || (freshDraft && guidedBusy)) ? <div role="status" aria-live="polite" aria-busy="true" data-testid="operations-loading-footer" className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex min-h-8 items-center justify-center gap-2 border-t border-slate-200 bg-white/95 px-4 py-1.5 text-xs text-slate-600 shadow-sm backdrop-blur-sm lg:left-[250px]"><LoaderCircle className="size-3 shrink-0 animate-spin" aria-hidden="true"/><span>{operationBusy ? actionLabel : closingJobId ? 'Closing the course browser…' : freshDraft && (foregroundActive || guidedBusy) ? 'The helper is finishing the previous operation. You can prepare your next task now.' : refreshPending || backgroundRefresh ? 'Checking course browser tabs…' : job?.status === 'queued' ? 'Queued — waiting for the helper…' : 'Waiting for the current helper job…'}</span></div> : null}
       <div role="tabpanel" id={`${viewId}-normal-panel`} aria-labelledby={`${viewId}-normal-tab`} hidden={view !== 'normal'}>
-      <div hidden={!normalCourseVisible}><GuidedRunner key={newTask} freshTask={newTask > 0} preparing={freshDraft} courseLauncher={courseLauncher} sessionActions={view === 'normal' && normalCourseVisible ? sessionActions : null} courseCoverage={hasCourseTab ? <CourseCoverage courses={context?.courseCoverage || []} /> : null} helperId={props.helperId} session={session} selectedTarget={selectedTarget} onSelect={setSelectedTarget}
-        ready={browserReady && protocolReady && !operationBusy && !guidedBusy && activity.ready && !activity.paused && !replacingHelper && !updateBusy} active={foregroundActive} refreshing={backgroundRefresh || refreshPending} onBusy={onGuidedBusy} onRefresh={load}
-        suspended={replacingHelper || updateBusy || operationBusy} paused={activity.paused||!activity.ready} connection={readiness} onConnect={()=>void run('start-browser',{capabilityId:'start-browser'},true)} onRefreshTabs={()=>void refreshBrowser(true)} refreshError={refreshError} snapshotStale={snapshotStale}
+      <div hidden={!normalCourseVisible}><GuidedRunner shared={shared} key={newTask} freshTask={newTask > 0} preparing={freshDraft} courseLauncher={courseLauncher} sessionActions={view === 'normal' && normalCourseVisible ? sessionActions : null} courseCoverage={hasCourseTab ? <CourseCoverage courses={context?.courseCoverage || []} /> : null} helperId={props.helperId} session={session} selectedTarget={selectedTarget} onSelect={setSelectedTarget}
+        ready={browserReady && protocolReady && !operationBusy && !guidedBusy && activity.ready && !activity.paused && !replacingHelper && !updateBusy && shared.ready && !shared.snapshot.manual && !shared.otherWorkflow} active={foregroundActive} refreshing={backgroundRefresh || refreshPending} onBusy={onGuidedBusy} onRefresh={load}
+        suspended={replacingHelper || updateBusy || operationBusy || shared.snapshot.manual || shared.otherWorkflow} paused={activity.paused||!activity.ready} connection={readiness} onConnect={()=>void run('start-browser',{capabilityId:'start-browser'},true)} onRefreshTabs={()=>void refreshBrowser(true)} refreshError={refreshError} snapshotStale={snapshotStale}
         lastJob={displayedJob} lastOutput={output} outputJobId={outputJobId} taskReset={taskReset} finalized={Boolean(finishedTask) || verifiedTaskComplete} onStopControl={registerGuidedStop} onAwaitingQuestion={setAwaitingQuestion} onTaskStart={()=>{draftGeneration.current+=1;draftMode.current=true;setTaskRecordedHere(false);dismissedTask.current=finishedTask?.jobId ?? displayedJob?.id ?? context?.latestTask?.id ?? null;setJob(null);setOutput('');setOutputJobId('');setFinishedTask(null);contextRequest.current+=1;}} onJob={(next)=>{contextRequest.current+=1;if(isTaskJob(next))draftMode.current=false;setJob(current=>({...next,capability_id:next.capability_id ?? (current?.id===next.id ? current.capability_id : undefined)}));}} />
       </div>
       </div>
@@ -755,6 +793,7 @@ export function OperationsClient(props: { helperId: string }) {
 
 
       </div></div>
+      </div>
 
     </div>
   );

@@ -1,0 +1,17 @@
+/** Enforce limits while reading, including chunked requests without Content-Length. */
+export async function boundedJson(request:Request,maxBytes:number):Promise<unknown> {
+  if(Number(request.headers.get('content-length'))>maxBytes)throw new Error('Request too large');
+  if(!request.body)throw new Error('Missing request body');
+  const reader=request.body.getReader();const chunks:Uint8Array[]=[];let size=0;
+  try{
+    for(;;){
+      const {done,value}=await reader.read();if(done)break;
+      size+=value.byteLength;
+      if(size>maxBytes){await reader.cancel();throw new Error('Request too large');}
+      chunks.push(value);
+    }
+    const bytes=new Uint8Array(size);let offset=0;
+    for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+    return JSON.parse(new TextDecoder().decode(bytes));
+  }finally{reader.releaseLock();}
+}

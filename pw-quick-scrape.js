@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
  * Passive selected-tab course recorder: node pw-quick-scrape.js <numeric tab index>
+ * Signed helper jobs resolve the exact live CDP target, not its title/URL.
  * Attaches over PLAYWRIGHT_CDP_URL (default localhost:9222); never launches,
  * clicks, submits, reads input values, or closes the user's browser/tabs.
  * Type finish + Enter, stop + Enter, send SIGINT/SIGTERM, or close the tab to stop.
@@ -413,7 +414,7 @@ async function main(argv = process.argv.slice(2)) {
   let input, recorder;
   const signal = () => recorder?.stop('signal');
   try {
-    const page = browser.contexts().flatMap(context => context.pages())[index];
+    const page = await require('./lib/browser-tabs').selectBrowserPage(browser.contexts().flatMap(context => context.pages()),index);
     if (!page) throw new Error('Selected tab does not exist');
     recorder = await startRecorder(page, {expectedUrl:process.env.VITRIOL_CAPTURE_TARGET});
     input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });

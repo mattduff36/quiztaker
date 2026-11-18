@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { describeTaskJob, isRunningJob, isTaskJob, retainTaskJob } from '../src/lib/operations-client-state';
+import { describeTaskJob, isRunningJob, isTaskJob, retainTaskJob, retainNewerBrowserSession } from '../src/lib/operations-client-state';
+
+test('stale refresh cannot replace a newer roster; closed and missing tabs remain invalid',()=>{
+  const newer={id:'session',revision:12,tabs:[{targetId:'selected',url:'https://example.com/new'}]};
+  const stale={id:'session',revision:11,tabs:[{targetId:'old',url:'https://example.com/old'}]};
+  assert.equal(retainNewerBrowserSession(newer,stale),newer);
+  const closed={id:'session',revision:13,tabs:[]};
+  assert.equal(retainNewerBrowserSession(newer,closed),closed);
+  assert.equal(retainNewerBrowserSession(newer,null),null);
+  const restarted={id:'new-session',revision:1,tabs:[]};
+  assert.equal(retainNewerBrowserSession(newer,restarted),restarted);
+});
 
 test('shared learner capability does not mislabel reading as a quiz', () => {
   assert.equal(describeTaskJob({capability_id:'quiz-learn',status:'running'}), 'Course activity: Working');

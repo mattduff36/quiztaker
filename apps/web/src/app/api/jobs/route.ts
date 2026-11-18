@@ -4,7 +4,7 @@ import { getAuthenticatedUser } from '@/lib/auth';
 import { createJob } from '@/lib/jobs';
 import { hasValidRequestOrigin } from '@/lib/security';
 
-const schema = z.object({ planId: z.string().uuid() });
+const schema = z.object({ planId: z.string().uuid(),sharedClientId:z.string().uuid().optional(),workflowId:z.string().uuid().optional() });
 
 export async function POST(request: Request) {
   if (!hasValidRequestOrigin(request)) return NextResponse.json({ error: 'Invalid request origin' }, { status: 403 });
@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   const parsed = schema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: 'Invalid job request' }, { status: 400 });
   try {
-    return NextResponse.json(await createJob(user.id, parsed.data.planId), { status: 201 });
+    return NextResponse.json(await createJob(user.id, parsed.data.planId,{clientId:parsed.data.sharedClientId,workflowId:parsed.data.workflowId}), { status: 201 });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Could not create job' }, { status: 409 });
   }

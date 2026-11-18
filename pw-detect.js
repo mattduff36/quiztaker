@@ -3,7 +3,7 @@
 //
 // Thin CLI wrapper around the normalized detection engine. It is read-only and
 // emits one JSON action plan for the explicitly requested, focused, or best
-// matching CDP tab.
+// matching CDP tab. Signed jobs resolve the exact live CDP target.
 //
 // Usage:
 //   node pw-detect.js [tabIdx]
@@ -19,7 +19,7 @@ async function main() {
     : null;
   const browser = await chromium.connectOverCDP(CDP_URL);
   try {
-    const ctx = browser.contexts()[0];
+    const ctx = { pages: () => browser.contexts().flatMap(context=>context.pages()) };
     const result = await detectBrowser(ctx, preferredTabIdx);
     console.log(JSON.stringify(result, null, 2));
   } finally {

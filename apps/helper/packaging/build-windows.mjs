@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 const helperRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryRoot = resolve(helperRoot, '..', '..');
 const packageValue = JSON.parse(readFileSync(join(helperRoot, 'package.json'), 'utf8'));
+const automationPackage = JSON.parse(readFileSync(join(repositoryRoot, 'package.json'), 'utf8'));
 const version = process.env.RELEASE_VERSION || packageValue.version;
 const nodeVersion = process.env.NODE_RUNTIME_VERSION || '22.18.0';
 const outputRoot = join(helperRoot, 'release');
@@ -132,9 +133,9 @@ function stageAutomation() {
     version,
     private: true,
     dependencies: {
-      express: packageValue.dependencies?.express || '^4.21.2',
-      playwright: '^1.58.2',
-      sharp: packageValue.dependencies.sharp,
+      express: automationPackage.dependencies.express,
+      playwright: automationPackage.dependencies.playwright,
+      sharp: automationPackage.overrides.sharp,
     },
   }, null, 2));
 }

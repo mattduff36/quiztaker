@@ -25,6 +25,7 @@ const navigationLabel = /^(next(?: page| slide)?[ »›→]*|continue|back|previ
 const assessmentStartLabel = /\b(?:(?:start|begin|launch|take)(?:\s+the)?\s+(?:test|quiz|assessment)|retake|retry)\b/i;
 const openTopicLabel = /^Open topic: .{1,140}$/;
 const courseInteractionLabel = /^Course interaction: \d+_\d+_click_?\d+$/;
+const coursePlayerLabel = /^Course player: (?:Exit|Confirm exit|Cancel exit)$/;
 
 export interface LearnerControl {
   id: string;
@@ -103,6 +104,7 @@ export function learnerControlAllowed(target: LearnerControl, policy: LearnerPol
   // These IDs are assigned only to observed Saba matching controls/options.
   // Repair answer text can legitimately contain words such as "Remove".
   if (/^m\d+$/.test(target.id) && target.kind === 'quiz-navigation') return Boolean(label) && policy.mode === 'quiz';
+  if (coursePlayerLabel.test(label) && target.kind === 'content') return true;
   if (!label || unsafeLabel.test(label) || courseExitLabel.test(label)) return false;
   if (assessmentStartLabel.test(label)) return policy.mode === 'quiz';
   if (target.kind === 'submission' || submitLabel.test(label)) return policy.mode === 'quiz';

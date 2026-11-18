@@ -30,13 +30,15 @@ test('learner pause refreshes the actual navigated page without claiming success
   const previous = process.env.QUIZTAKER_HOME;
   process.env.QUIZTAKER_HOME = home;
   try {
-    structuredResult('list-tabs', JSON.stringify([{idx:0,title:'Course',url:'https://example.com/course'}]), 0);
+    structuredResult('list-tabs', JSON.stringify([{idx:0,cdpTargetId:'live-course',title:'Course',url:'https://example.com/course'}]), 0);
     const before = readBrowserSession()!;
-    const result = structuredResult('quiz-learn', 'LEARNER_TABS ' + JSON.stringify([{idx:0,title:'Question',url:'https://example.com/question'}]), 1);
+    const result = structuredResult('quiz-learn', 'LEARNER_TABS ' + JSON.stringify([{idx:0,cdpTargetId:'live-course',title:'Question',url:'https://example.com/question'}]), 1);
     const after = readBrowserSession()!;
     assert.equal(after.id,before.id);
     assert.equal(after.revision,before.revision+1);
     assert.equal(after.tabs[0].url,'https://example.com/question');
+    assert.equal(after.tabs[0].targetId,before.tabs[0].targetId);
+    assert.equal(after.tabs[0].cdpTargetId,'live-course');
     assert.equal(result.ok,false);
     structuredResult('quiz-learn','LEARNER_TABS [{"idx":"invalid"}]',1);
     assert.deepEqual(readBrowserSession(),after);

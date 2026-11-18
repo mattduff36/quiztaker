@@ -19,6 +19,7 @@ import { getServerEnv } from '@/lib/env';
 import { applyStructuredResult } from '@/lib/parity-state';
 import { nextStrategyState } from '@/lib/strategy-state';
 import { mapPlan } from '@/lib/plans';
+import { assertPlanWorkflow, type WorkflowOwner } from '@/lib/shared-operations-store';
 import { recordLocalPausedQuestion, storedLearnerPauseScope } from '@/lib/learner-memory';
 import { TERMINAL_JOB_LOCK_SQL } from '@/lib/job-lock';
 import { recoverHelperJobs } from '@/lib/job-recovery';
@@ -59,7 +60,7 @@ export function assertHelperUpdateAllowsJob(capabilityId: string, helper: {
   }
 }
 
-export async function createJob(userId: string, planId: string): Promise<{ jobId: string }> {
+export async function createJob(userId: string, planId: string,workflowOwner:WorkflowOwner={}): Promise<{ jobId: string }> {
   let rawPlan = await queryOne<Record<string, unknown>>(
     'select * from plans where id = $1 and user_id = $2',
     [planId, userId],
@@ -86,9 +87,12 @@ export async function createJob(userId: string, planId: string): Promise<{ jobId
   await withTransaction(async (sql) => {
     if (plan.capabilityId !== 'close-browser') await assertOperatorActive(userId,plan.helperId,sql);
     // Serialize all queue requests for this helper, including separate browser tabs.
-    const [helper] = await sql(`select id, active_job_id, last_seen_at, update_requested_version, update_error, update_phase
+    const [helper] = await sql(`select id, active_job_id, last_seen_at, update_requested_version, update_error, update_phase,
+      (remote_lease_until>now()) as remote_control
       from helpers where id = $1 and user_id = $2 and revoked_at is null for update`, [plan.helperId, userId]);
     if (!helper) throw new Error('Helper is unavailable');
+    if(plan.capabilityId!=='close-browser')await assertPlanWorkflow(sql,userId,plan.helperId,planId,workflowOwner);
+    if (helper.remote_control) throw new Error('Manual browser control is reserved. Release control before starting automation.');
     assertHelperUpdateAllowsJob(plan.capabilityId, helper);
     if(helper.active_job_id && plan.capabilityId!=='close-browser') {
       const [owner]=await sql<{id:string;outcome:unknown}>('select id,outcome from jobs where id=$1 and user_id=$2 and helper_id=$3',[helper.active_job_id,userId,plan.helperId]);

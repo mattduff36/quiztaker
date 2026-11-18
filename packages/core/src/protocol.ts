@@ -24,6 +24,7 @@ export interface TargetRef {
 
 export interface BrowserTabSnapshot {
   targetId: string;
+  cdpTargetId?: string;
   index: number;
   title: string;
   url: string;

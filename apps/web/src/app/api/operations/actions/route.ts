@@ -7,7 +7,8 @@ import { createCapabilityPlan, endOperatorSession, forgetRecentUrl } from '@/lib
 import { createJob } from '@/lib/jobs';
 import { describeHelperUpdate } from '@/lib/helper-update';
 import { getLatestHelperRelease } from '@/lib/releases';
-import { queryOne } from '@/lib/db';
+import { queryOne, queryRows } from '@/lib/db';
+import { assertSharedWorkflow,idempotentOperation,bindPlanWorkflow } from '@/lib/shared-operations-store';
 
 const schema = z.object({
   helperId: z.string().uuid(),
@@ -23,6 +24,9 @@ const schema = z.object({
   confidence: z.number().min(0).max(1).optional(),
   url: z.string().optional(),
   idempotencyKey: z.string().min(8).max(200).optional(),
+  requestId:z.string().uuid().optional(),
+  sharedClientId:z.string().uuid().optional(),
+  workflowId:z.string().uuid().optional(),
   forceClose: z.boolean().optional(),
   confirm: z.boolean().optional(),
 });
@@ -38,7 +42,20 @@ export async function POST(request: Request) {
     [parsed.data.helperId, user.id],
   );
   if (!owned) return NextResponse.json({ error: 'Helper not found' }, { status: 404 });
+  const execute=()=>executeAction(user.id,parsed.data);
   try {
+    return parsed.data.requestId
+      ? await idempotentOperation(user.id,parsed.data.helperId,parsed.data.requestId,parsed.data,execute)
+      : await execute();
+  }catch(error) {
+    return NextResponse.json({error:error instanceof Error?error.message:'Could not perform action'},{status:409});
+  }
+}
+
+async function executeAction(userId:string,data:z.infer<typeof schema>) {
+  const user={id:userId},parsed={data};
+  try {
+    if(parsed.data.action==='plan')await assertSharedWorkflow(queryRows,user.id,parsed.data.helperId,parsed.data.sharedClientId,parsed.data.workflowId);
     if (parsed.data.action === 'forget-url') {
       if (!parsed.data.url) return NextResponse.json({ error: 'URL is required' }, { status: 400 });
       await forgetRecentUrl(user.id, parsed.data.url);
@@ -69,6 +86,7 @@ export async function POST(request: Request) {
       fingerprint: parsed.data.fingerprint,
       confidence: parsed.data.confidence,
     });
+    await bindPlanWorkflow(user.id,parsed.data.helperId,plan.planId,{clientId:parsed.data.sharedClientId,workflowId:parsed.data.workflowId});
     if (parsed.data.confirm) {
       if (!confirmShortcutAllowed(parsed.data.capabilityId)) {
         return NextResponse.json({ plan });
@@ -79,7 +97,7 @@ export async function POST(request: Request) {
         [plan.planId, user.id],
       );
       try {
-        const job = await createJob(user.id, plan.planId);
+        const job = await createJob(user.id, plan.planId,{clientId:parsed.data.sharedClientId,workflowId:parsed.data.workflowId});
         return NextResponse.json({ plan, jobId: job.jobId });
       } catch (error) {
         if (error instanceof Error && /A job is already active/.test(error.message)) return NextResponse.json({ plan, waitingForJob: true });

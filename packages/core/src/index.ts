@@ -6,3 +6,4 @@ export * from './outcome.js';
 export * from './protocol.js';
 export * from './plan-policy.js';
 export * from './types.js';
+export * from './sync.js';

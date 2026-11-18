@@ -1,47 +1,13 @@
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
 import { authenticateHelper } from '@/lib/security';
 import { queryRows } from '@/lib/db';
 import { historyResult } from '@/lib/history-result';
-
-const historyEvent = z.object({
-  sourceId: z.string().min(1).max(500),
-  kind: z.string().min(1).max(50),
-  title: z.string().min(1).max(1000),
-  result: z.string().max(500),
-  detail: z.string().max(3000).default(''),
-  occurredAt: z.string().datetime(),
-  payload: z.record(z.string(), z.unknown()).default({}),
-});
-
-const reviewEvent = z.object({
-  sourceId: z.string().min(1).max(200),
-  type: z.string().min(1).max(80),
-  title: z.string().min(1).max(500),
-  detail: z.string().max(3000).default(''),
-  nextAction: z.string().max(1000).default(''),
-});
-
-const captureEvent = z.object({
-  sourceId: z.string().min(1).max(200),
-  fingerprint: z.string().max(200).nullable().optional(),
-  title: z.string().min(1).max(500),
-  detail: z.string().max(3000).default(''),
-  capturedAt: z.string().datetime(),
-  probe: z.record(z.string(), z.unknown()).default({}),
-});
-
-const schema = z.object({
-  history: z.array(historyEvent).max(500).default([]),
-  reviews: z.array(reviewEvent).max(200).default([]),
-  captures: z.array(captureEvent).max(100).default([]),
-  cursor: z.string().max(200).optional(),
-});
+import { helperSyncSchema, importedReviewId } from '@/lib/helper-sync';
 
 export async function POST(request: Request) {
   const helper = await authenticateHelper(request);
   if (!helper) return NextResponse.json({ error: 'Unauthorized helper' }, { status: 401 });
-  const parsed = schema.safeParse(await request.json().catch(() => null));
+  const parsed = helperSyncSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: 'Invalid sync payload' }, { status: 400 });
   if (parsed.data.history.length) {
     await queryRows(
@@ -85,13 +51,14 @@ export async function POST(request: Request) {
   }
   for (const review of parsed.data.reviews) {
     await queryRows(
-      `insert into review_items (user_id, type, title, detail, next_action)
-       select $1, $2, $3, $4, $5
+      `insert into review_items (user_id, type, title, detail, next_action, id)
+       select $1, $2, $3, $4, $5, $6
        where not exists (
          select 1 from review_items
          where user_id = $1 and title = $3 and detail = $4 and status = 'open'
-       )`,
-      [helper.userId, review.type, review.title, review.detail, review.nextAction],
+       )
+       on conflict (id) do nothing`,
+      [helper.userId, review.type, review.title, review.detail, review.nextAction, importedReviewId(helper.userId,helper.helperId,review.sourceId)],
     );
   }
   for (const capture of parsed.data.captures) {
