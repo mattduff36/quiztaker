@@ -730,3 +730,39 @@ Batch candidates: automatic safe authored-material extraction with nested panels
 These are offline/headless regression safeguards, not evidence of another live
 course pass. The final Foundation assessment remains outside this local-only
 engineering task; no course, helper installation or browser profile was operated.
+
+### Saba Storyline narration captions and separate quiz (18 November 2026)
+
+Sustainability in services Service Qualification (`crtfy000000005673130`) has
+one Storyline learning item and a separate native Saba ten-question assessment.
+Vitriol 1.0.49 read the lessons and interactions; the parent bridged launches,
+ambiguous hotspots and the final wrapper exits. The actual portal subsequently
+showed **Acquired, 100% Path Completed, required 2/2**; the quiz scored 100%.
+Evidence: `data/prep/sustainability-final-overview.txt`,
+`sustainability-qualification-final.png` and `sustainability-quiz-100.png`.
+
+Text-only captures can miss chart figures spoken in narration. The learning
+item's observed `index_lms.html` publication has `html5/data/js/data.js`, whose
+asset library references narration `*_captions.js` files. Parse the wrapper's
+string literal statically (TypeScript parser), then JSON/decode the WEBVTT;
+never execute fetched JavaScript. Read only this authorized learning publication,
+retain each caption's real source URL, and use its facts in the current quiz.
+The parent collected 54 caption sources and imported them with the normal
+bounded material helper into the owned conversation. This was assisted source
+collection, **not yet an integrated helper extraction capability**. Preserve the
+existing assessment attempt while obtaining missing material.
+
+Multiple slides share the title Best practices. Scope visited-panel hints to
+the actual slide/control identity, not its heading. Decorative outline icons
+may be covered by real Rectangular Hotspot controls. The content's normal end
+is `lms/goodbye.html` ("The content has ended"), which is not a quiz pass screen:
+use the wrapper's Close player, Exit and finish, and its normal return, then
+verify the overview. A successful learning item first showed 50% and 1/2;
+only the separately passed and exited quiz produced acquired 100% and 2/2.
+
+Follow-ups from this assisted run: integrate scoped Storyline captions and
+terminal-wrapper verification; avoid repeated panel visits and decisions during
+timeline changes; use single answer-select for native one-radio questions when
+group preflight keeps falling back; handle the current congratulations modal's
+labelled close button. Certification-wide genuine-learning orchestration remains
+the earlier documented gap. None of these new follow-ups is claimed released.
