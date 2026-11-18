@@ -1,6 +1,6 @@
 # Hosted deployment and helper operations
 
-## Operations follow-up and genuine learning 1.0.50
+## Operations follow-up and genuine learning 1.0.51
 
 Apply additive `0014_operations_followup.sql` before this web release. It adds
 account-owned follow-up deadlines and passive browser inventory tokens. Existing
@@ -19,7 +19,7 @@ The Start workflow still refreshes and revalidates its exact target before work.
 Old open browser bundles need one reload for this release; later build changes
 reload only a visible idle Task page outside text editing.
 
-Publish/install Helper 1.0.50 with quiz-learn capability 7 for certification
+Publish/install Helper 1.0.51 with quiz-learn capability 7 for certification
 sequencing, scoped Storyline narration collection, slide-identity panel memory,
 bounded animation waits, one-question grouped-answer fallback and normal end
 screen finalization. Captions are source-labelled evidence, never proof of

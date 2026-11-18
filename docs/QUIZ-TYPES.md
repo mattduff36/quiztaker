@@ -24,7 +24,7 @@ if the fast path fails.
   "% Path Completed" bar and a list of "Recommended courses (Required N of M)"
   rows, each with a LAUNCH / VIEW / PRINT CERTIFICATE split-button.
 - **Strategy** — this is the entry point for `pw-cert-batch.js`.
-- **Genuine learning in Helper 1.0.50** - Operations admits `cert-landing`
+- **Genuine learning in Helper 1.0.51** - Operations admits `cert-landing`
   through quiz-learn capability 7. `lib/certification-learning.js` keeps the
   selected certification, opens unfinished learning before assessments, runs
   the ordinary learner, returns and verifies each exact Successful row.
@@ -757,7 +757,7 @@ use the wrapper's Close player, Exit and finish, and its normal return, then
 verify the overview. A successful learning item first showed 50% and 1/2;
 only the separately passed and exited quiz produced acquired 100% and 2/2.
 
-Helper 1.0.50 implements these follow-ups: observed learning manifest caption
+Helper 1.0.51 implements these follow-ups: observed learning manifest caption
 collection with static parsing and publication bounds; normal goodbye-wrapper
 finalization; slide-identity visited panels; bounded waits during finite narration;
 single-radio answer-select fallback; and the current labelled evaluation close.

@@ -2,7 +2,7 @@ const test=require('node:test'),assert=require('node:assert/strict');
 const {chromium}=require('playwright');
 const {runCertificationLearning}=require('./lib/certification-learning');
 test('genuine certification driver launches learning before assessment, verifies each return and stops on failed child',async()=>{
- const browser=await chromium.launch({headless:true});const previous=process.env.VITRIOL_LEARNER_INTENT;process.env.VITRIOL_LEARNER_INTENT='read-and-assess';
+ const browser=await chromium.launch({channel:'chrome',headless:true});const previous=process.env.VITRIOL_LEARNER_INTENT;process.env.VITRIOL_LEARNER_INTENT='read-and-assess';
  try{for(const fail of [false,true]){
   const ctx=await browser.newContext();let done=new Set(),launched=[];
   const origin='https://hpi-external.sabacloud.com',url=origin+'/Saba/Web_spf/HPI/app/me/ledetail/crtfyfixture';

@@ -13,7 +13,7 @@ test('passive inventory token ignores order and non-page targets but detects ope
 });
 test('passive local browser target events detect navigation without changing window geometry',{timeout:20000},async()=>{
  const reserve=createServer();await new Promise<void>(r=>reserve.listen(0,'127.0.0.1',r));const port=(reserve.address() as {port:number}).port;await new Promise<void>(r=>reserve.close(()=>r()));
- const browser=await chromium.launch({headless:true,args:[`--remote-debugging-port=${port}`]});const monitor=new BrowserChanges(port);
+ const browser=await chromium.launch({channel:'chrome',headless:true,args:[`--remote-debugging-port=${port}`]});const monitor=new BrowserChanges(port);
  try{
   const page=await browser.newPage();await page.route('https://fixture.invalid/**',route=>route.fulfill({contentType:'text/html',body:'<title>Fixture lesson</title><h1>Lesson</h1>'}));
   await monitor.connect();
