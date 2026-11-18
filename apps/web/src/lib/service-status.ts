@@ -4,7 +4,7 @@ export interface ServiceStatusSnapshot {
   helper: { online: boolean; lastSeenAt: string | null } | null;
   browser: { connected: boolean; checkedAt: string | null } | null;
   assistant: { ready: boolean; source: string; provider: string | null };
-  activity?: { session: boolean; task: boolean };
+  activity?: { session: boolean; task: boolean; learnerWorking?: boolean };
 }
 
 /** Browser details belong to course work, rather than general site browsing. */
@@ -52,10 +52,15 @@ export function serviceIndicators(input: {
   }
   const helperOnline = snapshot.helper?.online && recent(snapshot.helper.lastSeenAt, now, 45_000);
   const browserFresh = snapshot.browser && recent(snapshot.browser.checkedAt, now, 90_000);
+  const learnerWorking = helperOnline && snapshot.activity?.learnerWorking === true && snapshot.browser?.connected === true;
+  const browserState = !helperOnline ? 'Unknown' : !snapshot.browser ? 'Not checked'
+    : !snapshot.browser.connected ? 'Disconnected'
+    : !browserFresh ? learnerWorking ? 'Working' : 'Check overdue' : 'Connected';
   return [
     { ...base[0], state: 'Online', tone: 'good' },
     { ...base[1], state: !snapshot.helper ? 'Not paired' : helperOnline ? 'Connected' : 'Offline', tone: helperOnline ? 'good' : 'warning' },
-    { ...base[2], state: !helperOnline ? 'Unknown' : !snapshot.browser ? 'Not checked' : !browserFresh ? 'Check overdue' : snapshot.browser.connected ? 'Connected' : 'Disconnected', tone: helperOnline && browserFresh ? snapshot.browser!.connected ? 'good' : 'warning' : 'unknown' },
+    { ...base[2], state: browserState, tone: browserState === 'Connected' ? 'good' : browserState === 'Disconnected' ? 'warning' : 'unknown',
+      ...(browserState === 'Working' ? { detail: 'The helper is working on the course. A separate browser check is deferred until it is idle; the last known connection is not a fresh check.' } : {}) },
     { ...base[3], state: snapshot.assistant.ready ? 'Configured' : snapshot.assistant.source === 'disabled' ? 'Disabled' : 'Set up', tone: snapshot.assistant.ready ? 'good' : 'warning' },
   ];
 }

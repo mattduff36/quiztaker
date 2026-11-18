@@ -30,6 +30,10 @@
 // real Saba completion result. Written answers use observed course fields only.
 // Saba matching uses observed dropdowns/options, verified selections and fresh
 // question identities. Native result finalization still requires Saba success.
+// Terminal direct Storyline wrappers use scoped, ordinary course exits, commit
+// only existing completion, and verify the LMS result before reporting success.
+// Animation-only navigation rechecks use local semantic slide/target identity;
+// question, choice, selection and genuine content changes remain significant.
 //
 // Usage:
 //   node pw-learn-quiz.js <tabIdx> [--dry]
@@ -41,6 +45,7 @@ const { observePlayerEvidence } = require('./lib/player-evidence');
 const { recognizeQuizResult, quizResultPayload } = require('./lib/quiz-result');
 const { readBrainshark, listeningQuestion, playbackApproved, playbackControl, setPlaybackSpeed, closeBrainsharkReaders, CONTINUE_LISTENING_QUESTION } = require('./lib/brainshark-player');
 const { launchSelectedCourse, originatingSabaPage, finishSabaCourse, protectSabaPopups, sabaAddress, currentCourseSuccessful } = require('./lib/course-launch');
+const { COURSE_EXIT_LABEL, createStorylineFinalizer } = require('./lib/storyline-finalization');
 
 const CDP_URL = process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222';
 const MAX_STEPS = 80;
@@ -167,7 +172,7 @@ function localActionAllowed(action, snapshot, mode = 'read') {
     if (action.action === 'click') {
       if (mode === 'quiz' && recognizeQuizResult(snapshot)) return false;
       if (/^m\d+$/.test(target.id) && target.kind === 'quiz-navigation') return mode === 'quiz';
-      if (UNSAFE_LABEL.test(target.name)) return false;
+      if (UNSAFE_LABEL.test(target.name) || COURSE_EXIT_LABEL.test(target.name)) return false;
       const radios = (snapshot.choices || []).filter(choice => /^c\d+$/.test(choice.id));
       if (mode === 'quiz' && /^(?:(?:go to )?next(?: question| page| slide)?[ »›→]*|submit|finish|end test)$/i.test(target.name.trim())
         && snapshot.buttons?.some(control => control.selection?.answered === false)) return false;
@@ -535,7 +540,7 @@ async function readControls(page, role, prefix, navigationOnly, mode = 'read') {
     const handle = locator.nth(index);
     if (!await handle.isVisible().catch(() => false) || !await handle.isEnabled().catch(() => false)) continue;
     const name = role === 'answer' ? await answerName(handle) : await controlName(handle);
-    if (!name || (navigationOnly && UNSAFE_LABEL.test(name))) continue;
+    if (!name || (navigationOnly && (UNSAFE_LABEL.test(name) || COURSE_EXIT_LABEL.test(name)))) continue;
     if (navigationOnly && /^[<>]$/.test(name) && await handle.evaluate(storylineGraphic, true).catch(() => false)) continue;
     let kind;
     if (navigationOnly) {
@@ -663,6 +668,8 @@ function observedQuestion(text, source, controls) {
 async function readSnapshot(page, mode = 'read') {
   const sections = [];
   const resultViews = [];
+  const navigationFrames = [];
+  let hasStoryline = false;
   let riseResultVisible = false;
   for (const frame of await visibleFrames(page)) {
     try {
@@ -734,13 +741,31 @@ async function readSnapshot(page, mode = 'read') {
         const scrollArea = document.querySelector('a.nav-sidebar__outline-item__link') ? document.querySelector('.page-wrap') : null;
         const position = scrollArea ? scrollArea.scrollTop : scrollY;
         const end = scrollArea ? position + scrollArea.clientHeight >= scrollArea.scrollHeight - 2 : position + innerHeight >= document.documentElement.scrollHeight - 2;
+        const layer = document.querySelector('.slide-layer.base-layer.shown');
+        const playbackModels = new Set([...document.querySelectorAll('button.acc-shadow-el[data-represents]')]
+          .filter(el => !layer?.contains(el) && /^(?:play|pause|replay|mute|unmute)(?:\s*\([^)]*\))?$/i.test(
+            (el.getAttribute('aria-label') || el.textContent || '').trim()))
+          .map(el => el.getAttribute('data-represents')));
+        // Storyline's accessibility text and current layer describe the whole
+        // slide even while its visible SVG text animates in and out.
+        const storyline = slideLabel && layer ? {
+          slide: slideLabel, layer: layer.getAttribute('data-model-id') || layer.id,
+          content: layer.textContent.replace(/\s+/g, ' ').trim(),
+          accessible: [...document.querySelectorAll('.acc-text[data-represents]')]
+            .filter(el => layer.contains(el) || !playbackModels.has(el.getAttribute('data-represents'))).map(el =>
+            [el.getAttribute('data-represents'), el.textContent.replace(/\s+/g, ' ').trim()]),
+          dialogs: [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].map(el => el.innerText),
+        } : null;
         return { heading: heading?.textContent?.trim() || document.title, text: lines.join('\n'), riseResult, position: Math.round(position), end,
+          storyline,
           storylineResult: /^slide:\s*Results Slide$/i.test(slideLabel || '') && Boolean(document.querySelector('.slide-layer.base-layer.shown')) };
       });
       if (!observed.text.trim()) continue;
       riseResultVisible ||= Boolean(observed.riseResult);
       resultViews.push(observed.riseResult || (observed.storylineResult ? `Quiz Results\n${observed.text}` : observed.text));
       const source = canonicalCourseSource(await frame.evaluate(() => location.href).catch(() => frame.url()));
+      hasStoryline ||= Boolean(observed.storyline);
+      navigationFrames.push({ source, heading: observed.heading, content: observed.storyline || observed.text, position: observed.position });
       sections.push(`[Source: ${source} | ${observed.heading || ''} | scroll ${observed.position}${observed.end ? ' | end of page' : ''}]\n${observed.text}`);
     } catch {
       // A cross-origin frame has no readable body.
@@ -812,7 +837,41 @@ async function readSnapshot(page, mode = 'read') {
   // Raw live text is local verification evidence, not additional provider
   // context. Exclude it from JSON and never populate it from course memory.
   Object.defineProperty(snapshot, 'resultViews', {value: resultViews});
+  if (hasStoryline) {
+    const targets = {};
+    for (const button of buttons.listed) {
+      if (!/^(?:next|prev(?:ious)?|back|continue)(?: page| slide)?[ »›→]*$/i.test(button.name)) continue;
+      const handle = buttons.handles.get(button.id);
+      const identity = await handle?.evaluate(el => document.getElementById('slide-label')
+        && el.matches('.acc-shadow-el[data-represents]') ? [location.href, el.getAttribute('data-represents')] : null);
+      if (identity) targets[button.id] = { identity, name: button.name, kind: button.kind };
+    }
+    Object.defineProperty(snapshot, 'navigationView', { value: { frames: navigationFrames, targets } });
+  }
   return {snapshot, handles};
+}
+
+function revalidateLearnerDecision(before, after, action) {
+  const original = before?.navigationView, current = after?.navigationView;
+  const target = original?.targets[action?.targetId];
+  let remapped = action;
+  if (action?.action === 'click' && target) {
+    if (!current || JSON.stringify(original.frames) !== JSON.stringify(current.frames)) return { ok: false };
+    const matches = Object.entries(current.targets).filter(([, value]) => JSON.stringify(value) === JSON.stringify(target));
+    if (matches.length !== 1) return { ok: false };
+    remapped = { ...action, targetId: matches[0][0] };
+  }
+  if (sameLearnerView(before, after)) return { ok: true, action: remapped };
+  if (action?.action !== 'click' || !original || !current || before.question || after.question
+    || before.choices?.length || after.choices?.length || before.fields?.length || after.fields?.length
+    || [before, after].some(snapshot => snapshot.buttons?.some(control => control.selection || control.kind === 'quiz-navigation' || control.kind === 'submission'))
+    || !original.targets[action.targetId]) return { ok: false };
+  const stable = snapshot => {
+    const { text, buttons, image, imageIdentity, ...rest } = snapshot;
+    return { ...rest, frames: snapshot.navigationView.frames };
+  };
+  if (JSON.stringify(stable(before)) !== JSON.stringify(stable(after))) return { ok: false };
+  return { ok: true, action: remapped };
 }
 
 function sameLearnerView(before, after) {
@@ -966,6 +1025,7 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
     await clickStorylineControl(page, handle, point, action.action === 'answer-select');
     return;
   }
+
   const riseControl = await handle.evaluate(el => Boolean(el.closest('.quiz-card--active')));
   if (riseControl && action.action === 'answer-select' && ['radio', 'checkbox'].includes(await handle.getAttribute('role'))) {
     if (await handle.getAttribute('aria-checked') !== 'true') await handle.press('Space', { timeout: 5000 });
@@ -993,6 +1053,14 @@ async function applyAction(page, action, snapshot, handles, mode = 'read') {
   } else await handle.check({ timeout: 5000 });
 }
 
+async function activateCourseExit(page, handle, name) {
+  if (!COURSE_EXIT_LABEL.test(name) || !await handle.isVisible() || !await handle.isEnabled()
+    || await controlName(handle) !== name) throw new CourseControlBlocked('The course exit changed');
+  const point = await handle.evaluate(storylineGraphic);
+  if (point) await clickStorylineControl(page, handle, point, false);
+  else await handle.click({ timeout: 5000 });
+}
+
 async function selectNativeSabaAnswer(handle) {
   if(await handle.isChecked())return;
   try {await handle.check({timeout:1200});}
@@ -1016,18 +1084,20 @@ async function selectNativeSabaAnswer(handle) {
   await handle.press('Space',{timeout:1500});
   if(!await handle.isChecked())throw new CourseControlBlocked('The native answer selection could not be confirmed');
 }
-async function emitQuestion(payload, page, browser) {
+async function emitQuestion(payload, page, browser, courseResult, quizResult) {
   const tabs = await Promise.all(browser.contexts()[0].pages().map(async (page, idx) => ({ idx, url: page.url(), title: await page.title().catch(() => "") })));
   console.log(`LEARNER_TABS ${JSON.stringify(tabs)}`);
   console.log(learnerQuestionLine({ ...payload, url: page.url() }));
-  finish(false, LEARNER_NEEDS_INPUT);
+  finish(false, LEARNER_NEEDS_INPUT, quizResult, courseResult);
 }
 
-function finish(completed, reason, result) {
+function finish(completed, reason, result, courseResult) {
   const payload = result ? quizResultPayload(result) : completed
     ? { completed: 1, total: 1 }
     : { completed: 0, total: 1, failures: [{ title: 'quiz-learn', reason: reason || 'learner-stopped' }] };
-  console.log(`AUTOMATION_RESULT ${JSON.stringify(payload)}`);
+  console.log(`AUTOMATION_RESULT ${JSON.stringify({ ...payload, ...(!completed ? { completed: 0,
+    ...(!payload.failures ? { failures: [{ title: 'quiz-learn', reason: reason || 'course-completion-unverified' }] } : {}) } : {}),
+    ...(courseResult ? { courseResult } : {}) })}`);
   if (!completed) process.exitCode = 1;
 }
 
@@ -1054,6 +1124,25 @@ async function main() {
     const startedAtCourse=/\/learningeventdetail[;/]/i.test(selected.url());
     page = await launchSelectedCourse(page);
     landing = startedAtCourse ? selected : originatingSabaPage(page);
+    const storylinePage = page;
+    const finalizeStoryline = createStorylineFinalizer(storylinePage, activateCourseExit);
+    async function finalizeCurrentStoryline() {
+      if (page !== storylinePage) return false;
+      const finalization = await finalizeStoryline();
+      if (!finalization.attempted) return false;
+      const courseResult = { status: finalization.verified ? 'completed' : 'unverified', title: finalization.title,
+        evidence: finalization.evidence || [], ...(finalization.reason ? { reason: finalization.reason } : {}) };
+      const quizResult = mode === 'quiz' ? finalization.quizResult : undefined;
+      if (finalization.verified) {
+        finish(quizResult?.status !== 'failed', undefined, quizResult, courseResult);
+      } else {
+        await emitQuestion({
+          question: `The module reached its end, but course completion is not verified (${finalization.reason}). Check the learning portal result without retaking.`,
+          options: ['Check the course result'],
+        }, page, browser, courseResult, quizResult);
+      }
+      return true;
+    }
     if (/remote_frameset_modern\.html/i.test(page.url())) {
       for(let attempt=0; attempt<15; attempt++) {
         if (await readBrainshark(page)) break;
@@ -1091,6 +1180,7 @@ async function main() {
         if (landing && !landing.isClosed()) {page=landing;continue;}
         throw Error('The course player closed before its result could be verified');
       }
+      if (await finalizeCurrentStoryline()) return;
       const playback = await readBrainshark(page);
       if (playback?.completed) {
         brainsharkCompleted = true;
@@ -1175,6 +1265,7 @@ async function main() {
       // for verify/ask-user so a terminal view wins before action/repeat guards.
       if(page.isClosed()) {step-=1;continue;}
       const current = await readSnapshot(page, mode);
+      if (await finalizeCurrentStoryline()) return;
       if (playback) current.snapshot.playback=await readBrainshark(page);
       const currentResult = mode === 'quiz' ? recognizeQuizResult(current.snapshot) : null;
       if (currentResult) { await terminalResult(currentResult); return; }
@@ -1198,10 +1289,12 @@ async function main() {
       let view = snapshot;
       let viewHandles = handles;
       if (action.action !== 'verify') {
-        if (!sameLearnerView(snapshot, current.snapshot)) {
+        const revalidated = revalidateLearnerDecision(snapshot, current.snapshot, action);
+        if (!revalidated.ok) {
           console.log(`Learner step ${step}: page changed while deciding; inspecting again`);
           continue;
         }
+        action = revalidated.action;
         view = current.snapshot;
         viewHandles = current.handles;
       }
@@ -1220,9 +1313,10 @@ async function main() {
           if(coordinatedResult){await terminalResult(coordinatedResult);return;}
           if(!localActionAllowed(correction,current.snapshot,mode)) {finish(false,'rejected-action');return;}
           // Revalidate after the bounded coordinator exchange.
-          if(!sameLearnerView(current.snapshot,fresh.snapshot))continue;
+          const revalidated = revalidateLearnerDecision(current.snapshot, fresh.snapshot, correction);
+          if (!revalidated.ok) continue;
           if(correction.action==='ask-user') {await emitQuestion(learnerQuestionPayload(current.snapshot,correction),page,browser);return;}
-          action=correction;
+          action=revalidated.action;
           view=fresh.snapshot;viewHandles=fresh.handles;
         } else {
           await emitQuestion(repeated.question, page, browser);
@@ -1309,6 +1403,8 @@ module.exports = {
   applyAction,
   visibleFrames,
   sameLearnerView,
+  revalidateLearnerDecision,
+  activateCourseExit,
   readCourseOutlines,
   clickLabelAllowed,
   screenElementControlName,

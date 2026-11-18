@@ -15,6 +15,16 @@ test('actual quiz score and negative result survive helper result transport',()=
   }
 });
 
+test('verified direct-wrapper course evidence survives transport, not a Thank You or failed run', () => {
+  const courseResult = { status: 'completed', title: 'MyKnowledge App',
+    evidence: ['SCORM committed existing completion.', 'Saba certification return shows a unique enabled Print certificate action for this course.'] };
+  const output = 'AUTOMATION_RESULT ' + JSON.stringify({ completed: 1, total: 1, courseResult });
+  assert.deepEqual((structuredResult('quiz-learn', output, 0).result as Record<string, unknown>).courseResult, courseResult);
+  assert.equal((structuredResult('quiz-learn', output, 1).result as Record<string, unknown>).courseResult, undefined);
+  const unverified = 'AUTOMATION_RESULT ' + JSON.stringify({ completed: 1, total: 1, courseResult: { ...courseResult, evidence: ['Thank You'] } });
+  assert.equal((structuredResult('quiz-learn', unverified, 0).result as Record<string, unknown>).courseResult, undefined);
+});
+
 test('learner pause refreshes the actual navigated page without claiming success', () => {
   const home = mkdtempSync(join(tmpdir(), 'vitriol-pause-'));
   const previous = process.env.QUIZTAKER_HOME;

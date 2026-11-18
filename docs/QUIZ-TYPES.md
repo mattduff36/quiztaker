@@ -131,6 +131,19 @@ if the fast path fails.
 
 ## Course / quiz variants
 
+### Direct Saba Storyline terminal lesson (MyKnowledge App)
+
+- **Fingerprint** - The selected Saba content-player has one activity, a direct
+  Storyline `sco` iframe and sibling `scorm_api` frame inside a
+  `remote_frameset_modern.html` frame, where the live SCORM API resides.
+  Its terminal Thank You
+  slide offers Close module; an originating course detail tab may not exist.
+- **Strategy** - Use the independent learner's scoped local finalizer. It commits
+  only existing completion, uses observed ordinary exits and checks the same
+  activity plus the returned course enrollment or exact enabled certificate.
+- **Verification** - Thank You alone is not success. Missing completion, unsafe
+  dialogs or ambiguous targets stay unverified; never synthesize a score/pass.
+
 ### Saba Storyline knowledge check (Poly Video Fundamentals)
 
 - **Fingerprint** - Saba embeds a Storyline module with Pick One, Pick Many, and Dropdown list question slides. Radio buttons and checkboxes may be unnamed or share a generic name such as Rectangle 24. The answer text appears in separate elements.

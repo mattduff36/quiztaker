@@ -20,7 +20,8 @@ export function structuredResult(
     try {
       const raw=JSON.parse([...output.matchAll(/^AUTOMATION_RESULT (.+)$/gm)].at(-1)?.[1]||'null')?.courseResult;
       if(code===0 && raw?.status==='completed' && typeof raw.title==='string' && Array.isArray(raw.evidence)
-        && raw.evidence.some((value:unknown)=>typeof value==='string'&&value.includes('Saba course detail shows Successful'))) {
+        && raw.evidence.some((value:unknown)=>typeof value==='string'&&(value.includes('Saba course detail shows Successful')
+          || value==='Saba certification return shows a unique enabled Print certificate action for this course.'))) {
         courseResult={status:'completed',title:raw.title.slice(0,200),evidence:raw.evidence.filter((value:unknown)=>typeof value==='string').slice(0,4).map((value:string)=>value.slice(0,500))};
       }
     } catch { /* Only bounded executor evidence is transported. */ }

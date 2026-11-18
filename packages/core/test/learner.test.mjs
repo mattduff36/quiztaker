@@ -23,6 +23,14 @@ const snapshot = {
   ],
 };
 
+test('ordinary course exits are reserved for the scoped terminal finalizer in every mode', () => {
+  for (const name of ['Close module', 'CLOSE PLAYER', 'Exit course', 'Exit and finish', 'Close browser', 'Delete account']) {
+    for (const mode of ['read', 'quiz']) {
+      assert.equal(parseLearnerAction({ action: 'click', targetId: 'b1' }, { buttons: [{ id: 'b1', name, kind: 'content' }] }, { mode }).ok, false, `${mode}: ${name}`);
+    }
+  }
+});
+
 test('observed repair matching options stay quiz-only even when their label says Remove',()=>{
   const view={buttons:[{id:'m1',name:'Remove the base enclosure',kind:'quiz-navigation'}]};
   assert.equal(parseLearnerAction({action:'click',targetId:'m1'},view,{mode:'quiz'}).ok,true);

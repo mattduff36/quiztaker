@@ -48,3 +48,17 @@ test('status refresh backs off and hidden pages do not poll faster', () => {
   assert.equal(servicePollDelay(true, 9), 60_000);
   assert.equal(servicePollDelay(false, 0), 60_000);
 });
+
+test('a live busy learner defers the separate browser check without claiming fresh connectivity', () => {
+  const busy = { ...snapshot, browser: { connected: true, checkedAt: at(180_000) },
+    activity: { session: true, task: true, learnerWorking: true } };
+  const indicator = serviceIndicators({ snapshot: busy, now })[2];
+  assert.equal(indicator.state, 'Working');
+  assert.equal(indicator.tone, 'unknown');
+  assert.match(indicator.detail, /deferred.*not a fresh check/);
+  assert.equal(serviceIndicators({ snapshot: { ...busy, activity: { ...busy.activity, learnerWorking: false } }, now })[2].state, 'Check overdue');
+  assert.equal(serviceIndicators({ snapshot: { ...busy, browser: { connected: false, checkedAt: at(180_000) } }, now })[2].state, 'Disconnected');
+  assert.equal(serviceIndicators({ snapshot: { ...busy, helper: { online: true, lastSeenAt: at(46_000) } }, now })[2].state, 'Unknown');
+  assert.notEqual(serviceIndicators({ snapshot: { ...busy, checkedAt: at(46_000) }, now })[2].state, 'Working');
+  assert.notEqual(serviceIndicators({ snapshot: busy, now, failed: true })[2].state, 'Working');
+});

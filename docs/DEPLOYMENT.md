@@ -333,3 +333,14 @@ Clicking an Advanced action now confirms and queues its plan without a second
 modal. The server still checks ownership, target, expiry and job signatures; a
 rejected confirmation never queues a job. Revoke helper also acts on its button
 click without a browser confirmation. Desktop/mobile fixtures cover both paths.
+
+## Helper 1.0.45: Storyline finalization and reliable progress
+
+The learner recognizes terminal Storyline lessons within a Saba remote frameset,
+commits existing completion without setting status or scores, activates observed
+normal exits, and verifies the exact course on the expected return page. Technical
+activity filenames are separate from course titles. Animation-only navigation
+changes can reuse a stable target, while changed questions and selections still
+invalidate decisions. Browser status says Working during active learner work
+when the separate connection check is deferred. Container actions use the exact
+observed title and identity and return structured failure for incomplete results.

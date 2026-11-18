@@ -10,6 +10,9 @@
 //      then fast-completes either SCORM 1.2 or SCORM 2004.
 //   4. Waits for the player to auto-close, then handles the next activity.
 //   5. Closes the container after every activity is confirmed complete.
+// Activity activation uses its exact observed title, never truncated row text.
+// Failed/partial activities or an unverified parent emit AUTOMATION_RESULT
+// and exit nonzero; an empty roster is not a completed course.
 //
 // Usage:
 //   node pw-container-batch.js [tabIndex=0] [--dry]
@@ -19,6 +22,8 @@ const fs = require('fs');
 const path = require('path');
 const { finishExecutor, startExecutor } = require('./lib/executor-ledger');
 const { dataPath } = require('./lib/paths');
+const { readActivities, clickActivity, containerResult } = require('./lib/container-activities');
+const { exitConfirmation, returnedCourseEvidence } = require('./lib/storyline-finalization');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const HIST_DIR = dataPath('course-history');
@@ -37,51 +42,12 @@ async function patchOpen(page) {
   });
 }
 
-async function readActivities(page) {
-  return await page.evaluate(() => {
-    const items = [...document.querySelectorAll('div.activity-list-item[role="button"]')];
-    return items.map((el, i) => {
-      const titleEl = el.querySelector('span.activity-cont.activity-title')
-                   || el.querySelector('span.activity-cont')
-                   || el.querySelector('span.activity-title');
-      const title = (titleEl?.getAttribute('title') || titleEl?.innerText || '').trim();
-      const rowText = (el.innerText || '').trim();
-      const hasSuccessIcon = !!el.querySelector(
-        '[title*="Completed Successfully" i], [aria-label*="Completed Successfully" i], .completed, .trq-icon-success'
-      );
-      const status = hasSuccessIcon || /Completed|Successful/i.test(rowText) ? 'Completed' :
-                     /In Progress/i.test(rowText) ? 'In Progress' :
-                     /Not started|Pending|Registered/i.test(rowText) ? 'Pending' : 'Unknown';
-      return { idx: i, title, status };
-    });
-  });
-}
-
-async function clickActivity(page, title, maxMs = 10000) {
-  const start = Date.now();
-  while (Date.now() - start < maxMs) {
-    const result = await page.evaluate((activityTitle) => {
-      const items = [...document.querySelectorAll('.activity-list-item[role="button"]')];
-      for (const el of items) {
-        const text = (el.innerText || '').trim();
-        if (text.includes(activityTitle)) {
-          el.click();
-          return 'clicked';
-        }
-      }
-      return 'not-found';
-    }, title).catch(() => 'not-found');
-    if (result === 'clicked') return result;
-    await sleep(500);
-  }
-  return 'not-found';
-}
-
-async function findPlayerTab(ctx, maxMs = 20000) {
+async function findPlayerTab(ctx, maxMs = 20000, existingPages = new Set(), owner) {
   const start = Date.now();
   while (Date.now() - start < maxMs) {
     for (const p of ctx.pages()) {
-      if (/content-na2prd|remote_frameset/i.test(p.url())) return p;
+      if (!existingPages.has(p) && /^https:\/\/content-na2prd0004-na2hp\.sabacloud\.com\//i.test(p.url())
+        && (!owner || await p.opener() === owner)) return p;
     }
     await sleep(500);
   }
@@ -218,24 +184,15 @@ async function dismissActivityExit(page, isCommitted) {
 }
 
 async function closeCompletedContainer(page) {
-  const clicked = await page.evaluate(() => {
-    const buttons = [...document.querySelectorAll('button, [role=button]')];
-    const button = buttons.find((el) => /^CLOSE\s+PLAYER$/i.test((el.innerText || el.textContent || '').trim()));
-    if (!button) return false;
-    button.click();
-    return true;
-  }).catch(() => false);
-  if (!clicked) return false;
+  const close = page.getByRole('button', { name: /^close player$/i }).filter({ visible: true });
+  if (await close.count() !== 1 || !await close.isEnabled()) return false;
+  const address = page.url();
+  await close.click({ timeout: 5000 });
   await sleep(1500);
-  const confirmed = await page.evaluate(() => {
-    const buttons = [...document.querySelectorAll('button, [role=button]')];
-    const button = buttons.find((el) => /^YES$/i.test((el.innerText || el.textContent || '').trim()));
-    if (!button) return false;
-    button.click();
-    return true;
-  }).catch(() => false);
-  if (!confirmed) await dismissActivityExit(page, true);
-  return true;
+  if (page.isClosed() || page.url() !== address) return true;
+  const confirmation = await exitConfirmation(page);
+  if (confirmation.reason) throw Error(confirmation.reason);
+  return confirmation.confirmed;
 }
 
 async function waitForAllActivitiesCompleted(page, maxMs = 10000) {
@@ -264,135 +221,145 @@ async function main() {
   const tabArg = args.find((arg) => /^\d+$/.test(arg));
   const tabIdx = tabArg == null ? 0 : Number(tabArg);
   const b = await chromium.connectOverCDP(process.env.PLAYWRIGHT_CDP_URL || 'http://127.0.0.1:9222');
-  const ctx = b.contexts()[0];
-  const container = ctx.pages()[tabIdx];
-  if (!container) throw new Error(`No tab at index ${tabIdx}`);
-  const containerTitle = await container.title().catch(() => 'Multi-activity course');
-  await container.bringToFront().catch(() => {});
-  await patchOpen(container);
-  console.log('container url:', container.url().slice(0, 100));
+  try {
+    const ctx = b.contexts()[0];
+    const selectedAddress = process.env.VITRIOL_CAPTURE_TARGET;
+    const matches = selectedAddress ? ctx.pages().filter(page => page.url() === selectedAddress) : [ctx.pages()[tabIdx]].filter(Boolean);
+    if (matches.length !== 1) throw Error('The selected container target is missing or ambiguous');
+    const container = matches[0];
+    if (!container) throw new Error(`No tab at index ${tabIdx}`);
+    const containerAddress = container.url();
+    const containerTitle = await container.title().catch(() => 'Multi-activity course');
+    await container.bringToFront().catch(() => {});
+    await patchOpen(container);
+    console.log('container url:', container.url().slice(0, 100));
 
-  const activities = await readActivities(container);
-  console.log('Activities:');
-  activities.forEach(a => console.log(`  [${a.status}] ${a.title}`));
-  log({ event: 'roster', activities });
-  if (isDryRun) {
+    const activities = await readActivities(container);
+    console.log('Activities:');
+    activities.forEach(a => console.log(`  [${a.status}] ${a.title}`));
+    log({ event: 'roster', activities });
+    if (isDryRun) {
+      finishExecutor(executor, {
+        outcome: 'success',
+        verified: true,
+        status: `dry-run-${activities.length}-activities`,
+        targetId: containerTitle,
+      });
+      return;
+    }
+
+    const results = [];
+    for (const act of activities) {
+      console.log(`\n=== ${act.title} ===`);
+      if (act.status === 'Completed') { console.log('  already completed, skipping'); continue; }
+
+      // Re-patch after possible navigation
+      await patchOpen(container).catch(() => {});
+
+      const existingPages = new Set(ctx.pages());
+      const c = await clickActivity(container, act);
+      console.log('  click:', c);
+      if (c !== 'clicked') { results.push({ title: act.title, ok: false, reason: `activity-${c}` }); continue; }
+
+      const player = await findPlayerTab(ctx, 20000, existingPages, container);
+      if (!player) {
+        results.push({ title: act.title, ok: false, reason: 'no-player-tab' });
+        log({ event: 'skip', title: act.title, reason: 'no-player-tab' });
+        continue;
+      }
+      await sleep(4000);
+      let r; try { r = await fastComplete(player); } catch (e) { r = { err: e.message }; }
+      console.log('  result:', JSON.stringify(r).slice(0, 300));
+      log({ event: 'attempt', title: act.title, result: r });
+
+      // Only force-close if commit actually happened (avoid interrupting a still-loading player)
+      const committed = r && r.set && r.set.commit === 'true';
+      const closeDeadline = Date.now() + (committed ? 8000 : 3000);
+      while (!player.isClosed() && Date.now() < closeDeadline) await sleep(400);
+      if (!player.isClosed() && committed) await player.close();
+      await sleep(2000);
+
+      // A manually closed child player raises an exit dialog in the wrapper.
+      // Finish only after a confirmed commit; otherwise preserve resumable state.
+      await dismissActivityExit(container, committed);
+      await sleep(1500);
+
+      // Bring container back into focus & re-read status
+      await container.bringToFront().catch(() => {});
+      // Container is an Angular SPA; the activity list may re-render but not immediately.
+      // Give it a moment.
+      await sleep(1500);
+      const nowList = await readActivities(container);
+      const matches = nowList.filter(a => a.title === act.title);
+      const now = matches.length === 1 ? matches[0] : null;
+      const scormConfirmed = committed && (
+        r?.after?.lesson_status === 'passed' ||
+        (r?.after?.completion === 'completed' && r?.after?.success === 'passed')
+      );
+      const success = now?.status === 'Completed' || scormConfirmed;
+      console.log(`  post-state: ${now?.status || 'unknown'} ${success ? 'OK' : ''}`);
+      const status = now?.status === 'Completed' ? 'Completed' : scormConfirmed ? 'SCORM confirmed' : now?.status;
+      results.push({ title: act.title, ok: success, status, result: r });
+      log({ event: 'verify', title: act.title, status, ok: success });
+    }
+
+    console.log('\n=== SUMMARY ===');
+    const okCount = results.filter(r => r.ok).length;
+    console.log(`${okCount}/${results.length} confirmed complete`);
+    results.forEach(r => console.log(`  ${r.ok ? 'OK ' : 'FAIL'} ${r.title} (${r.status || r.reason || 'unknown'})`));
+
+    const finalActivities = await waitForAllActivitiesCompleted(container);
+    let parentSuccessful = false;
+    if (finalActivities.length > 0 && finalActivities.every((activity) => activity.status === 'Completed')) {
+      const closed = await closeCompletedContainer(container);
+      console.log(closed ? 'container close requested' : 'container close button not found');
+      await sleep(3000);
+      let parent = null;
+      for (let attempt = 0; attempt < 12; attempt++) {
+        const title = await container.title().catch(() => '');
+        parent = { title, successful: Boolean(await returnedCourseEvidence(container, containerAddress, containerTitle)) };
+        if (parent?.successful) break;
+        await sleep(500);
+      }
+      logCourse({
+        event: 'verify',
+        course: parent?.title || containerTitle,
+        status: parent?.successful ? 'Successful' : 'Unconfirmed',
+        ok: !!parent?.successful,
+        how: 'container-parent-verified',
+      });
+      parentSuccessful = parent?.successful === true;
+    }
+
+    const result = containerResult(activities, finalActivities, results, parentSuccessful);
+    const complete = result.total > 0 && result.completed === result.total && result.failures.length === 0;
+    console.log(`AUTOMATION_RESULT ${JSON.stringify(result)}`);
     finishExecutor(executor, {
-      outcome: 'success',
-      verified: true,
-      status: `dry-run-${activities.length}-activities`,
+      outcome: complete ? 'success' : 'failure',
+      verified: complete,
+      status: `${result.completed}/${result.total} completed`,
+      failureSignature: result.failures[0]?.reason || null,
       targetId: containerTitle,
     });
+    if (!complete) process.exitCode = 1;
+  } finally {
     await b.close();
-    return;
   }
-
-  const results = [];
-  for (const act of activities) {
-    console.log(`\n=== ${act.title} ===`);
-    if (act.status === 'Completed') { console.log('  already completed, skipping'); continue; }
-
-    // Re-patch after possible navigation
-    await patchOpen(container).catch(() => {});
-
-    const c = await clickActivity(container, act.title);
-    console.log('  click:', c);
-    if (c !== 'clicked') { results.push({ title: act.title, ok: false, reason: 'button-not-found' }); continue; }
-
-    const player = await findPlayerTab(ctx, 20000);
-    if (!player) {
-      results.push({ title: act.title, ok: false, reason: 'no-player-tab' });
-      log({ event: 'skip', title: act.title, reason: 'no-player-tab' });
-      continue;
-    }
-    await sleep(4000);
-    let r; try { r = await fastComplete(player); } catch (e) { r = { err: e.message }; }
-    console.log('  result:', JSON.stringify(r).slice(0, 300));
-    log({ event: 'attempt', title: act.title, result: r });
-
-    // Only force-close if commit actually happened (avoid interrupting a still-loading player)
-    const committed = r && r.set && r.set.commit === 'true';
-    const closed = await waitForPlayerClose(ctx, committed ? 8000 : 3000);
-    if (!closed && committed) {
-      for (const p of ctx.pages()) {
-        if (/content-na2prd|remote_frameset/i.test(p.url())) { try { await p.close(); } catch (e) {} }
-      }
-    }
-    await sleep(2000);
-
-    // A manually closed child player raises an exit dialog in the wrapper.
-    // Finish only after a confirmed commit; otherwise preserve resumable state.
-    await dismissActivityExit(container, committed);
-    await sleep(1500);
-
-    // Bring container back into focus & re-read status
-    await container.bringToFront().catch(() => {});
-    // Container is an Angular SPA; the activity list may re-render but not immediately.
-    // Give it a moment.
-    await sleep(1500);
-    const nowList = await readActivities(container);
-    const now = nowList.find(a => a.title === act.title);
-    const scormConfirmed = committed && (
-      r?.after?.lesson_status === 'passed' ||
-      (r?.after?.completion === 'completed' && r?.after?.success === 'passed')
-    );
-    const success = now?.status === 'Completed' || scormConfirmed;
-    console.log(`  post-state: ${now?.status || 'unknown'} ${success ? 'OK' : ''}`);
-    const status = now?.status === 'Completed' ? 'Completed' : scormConfirmed ? 'SCORM confirmed' : now?.status;
-    results.push({ title: act.title, ok: success, status, result: r });
-    log({ event: 'verify', title: act.title, status, ok: success });
-  }
-
-  console.log('\n=== SUMMARY ===');
-  const okCount = results.filter(r => r.ok).length;
-  console.log(`${okCount}/${results.length} confirmed complete`);
-  results.forEach(r => console.log(`  ${r.ok ? 'OK ' : 'FAIL'} ${r.title} (${r.status || r.reason || 'unknown'})`));
-
-  const finalActivities = await waitForAllActivitiesCompleted(container);
-  if (finalActivities.length > 0 && finalActivities.every((activity) => activity.status === 'Completed')) {
-    const closed = await closeCompletedContainer(container);
-    console.log(closed ? 'container close requested' : 'container close button not found');
-    await sleep(3000);
-    let parent = null;
-    for (let attempt = 0; attempt < 12; attempt++) {
-      parent = await container.evaluate(() => {
-        const text = document.body?.innerText || '';
-        const title = document.querySelector('h1.course--detail__title, h1')?.innerText?.trim() || document.title;
-        return {
-          title,
-          successful: /\bSuccessful\b/i.test(text.slice(0, 2000)),
-        };
-      }).catch(() => null);
-      if (parent?.successful) break;
-      await sleep(500);
-    }
-    logCourse({
-      event: 'verify',
-      course: parent?.title || containerTitle,
-      status: parent?.successful ? 'Successful' : 'Unconfirmed',
-      ok: !!parent?.successful,
-      how: 'container-parent-verified',
-    });
-  }
-
-  const failures = results.filter((result) => !result.ok);
-  const allComplete = finalActivities.length > 0 &&
-    finalActivities.every((activity) => activity.status === 'Completed');
-  finishExecutor(executor, {
-    outcome: failures.length ? 'failure' : 'success',
-    verified: allComplete && failures.length === 0,
-    status: `${okCount}/${results.length} confirmed complete`,
-    failureSignature: failures.length ? 'container-activities-need-review' : null,
-    targetId: containerTitle,
-  });
-  await b.close();
 }
 
 if (require.main === module) {
-  main().catch(e => { console.error(e.stack || e.message); process.exit(1); });
+  main().catch(e => {
+    console.error(e.stack || e.message);
+    console.log(`AUTOMATION_RESULT ${JSON.stringify({ completed: 0, total: 1,
+      failures: [{ title: 'container', reason: 'container-executor-error', evidence: [e.message] }] })}`);
+    process.exitCode = 1;
+  });
 }
 
 module.exports = {
+  readActivities,
+  clickActivity,
+  containerResult,
   dismissActivityExit,
   fastComplete,
   findPlayerTab,

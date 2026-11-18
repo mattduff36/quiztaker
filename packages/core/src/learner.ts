@@ -89,12 +89,13 @@ export function storedLearnerPolicy(input: { mode?: unknown; intent?: unknown } 
   return intent ? { mode, intent } : { mode };
 }
 const unsafeLabel = /\b(log\s*out|sign\s*out|sign\s*in|log\s*in|password|account|payment|purchase|buy|delete|remove|unsubscribe|exit|close browser)\b/i;
+const courseExitLabel = /^(?:close\s+(?:module|player)|exit(?:\s+(?:course|module|and\s+finish))?)$/i;
 export function learnerControlAllowed(target: LearnerControl, policy: LearnerPolicy = { mode: 'read' }): boolean {
   const label = target.name.trim();
   // These IDs are assigned only to observed Saba matching controls/options.
   // Repair answer text can legitimately contain words such as "Remove".
   if (/^m\d+$/.test(target.id) && target.kind === 'quiz-navigation') return Boolean(label) && policy.mode === 'quiz';
-  if (!label || unsafeLabel.test(label)) return false;
+  if (!label || unsafeLabel.test(label) || courseExitLabel.test(label)) return false;
   if (assessmentStartLabel.test(label)) return policy.mode === 'quiz';
   if (target.kind === 'submission' || submitLabel.test(label)) return policy.mode === 'quiz';
   if (target.kind === 'quiz-navigation') return policy.mode === 'quiz';

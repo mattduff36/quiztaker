@@ -14,15 +14,17 @@ export async function GET() {
     const user = await getAuthenticatedUser();
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401, headers });
     const [presence, assistant] = await Promise.all([
-      queryOne<{ is_online: boolean; last_seen_at: string | null; cdp_connected: boolean | null; browser_checked_at: string | null; task_active: boolean }>(
+      queryOne<{ is_online: boolean; last_seen_at: string | null; cdp_connected: boolean | null; browser_checked_at: string | null; task_active: boolean; learner_working: boolean }>(
         `select h.is_online, h.last_seen_at, b.cdp_connected, b.updated_at as browser_checked_at,
-          coalesce(t.status in ('queued','dispatched','running','awaiting-input'),false) as task_active
+          coalesce(t.status in ('queued','dispatched','running','awaiting-input'),false) as task_active,
+          coalesce(h.status='busy' and a.status='running' and a.capability_id='quiz-learn',false) as learner_working
          from helper_presence h
          left join lateral (
            select cdp_connected, updated_at from browser_sessions
            where user_id = $1 and helper_id = h.id and closed_at is null
            order by updated_at desc limit 1
          ) b on true
+         left join jobs a on a.id=h.active_job_id and a.user_id=$1 and a.helper_id=h.id
          left join lateral (
            select status from jobs where user_id=$1 and helper_id=h.id
            and not(capability_id=any($2::text[]))
@@ -37,7 +39,8 @@ export async function GET() {
       helper: presence ? { online: presence.is_online === true, lastSeenAt: presence.last_seen_at } : null,
       browser: presence?.cdp_connected != null ? { connected: presence.cdp_connected === true, checkedAt: presence.browser_checked_at } : null,
       assistant: { ready: assistant.ready, source: assistant.source, provider: assistant.provider },
-      activity: { session: presence?.is_online === true && presence?.cdp_connected === true, task: presence?.task_active === true },
+      activity: { session: presence?.is_online === true && presence?.cdp_connected === true, task: presence?.task_active === true,
+        learnerWorking: presence?.learner_working === true },
     };
     return NextResponse.json(snapshot, { headers });
   } catch {

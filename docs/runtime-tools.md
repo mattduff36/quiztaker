@@ -28,7 +28,33 @@ The existing 40-control output and 120-candidate scan limits remain. The helper
 waits up to120 seconds for a proposal to allow bounded server-side research.
 These behaviors have offline fixture coverage; no live course pass is implied.
 
-Integration requires quiz-learn capability4 in the helper and both capability
-registries. Install the combined helper21 release and verify it advertises
-capability4 before resuming a run. Capability3 plans cannot authorize the new
-tool contract. Older optional snapshot fields remain backward-compatible.
+Direct Saba Storyline wrappers with one observed activity can finalize an
+observed terminal lesson through Close module, Close Player and a scoped,
+ordinary course-exit confirmation. The local finalizer reads and commits only
+completion already recorded by the course; it never writes status or scores.
+A Thank You slide is not proof of success: the same activity must show
+Completed Successfully, followed by the same course's Successful enrollment
+or its unique enabled certificate action on the originating certification.
+Missing/ambiguous identities, unsafe confirmations and unverified results stop
+with an incomplete outcome. No unrelated or landing tab is closed.
+
+For non-question Storyline Next/Previous navigation, local slide semantics and
+the exact control model identity survive presentation-only animation and
+control-ID shifts. Changed slides, content, questions, choices, selections or
+dialogs still invalidate a pending decision. This does not relax answer or
+submission guards.
+
+Container activity activation uses the exact full observed title attribute,
+not a substring of truncated visible text, and refuses ambiguous matches.
+Partial runs include structured failure reasons and exit nonzero; activity
+completion alone is not proof that the parent course succeeded.
+
+Operations shows **Working** when a fresh helper heartbeat identifies its
+running learner job and the last browser check was connected but is now old.
+This is not a fresh connection claim. Idle stale checks remain **Check overdue**;
+an explicitly disconnected browser or stale helper is never reported Working.
+
+Question-bound matching requires quiz-learn capability6 in the helper and both
+capability registries. Deploy the corresponding web and helper builds together;
+older signed plans cannot authorize the current matching contract. Optional
+snapshot fields remain backward-compatible.
